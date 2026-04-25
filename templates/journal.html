@@ -1,0 +1,246 @@
+<!doctype html>
+{% load journal_extras %}
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Электронный журнал</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Tahoma, sans-serif;
+            margin: 0;
+            padding: 24px;
+            background: #f5f7fb;
+            color: #1f2937;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+            padding: 24px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .auth-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            align-items: end;
+            margin-bottom: 24px;
+        }
+        .inline {
+            display: inline;
+        }
+        label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 6px;
+        }
+        select, input, button {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            box-sizing: border-box;
+        }
+        button {
+            cursor: pointer;
+            border: none;
+            background: #2563eb;
+            color: #fff;
+            font-weight: 600;
+        }
+        .btn-secondary {
+            width: auto;
+            background: #4b5563;
+            padding: 8px 12px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            margin-bottom: 18px;
+        }
+        th, td {
+            border: 1px solid #e5e7eb;
+            padding: 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background: #f3f4f6;
+        }
+        .muted {
+            color: #6b7280;
+        }
+        .alert {
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+            background: #eef2ff;
+            color: #1e3a8a;
+        }
+        .error {
+            background: #fef2f2;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>Электронный журнал</h1>
+        {% if request.user.is_authenticated %}
+            <div class="auth-box">
+                <span class="muted">
+                    Вы вошли как: {{ request.user.username }}
+                    {% if role_mode == 'teacher' %}(преподаватель){% elif role_mode == 'student' %}(ученик){% elif role_mode == 'superuser' %}(суперпользователь, только просмотр){% endif %}
+                </span>
+                <form method="post" action="{% url 'logout' %}" class="inline">
+                    {% csrf_token %}
+                    <button class="btn-secondary" type="submit">Выйти</button>
+                </form>
+            </div>
+        {% endif %}
+    </div>
+
+    {% for message in messages %}
+        <div class="alert {% if message.tags == 'error' %}error{% endif %}">{{ message }}</div>
+    {% endfor %}
+
+    {% if access_error %}
+        <div class="alert error">{{ access_error }}</div>
+    {% else %}
+        <form method="get">
+            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                <div>
+                    <label for="group">Группа</label>
+                    <select id="group" name="group">
+                        <option value="">Выберите группу</option>
+                        {% for group in groups %}
+                            <option value="{{ group.id }}" {% if selected_group_id == group.id|stringformat:"s" %}selected{% endif %}>
+                                {{ group.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            {% else %}
+                <div>
+                    <label>Группа</label>
+                    <input type="text" value="{{ selected_group.name }}" readonly>
+                </div>
+            {% endif %}
+
+            <div>
+                <label for="subject">Предмет</label>
+                <select id="subject" name="subject">
+                    <option value="">Все предметы</option>
+                    {% for subject in subjects %}
+                        <option value="{{ subject.id }}" {% if selected_subject_id == subject.id|stringformat:"s" %}selected{% endif %}>
+                            {{ subject.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <button type="submit">Применить фильтры</button>
+            </div>
+        </form>
+
+        {% if grade_form and role_mode == 'teacher' %}
+            <h2>Поставить оценку</h2>
+            <form method="post">
+                {% csrf_token %}
+                <div>
+                    <label for="id_student">Ученик</label>
+                    {{ grade_form.student }}
+                </div>
+                <div>
+                    <label for="id_subject">Предмет</label>
+                    {{ grade_form.subject }}
+                </div>
+                <div>
+                    <label for="id_date">Дата</label>
+                    {{ grade_form.date }}
+                </div>
+                <div>
+                    <label for="id_value">Оценка</label>
+                    {{ grade_form.value }}
+                </div>
+                <div>
+                    <button type="submit">Сохранить оценку</button>
+                </div>
+            </form>
+            {% if grade_form.errors %}
+                <div class="alert error">{{ grade_form.errors }}</div>
+            {% endif %}
+        {% endif %}
+
+        {% if role_mode == 'teacher' and not selected_group_id or role_mode == 'superuser' and not selected_group_id %}
+            <p class="muted">Выберите группу, чтобы увидеть журнал.</p>
+        {% elif not students %}
+            <p class="muted">В выбранной группе нет учеников.</p>
+        {% elif not journal_tables %}
+            <p class="muted">Нет данных по выбранным фильтрам.</p>
+        {% else %}
+            {% for table in journal_tables %}
+                <h2>
+                    {% if single_subject_mode %}
+                        Журнал: {{ table.subject.name }}
+                    {% else %}
+                        Предмет: {{ table.subject.name }}
+                    {% endif %}
+                </h2>
+
+                {% if not table.dates %}
+                    <p class="muted">По этому предмету пока нет оценок по выбранным фильтрам.</p>
+                {% else %}
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Ученик</th>
+                            {% for lesson_date in table.dates %}
+                                <th>{{ lesson_date|date:"d.m" }}</th>
+                            {% endfor %}
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for row in table.rows %}
+                            <tr>
+                                <td>{{ row.student.full_name }}</td>
+                                {% for lesson_date in table.dates %}
+                                    {% with cell=row.grades_by_date|get_item:lesson_date %}
+                                        <td>
+                                            {% if cell %}
+                                                {{ cell }}
+                                            {% else %}
+                                                <span class="muted">—</span>
+                                            {% endif %}
+                                        </td>
+                                    {% endwith %}
+                                {% endfor %}
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+    {% endif %}
+</div>
+</body>
+</html>
