@@ -73,6 +73,7 @@
             border-collapse: collapse;
             background: #fff;
             margin-bottom: 18px;
+            min-width: 560px;
         }
         th, td {
             border: 1px solid #e5e7eb;
@@ -96,6 +97,29 @@
         .error {
             background: #fef2f2;
             color: #991b1b;
+        }
+        .table-scroll {
+            width: 100%;
+            max-height: 60vh;
+            overflow: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 18px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .table-scroll table {
+            margin-bottom: 0;
+        }
+        @media (max-width: 768px) {
+            body {
+                padding: 12px;
+            }
+            .container {
+                padding: 14px;
+            }
+            .table-scroll {
+                max-height: 65vh;
+            }
         }
     </style>
 </head>
@@ -209,34 +233,36 @@
                 {% if not table.dates %}
                     <p class="muted">По этому предмету пока нет оценок по выбранным фильтрам.</p>
                 {% else %}
-                    <table>
-                        <thead>
-                        <tr>
-                            <th>Ученик</th>
-                            {% for lesson_date in table.dates %}
-                                <th>{{ lesson_date|date:"d.m" }}</th>
-                            {% endfor %}
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {% for row in table.rows %}
+                    <div class="table-scroll">
+                        <table>
+                            <thead>
                             <tr>
-                                <td>{{ row.student.full_name }}</td>
+                                <th>Ученик</th>
                                 {% for lesson_date in table.dates %}
-                                    {% with cell=row.grades_by_date|get_item:lesson_date %}
-                                        <td>
-                                            {% if cell %}
-                                                {{ cell }}
-                                            {% else %}
-                                                <span class="muted">—</span>
-                                            {% endif %}
-                                        </td>
-                                    {% endwith %}
+                                    <th>{{ lesson_date|date:"d.m" }}</th>
                                 {% endfor %}
                             </tr>
-                        {% endfor %}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                            {% for row in table.rows %}
+                                <tr>
+                                    <td>{{ row.student.full_name }}</td>
+                                    {% for lesson_date in table.dates %}
+                                        {% with cell=row.grades_by_date|get_item:lesson_date %}
+                                            <td>
+                                                {% if cell %}
+                                                    {{ cell }}
+                                                {% else %}
+                                                    <span class="muted">—</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endwith %}
+                                    {% endfor %}
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
                 {% endif %}
             {% endfor %}
         {% endif %}
