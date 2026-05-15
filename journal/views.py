@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.shortcuts import redirect, render
 
+from .forms import GradeCreateForm
 from .models import Grade, Group, Student, Subject, Teacher
 
 
@@ -133,6 +134,21 @@ def journal_view(request):
                 students = list(selected_group.students.all())
                 journal_tables = _build_journal_tables(students, table_subjects, grade_qs)
 
+                grade_form = GradeCreateForm(
+                    request.POST or None,
+                    group=selected_group,
+                )
+                if request.method == 'POST' and request.POST.get('action') == 'add_grade':
+                    if grade_form.is_valid():
+                        grade_form.save()
+                        messages.success(request, 'Оценка успешно добавлена.')
+                        query = {'group': selected_group.id}
+                        saved_subject_id = str(grade_form.cleaned_data['subject'].id)
+                        if selected_subject_id:
+                            query['subject'] = saved_subject_id
+                        return redirect(f"/?{urlencode(query)}")
+                    messages.error(request, 'Не удалось сохранить оценку. Проверьте данные формы.')
+
                 if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
                     if _save_inline_grades(
                         request,
@@ -218,18 +234,35 @@ def journal_view(request):
                 journal_tables = _build_journal_tables(students, table_subjects, grade_qs)
 
         grade_form = None
-        if selected_group and request.method == 'POST' and request.POST.get('action') == 'inline_edit':
-            if _save_inline_grades(
-                request,
-                role_mode=role_mode,
-                selected_group=selected_group,
-                subjects=subjects,
+        if selected_group:
+            grade_form = GradeCreateForm(
+                request.POST or None,
                 teacher=teacher,
-            ):
-                query = {'group': selected_group.id}
-                if selected_subject_id:
-                    query['subject'] = selected_subject_id
-                return redirect(f"/?{urlencode(query)}")
+                group=selected_group,
+            )
+            if request.method == 'POST' and request.POST.get('action') == 'add_grade':
+                if grade_form.is_valid():
+                    grade_form.save()
+                    messages.success(request, 'Оценка успешно добавлена.')
+                    query = {'group': selected_group.id}
+                    saved_subject_id = str(grade_form.cleaned_data['subject'].id)
+                    if selected_subject_id:
+                        query['subject'] = saved_subject_id
+                    return redirect(f"/?{urlencode(query)}")
+                messages.error(request, 'Не удалось сохранить оценку. Проверьте данные формы.')
+
+            if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
+                if _save_inline_grades(
+                    request,
+                    role_mode=role_mode,
+                    selected_group=selected_group,
+                    subjects=subjects,
+                    teacher=teacher,
+                ):
+                    query = {'group': selected_group.id}
+                    if selected_subject_id:
+                        query['subject'] = selected_subject_id
+                    return redirect(f"/?{urlencode(query)}")
 
         context = {
             'role_mode': role_mode,

@@ -185,6 +185,42 @@
             </div>
         </form>
 
+        {% if grade_form and role_mode != 'student' %}
+            <h2>Поставить оценку</h2>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="add_grade">
+                <div>
+                    <label for="id_student">Ученик</label>
+                    {{ grade_form.student }}
+                </div>
+                <div>
+                    <label for="id_subject">Предмет</label>
+                    {{ grade_form.subject }}
+                </div>
+                {% if role_mode == 'superuser' %}
+                    <div>
+                        <label for="id_teacher">Преподаватель</label>
+                        {{ grade_form.teacher }}
+                    </div>
+                {% endif %}
+                <div>
+                    <label for="id_date">Дата</label>
+                    {{ grade_form.date }}
+                </div>
+                <div>
+                    <label for="id_value">Оценка</label>
+                    {{ grade_form.value }}
+                </div>
+                <div>
+                    <button type="submit">Сохранить оценку</button>
+                </div>
+            </form>
+            {% if grade_form.errors %}
+                <div class="alert error">{{ grade_form.errors }}</div>
+            {% endif %}
+        {% endif %}
+
         {% if role_mode == 'teacher' and not selected_group_id or role_mode == 'superuser' and not selected_group_id %}
             <p class="muted">Выберите группу, чтобы увидеть журнал.</p>
         {% elif not students %}
