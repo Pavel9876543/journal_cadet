@@ -1,12 +1,12 @@
 from django import forms
 
-from .models import Grade, Student, Subject
+from .models import Grade, Student, Subject, Teacher
 
 
 class GradeCreateForm(forms.ModelForm):
     class Meta:
         model = Grade
-        fields = ['student', 'subject', 'date', 'value']
+        fields = ['student', 'subject', 'teacher', 'date', 'value']
         widgets = {
             'date': forms.DateInput(attrs={'type': 'date'}),
         }
@@ -15,12 +15,12 @@ class GradeCreateForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.teacher = teacher
 
-        # Предметы ограничены только теми, которые ведет авторизованный преподаватель.
-        subject_qs = Subject.objects.none()
+        # Для преподавателя оставляем только его предметы; для админа показываем предметы выбранной группы.
+        subject_qs = Subject.objects.all()
         if teacher is not None:
             subject_qs = teacher.subjects.all()
-            if group is not None:
-                subject_qs = subject_qs.filter(groups=group)
+        if group is not None:
+            subject_qs = subject_qs.filter(groups=group)
         self.fields['subject'].queryset = subject_qs.distinct()
 
         # Ученики ограничены выбранной группой.
@@ -28,6 +28,14 @@ class GradeCreateForm(forms.ModelForm):
         if group is not None:
             student_qs = group.students.all()
         self.fields['student'].queryset = student_qs
+
+        if teacher is not None:
+            self.fields.pop('teacher')
+        else:
+            teacher_qs = Teacher.objects.all()
+            if group is not None:
+                teacher_qs = teacher_qs.filter(subjects__groups=group).distinct()
+            self.fields['teacher'].queryset = teacher_qs.order_by('full_name')
 
     def clean_subject(self):
         subject = self.cleaned_data['subject']

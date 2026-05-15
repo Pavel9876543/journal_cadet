@@ -131,7 +131,7 @@
             <div class="auth-box">
                 <span class="muted">
                     Вы вошли как: {{ request.user.username }}
-                    {% if role_mode == 'teacher' %}(преподаватель){% elif role_mode == 'student' %}(ученик){% elif role_mode == 'superuser' %}(суперпользователь, только просмотр){% endif %}
+                    {% if role_mode == 'teacher' %}(преподаватель){% elif role_mode == 'student' %}(ученик){% elif role_mode == 'superuser' %}(суперпользователь){% endif %}
                 </span>
                 <form method="post" action="{% url 'logout' %}" class="inline">
                     {% csrf_token %}
@@ -185,35 +185,6 @@
             </div>
         </form>
 
-        {% if grade_form and role_mode == 'teacher' %}
-            <h2>Поставить оценку</h2>
-            <form method="post">
-                {% csrf_token %}
-                <div>
-                    <label for="id_student">Ученик</label>
-                    {{ grade_form.student }}
-                </div>
-                <div>
-                    <label for="id_subject">Предмет</label>
-                    {{ grade_form.subject }}
-                </div>
-                <div>
-                    <label for="id_date">Дата</label>
-                    {{ grade_form.date }}
-                </div>
-                <div>
-                    <label for="id_value">Оценка</label>
-                    {{ grade_form.value }}
-                </div>
-                <div>
-                    <button type="submit">Сохранить оценку</button>
-                </div>
-            </form>
-            {% if grade_form.errors %}
-                <div class="alert error">{{ grade_form.errors }}</div>
-            {% endif %}
-        {% endif %}
-
         {% if role_mode == 'teacher' and not selected_group_id or role_mode == 'superuser' and not selected_group_id %}
             <p class="muted">Выберите группу, чтобы увидеть журнал.</p>
         {% elif not students %}
@@ -233,36 +204,57 @@
                 {% if not table.dates %}
                     <p class="muted">По этому предмету пока нет оценок по выбранным фильтрам.</p>
                 {% else %}
-                    <div class="table-scroll">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>Ученик</th>
-                                {% for lesson_date in table.dates %}
-                                    <th>{{ lesson_date|date:"d.m" }}</th>
-                                {% endfor %}
-                            </tr>
-                            </thead>
-                            <tbody>
-                            {% for row in table.rows %}
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="inline_edit">
+                        <div class="table-scroll">
+                            <table>
+                                <thead>
                                 <tr>
-                                    <td>{{ row.student.full_name }}</td>
+                                    <th>Ученик</th>
                                     {% for lesson_date in table.dates %}
-                                        {% with cell=row.grades_by_date|get_item:lesson_date %}
-                                            <td>
-                                                {% if cell %}
-                                                    {{ cell }}
-                                                {% else %}
-                                                    <span class="muted">—</span>
-                                                {% endif %}
-                                            </td>
-                                        {% endwith %}
+                                        <th>{{ lesson_date|date:"d.m" }}</th>
                                     {% endfor %}
                                 </tr>
-                            {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+                                {% for row in table.rows %}
+                                    <tr>
+                                        <td>{{ row.student.full_name }}</td>
+                                        {% for lesson_date in table.dates %}
+                                            {% with cell=row.grades_by_date|get_item:lesson_date %}
+                                                <td>
+                                                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                        {% if cell %}
+                                                            <input
+                                                                type="number"
+                                                                min="1"
+                                                                max="5"
+                                                                name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
+                                                                value="{{ cell }}"
+                                                            >
+                                                        {% else %}
+                                                            <span class="muted">—</span>
+                                                        {% endif %}
+                                                    {% else %}
+                                                        {% if cell %}
+                                                            {{ cell }}
+                                                        {% else %}
+                                                            <span class="muted">—</span>
+                                                        {% endif %}
+                                                    {% endif %}
+                                                </td>
+                                            {% endwith %}
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                            <button type="submit">Сохранить изменения в таблице</button>
+                        {% endif %}
+                    </form>
                 {% endif %}
             {% endfor %}
         {% endif %}

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from importlib.util import find_spec
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,7 +16,14 @@ if env_path.exists():
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'unsafe-dev-secret-key')
 DEBUG = os.getenv('DEBUG', '1') == '1'
-ALLOWED_HOSTS = ['*']
+
+
+def _env_list(name: str, default: str = '') -> list[str]:
+    value = os.getenv(name, default)
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
+ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', '*')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -37,6 +45,10 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+HAS_WHITENOISE = find_spec('whitenoise') is not None
+if HAS_WHITENOISE:
+    MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
@@ -56,7 +68,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-# SQLite остаётся дефолтом для этой ветки, но параметры можно переопределить через .env.
+# По умолчанию оставляем SQLite, но на сервере это можно переопределить через .env.
 DB_ENGINE = os.getenv('DB_ENGINE', 'django.db.backends.sqlite3')
 DATABASES = {
     'default': {
@@ -82,8 +94,13 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+if HAS_WHITENOISE:
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGIN_URL = '/accounts/login/'
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/accounts/login/'
+
+CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS')
