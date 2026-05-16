@@ -1,9 +1,9 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: ["main"]
-  pull_request:
 
 jobs:
   test:
@@ -26,11 +26,32 @@ jobs:
           pip install -r requirements.txt
           pip install ruff
 
-      - name: Lint (ruff)
+      - name: Lint
         run: ruff check .
 
-      - name: Django checks
+      - name: Django check
         run: python manage.py check
 
-      - name: Run tests
+      - name: Tests
         run: python manage.py test -v 2
+
+  docker-build-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: cadet-journal:ci-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

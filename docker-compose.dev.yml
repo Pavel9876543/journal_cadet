@@ -1,0 +1,17 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cadet-journal:web
+    env_file:
+      - .env.dev
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      DEBUG: "1"
+
+  db:
+    ports:
+      - "5432:5432"
