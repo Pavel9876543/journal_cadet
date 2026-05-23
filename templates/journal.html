@@ -110,6 +110,36 @@
         .table-scroll table {
             margin-bottom: 0;
         }
+        @media (min-width: 1025px) {
+            .container {
+                max-width: 1180px;
+                padding: 28px;
+            }
+            table {
+                min-width: 680px;
+            }
+        }
+        @media (min-width: 769px) and (max-width: 1024px) {
+            body {
+                padding: 16px;
+            }
+            .container {
+                max-width: 100%;
+                padding: 18px;
+            }
+            form {
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            }
+            .table-scroll {
+                max-height: 62vh;
+            }
+            table {
+                min-width: 620px;
+            }
+            th, td {
+                padding: 8px;
+            }
+        }
         @media (max-width: 768px) {
             body {
                 padding: 12px;
@@ -117,8 +147,56 @@
             .container {
                 padding: 14px;
             }
+            .header h1 {
+                margin: 0;
+                font-size: 1.4rem;
+            }
+            .auth-box {
+                width: 100%;
+                justify-content: space-between;
+            }
+            form {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            select, input, button {
+                padding: 10px;
+                font-size: 16px;
+            }
             .table-scroll {
                 max-height: 65vh;
+            }
+            table {
+                min-width: 540px;
+            }
+            th, td {
+                padding: 7px;
+                font-size: 0.92rem;
+            }
+            .btn-secondary {
+                padding: 8px 10px;
+            }
+        }
+        @media (max-width: 420px) {
+            body {
+                padding: 8px;
+            }
+            .container {
+                border-radius: 10px;
+                padding: 10px;
+            }
+            .header {
+                gap: 8px;
+            }
+            .header h1 {
+                font-size: 1.25rem;
+            }
+            .table-scroll {
+                max-height: 68vh;
+            }
+            th, td {
+                padding: 6px;
+                font-size: 0.86rem;
             }
         }
     </style>
