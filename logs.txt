@@ -1,41 +1,30 @@
 Annotations
 1 error
 deploy
-failed 18 minutes ago in 6s
+failed 1 minute ago in 5s
 Search logs
-1s
-Current runner version: '2.334.***'
-Runner Image Provisioner
-Operating System
-Runner Image
-GITHUB_TOKEN Permissions
-Secret source: Actions
-Prepare workflow directory
-Prepare all required actions
-Getting action download info
-Download action repository 'appleboy/ssh-action@v1.2.***' (SHA:7eaf76671a***d7eec5d98ee897acda4f968735a17)
-Complete job name: deploy
-2s
+0s
+3s
 Run appleboy/ssh-action@v1.2.***
   with:
     host: ***
     username: ***
-    key: ***
+    password: ***
     port: ***
     script_stop: true
     script: set -e
   APP_DIR="/opt/cadet_journal"
   REPO_URL="git@github.com:Pavel9876543/journal_cadet.git"
-  
+
   if [ ! -d "$APP_DIR/.git" ]; then
     git clone "$REPO_URL" "$APP_DIR"
   fi
-  
+
   cd "$APP_DIR"
   git fetch origin
   git checkout main
   git pull --ff-only origin main
-  
+
   cat > .env.prod <<ENVEOF
   DEBUG=***
   SECRET_KEY=
@@ -57,11 +46,11 @@ Run appleboy/ssh-action@v1.2.***
   DJANGO_SUPERUSER_ROTATE_PASSWORD=***
   APP_IMAGE=cadet-journal:web
   ENVEOF
-  
+
   chmod 6*** .env.prod
   ./scripts/run-prod.sh
   docker image prune -f
-  
+
     protocol: tcp
     timeout: 3***s
     command_timeout: 1***m
@@ -82,35 +71,35 @@ Run entrypoint.sh
     INPUT_PORT: ***
     INPUT_PROTOCOL: tcp
     INPUT_USERNAME: ***
-    INPUT_PASSWORD: 
-    INPUT_PASSPHRASE: 
-    INPUT_KEY: ***
-    INPUT_KEY_PATH: 
-    INPUT_FINGERPRINT: 
-    INPUT_PROXY_HOST: 
+    INPUT_PASSWORD: ***
+    INPUT_PASSPHRASE:
+    INPUT_KEY:
+    INPUT_KEY_PATH:
+    INPUT_FINGERPRINT:
+    INPUT_PROXY_HOST:
     INPUT_PROXY_PORT: ***
-    INPUT_PROXY_USERNAME: 
-    INPUT_PROXY_PASSWORD: 
-    INPUT_PROXY_PASSPHRASE: 
-    INPUT_PROXY_KEY: 
-    INPUT_PROXY_KEY_PATH: 
-    INPUT_PROXY_FINGERPRINT: 
+    INPUT_PROXY_USERNAME:
+    INPUT_PROXY_PASSWORD:
+    INPUT_PROXY_PASSPHRASE:
+    INPUT_PROXY_KEY:
+    INPUT_PROXY_KEY_PATH:
+    INPUT_PROXY_FINGERPRINT:
     INPUT_TIMEOUT: 3***s
     INPUT_PROXY_TIMEOUT: 3***s
     INPUT_COMMAND_TIMEOUT: 1***m
     INPUT_SCRIPT: set -e
   APP_DIR="/opt/cadet_journal"
   REPO_URL="git@github.com:Pavel9876543/journal_cadet.git"
-  
+
   if [ ! -d "$APP_DIR/.git" ]; then
     git clone "$REPO_URL" "$APP_DIR"
   fi
-  
+
   cd "$APP_DIR"
   git fetch origin
   git checkout main
   git pull --ff-only origin main
-  
+
   cat > .env.prod <<ENVEOF
   DEBUG=***
   SECRET_KEY=
@@ -132,29 +121,33 @@ Run entrypoint.sh
   DJANGO_SUPERUSER_ROTATE_PASSWORD=***
   APP_IMAGE=cadet-journal:web
   ENVEOF
-  
+
   chmod 6*** .env.prod
   ./scripts/run-prod.sh
   docker image prune -f
-  
-    INPUT_SCRIPT_FILE: 
+
+    INPUT_SCRIPT_FILE:
     INPUT_SCRIPT_STOP: true
-    INPUT_ENVS: 
-    INPUT_ENVS_FORMAT: 
-    INPUT_DEBUG: 
-    INPUT_ALL_ENVS: 
-    INPUT_REQUEST_PTY: 
-    INPUT_USE_INSECURE_CIPHER: 
-    INPUT_CIPHER: 
-    INPUT_PROXY_USE_INSECURE_CIPHER: 
-    INPUT_PROXY_CIPHER: 
-    INPUT_SYNC: 
+    INPUT_ENVS:
+    INPUT_ENVS_FORMAT:
+    INPUT_DEBUG:
+    INPUT_ALL_ENVS:
+    INPUT_REQUEST_PTY:
+    INPUT_USE_INSECURE_CIPHER:
+    INPUT_CIPHER:
+    INPUT_PROXY_USE_INSECURE_CIPHER:
+    INPUT_PROXY_CIPHER:
+    INPUT_SYNC:
 Will download drone-ssh-1.8.***-linux-amd64 from https://github.com/appleboy/drone-ssh/releases/download/v1.8.***
 ======= CLI Version =======
 Drone SSH version 1.8.***
 ===========================
-2***26/***5/23 18:44:28 ssh.ParsePrivateKey: ssh: no key found
-2***26/***5/23 18:44:29 ssh: handshake failed: ssh: unable to authenticate, attempted methods [none], no supported methods remain
+Cloning into '/opt/cadet_journal'...
+2***26/***5/23 19:12:32 Process exited with status 128
+Host key verification failed.
+fatal: Could not read from remote repository.
+Please make sure you have the correct access rights
+and the repository exists.
 Error: Process completed with exit code 1.
 0s
 Cleaning up orphan processes
