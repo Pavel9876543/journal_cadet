@@ -32,11 +32,19 @@ jobs:
             APP_DIR="${{ vars.APP_DIR || '/opt/cadet_journal' }}"
             REPO_CLONE_URL="${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}"
 
+            sudo mkdir -p "$APP_DIR"
+            if [ ! -w "$APP_DIR" ]; then
+              sudo chown -R "$USER":"$USER" "$APP_DIR"
+            fi
+
             if [ ! -d "$APP_DIR/.git" ]; then
               git clone "$REPO_CLONE_URL" "$APP_DIR"
+            elif [ ! -w "$APP_DIR/.git" ]; then
+              sudo chown -R "$USER":"$USER" "$APP_DIR"
             fi
 
             cd "$APP_DIR"
+            git config --global --add safe.directory "$APP_DIR"
             git fetch origin
             git checkout main
             git pull --ff-only origin main
