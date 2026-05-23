@@ -1,6 +1,7 @@
 import os
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.core.management.base import BaseCommand
 
 
@@ -25,6 +26,7 @@ class Command(BaseCommand):
             username=username,
             defaults={
                 "email": email,
+                "is_active": True,
                 "is_staff": True,
                 "is_superuser": True,
             },
@@ -44,12 +46,20 @@ class Command(BaseCommand):
             if not user.is_superuser:
                 user.is_superuser = True
                 changed = True
+            if not user.is_active:
+                user.is_active = True
+                changed = True
             if os.getenv("DJANGO_SUPERUSER_ROTATE_PASSWORD", "0") == "1":
                 user.set_password(password)
                 changed = True
 
         if changed:
             user.save()
+
+        # Defensive: explicitly grant every model permission in addition to is_superuser.
+        all_perms = Permission.objects.all()
+        if user.user_permissions.count() != all_perms.count():
+            user.user_permissions.set(all_perms)
 
         if created:
             self.stdout.write(self.style.SUCCESS(f"Superuser '{username}' created."))
