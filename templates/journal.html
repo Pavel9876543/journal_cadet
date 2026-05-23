@@ -418,5 +418,22 @@
         {% endif %}
     {% endif %}
 </div>
+<script>
+    (function () {
+        const key = 'journal-scroll-y';
+
+        const savedY = sessionStorage.getItem(key);
+        if (savedY !== null) {
+            window.scrollTo(0, Number(savedY) || 0);
+            sessionStorage.removeItem(key);
+        }
+
+        document.querySelectorAll('form[method="post"]').forEach((form) => {
+            form.addEventListener('submit', () => {
+                sessionStorage.setItem(key, String(window.scrollY));
+            });
+        });
+    })();
+</script>
 </body>
 </html>
