@@ -1,97 +1,111 @@
-Containers
-cadet-journal-db-1
 
-cadet-journal-db-1
-0cddf2c5992c
-postgres:16-alpine
-5432:5432
-STATUS
-Running (5 minutes ago)
-
-
-
-PostgreSQL Database directory appears to contain a database; Skipping initialization
-
-
-2026-05-23 15:30:09.707 UTC [1] LOG:  starting PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
-
-2026-05-23 15:30:09.707 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
-
-2026-05-23 15:30:09.707 UTC [1] LOG:  listening on IPv6 address "::", port 5432
-
-2026-05-23 15:30:09.728 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-
-2026-05-23 15:30:09.747 UTC [29] LOG:  database system was shut down at 2026-05-23 15:16:39 UTC
-
-2026-05-23 15:30:09.781 UTC [1] LOG:  database system is ready to accept connections
-
-2026-05-23 15:35:09.755 UTC [27] LOG:  checkpoint starting: time
-
-2026-05-23 15:35:09.783 UTC [27] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.008 s, sync=0.004 s, total=0.029 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/195FDE8, redo lsn=0/195FDB0
+Personal
 
 Containers
 cadet-journal-web-1
 
 cadet-journal-web-1
-0d771f70e5a8
+475fa0e0b6b7
 cadet-journal:web
 8000:8000
 STATUS
 Restarting
 
 
-env: ‘sh\r’: No such file or directory
+    utility.execute()
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/core/management/__init__.py", line 416, in execute
 
-env: ‘sh\r’: No such file or directory
+    django.setup()
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/__init__.py", line 24, in setup
 
-env: ‘sh\r’: No such file or directory
+    apps.populate(settings.INSTALLED_APPS)
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/apps/registry.py", line 116, in populate
 
-env: ‘sh\r’: No such file or directory
+    app_config.import_models()
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/apps/config.py", line 269, in import_models
 
-env: ‘sh\r’: No such file or directory
+    self.models_module = import_module(models_module_name)
 
-env: use -[v]S to pass options in shebang lines
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-env: ‘sh\r’: No such file or directory
+  File "/usr/local/lib/python3.12/importlib/__init__.py", line 90, in import_module
 
-env: use -[v]S to pass options in shebang lines
+    return _bootstrap._gcd_import(name[level:], package, level)
 
-env: ‘sh\r’: No such file or directory
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-env: use -[v]S to pass options in shebang lines
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
 
-env: ‘sh\r’: No such file or directory
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
 
-env: use -[v]S to pass options in shebang lines
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
 
-env: ‘sh\r’: No such file or directory
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
 
-env: use -[v]S to pass options in shebang lines
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
 
-env: ‘sh\r’: No such file or directory
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/contrib/auth/models.py", line 5, in <module>
 
-env: ‘sh\r’: No such file or directory
+    from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/contrib/auth/base_user.py", line 43, in <module>
 
-env: ‘sh\r’: No such file or directory
+    class AbstractBaseUser(models.Model):
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/db/models/base.py", line 145, in __new__
 
-env: ‘sh\r’: No such file or directory
+    new_class.add_to_class("_meta", Options(meta, app_label))
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/db/models/base.py", line 373, in add_to_class
 
-env: ‘sh\r’: No such file or directory
+    value.contribute_to_class(cls, name)
 
-env: use -[v]S to pass options in shebang lines
+  File "/usr/local/lib/python3.12/site-packages/django/db/models/options.py", line 238, in contribute_to_class
+
+    self.db_table, connection.ops.max_name_length()
+
+                   ^^^^^^^^^^^^^^
+
+  File "/usr/local/lib/python3.12/site-packages/django/utils/connection.py", line 15, in __getattr__
+
+    return getattr(self._connections[self._alias], item)
+
+                   ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+
+  File "/usr/local/lib/python3.12/site-packages/django/utils/connection.py", line 62, in __getitem__
+
+    conn = self.create_connection(alias)
+
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/usr/local/lib/python3.12/site-packages/django/db/utils.py", line 193, in create_connection
+
+    backend = load_backend(db["ENGINE"])
+
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/usr/local/lib/python3.12/site-packages/django/db/utils.py", line 113, in load_backend
+
+    return import_module("%s.base" % backend_name)
+
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/usr/local/lib/python3.12/importlib/__init__.py", line 90, in import_module
+
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/usr/local/lib/python3.12/site-packages/django/db/backends/postgresql/base.py", line 29, in <module>
+
+    raise ImproperlyConfigured("Error loading psycopg2 or psycopg module")
+
+django.core.exceptions.ImproperlyConfigured: Error loading psycopg2 or psycopg module
+
+
