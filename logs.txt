@@ -1,66 +1,160 @@
-Workflow file for this run
-.github/workflows/cd.yml at 110e4ef
-name: CD
-
-on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: deploy-production
-  cancel-in-progress: true
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: production
-
-    steps:
-      - name: Deploy on server via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || '22' }}
-          script_stop: true
-          script: |
-            set -e
-            APP_DIR="${{ vars.APP_DIR || '/opt/cadet_journal' }}"
-            REPO_URL="${{ vars.REPO_URL }}"
-            if [ ! -d "$APP_DIR/.git" ]; then
-              git clone "$REPO_URL" "$APP_DIR"
-            fi
-            cd "$APP_DIR"
-            git fetch origin
-            git checkout main
-            git pull --ff-only origin main
-            cat > .env.prod <<ENVEOF
-            DEBUG=0
-            SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
-            ALLOWED_HOSTS=${{ secrets.DJANGO_ALLOWED_HOSTS }}
-            CSRF_TRUSTED_ORIGINS=${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}
-            DB_ENGINE=django.db.backends.postgresql
-            DB_NAME=${{ secrets.POSTGRES_DB }}
-            DB_USER=${{ secrets.POSTGRES_USER }}
-            DB_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-            DB_HOST=db
-            DB_PORT=5432
-            WAIT_FOR_DB=1
-            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
-            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
-            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-            DJANGO_SUPERUSER_USERNAME=${{ secrets.DJANGO_SUPERUSER_USERNAME }}
-            DJANGO_SUPERUSER_EMAIL=${{ secrets.DJANGO_SUPERUSER_EMAIL }}
-            DJANGO_SUPERUSER_PASSWORD=${{ secrets.DJANGO_SUPERUSER_PASSWORD }}
-            DJANGO_SUPERUSER_ROTATE_PASSWORD=${{ secrets.DJANGO_SUPERUSER_ROTATE_PASSWORD }}
-            APP_IMAGE=cadet-journal:web
-            ENVEOF
-            chmod 600 .env.prod
-            ./scripts/run-prod.sh
-            docker image prune -f
+Annotations
+1 error
+deploy
+failed 18 minutes ago in 6s
+Search logs
+1s
+Current runner version: '2.334.***'
+Runner Image Provisioner
+Operating System
+Runner Image
+GITHUB_TOKEN Permissions
+Secret source: Actions
+Prepare workflow directory
+Prepare all required actions
+Getting action download info
+Download action repository 'appleboy/ssh-action@v1.2.***' (SHA:7eaf76671a***d7eec5d98ee897acda4f968735a17)
+Complete job name: deploy
+2s
+Run appleboy/ssh-action@v1.2.***
+  with:
+    host: ***
+    username: ***
+    key: ***
+    port: ***
+    script_stop: true
+    script: set -e
+  APP_DIR="/opt/cadet_journal"
+  REPO_URL="git@github.com:Pavel9876543/journal_cadet.git"
+  
+  if [ ! -d "$APP_DIR/.git" ]; then
+    git clone "$REPO_URL" "$APP_DIR"
+  fi
+  
+  cd "$APP_DIR"
+  git fetch origin
+  git checkout main
+  git pull --ff-only origin main
+  
+  cat > .env.prod <<ENVEOF
+  DEBUG=***
+  SECRET_KEY=
+  ALLOWED_HOSTS=
+  CSRF_TRUSTED_ORIGINS=
+  DB_ENGINE=django.db.backends.postgresql
+  DB_NAME=***
+  DB_USER=***
+  DB_PASSWORD=***
+  DB_HOST=db
+  DB_PORT=5432
+  WAIT_FOR_DB=1
+  POSTGRES_DB=***
+  POSTGRES_USER=***
+  POSTGRES_PASSWORD=***
+  DJANGO_SUPERUSER_USERNAME=***
+  DJANGO_SUPERUSER_EMAIL=***
+  DJANGO_SUPERUSER_PASSWORD=***
+  DJANGO_SUPERUSER_ROTATE_PASSWORD=***
+  APP_IMAGE=cadet-journal:web
+  ENVEOF
+  
+  chmod 6*** .env.prod
+  ./scripts/run-prod.sh
+  docker image prune -f
+  
+    protocol: tcp
+    timeout: 3***s
+    command_timeout: 1***m
+    proxy_port: ***
+    proxy_protocol: tcp
+    proxy_timeout: 3***s
+Run echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+  echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH**m
+  shell: /usr/bin/bash --noprofile --norc -e -o pipefail {***}
+  env:
+    GITHUB_ACTION_PATH: /home/runner/work/_actions/appleboy/ssh-action/v1.2.***
+Run entrypoint.sh
+  entrypoint.sh**m
+  shell: /usr/bin/bash --noprofile --norc -e -o pipefail {***}
+  env:
+    GITHUB_ACTION_PATH: /home/runner/work/_actions/appleboy/ssh-action/v1.2.***
+    INPUT_HOST: ***
+    INPUT_PORT: ***
+    INPUT_PROTOCOL: tcp
+    INPUT_USERNAME: ***
+    INPUT_PASSWORD: 
+    INPUT_PASSPHRASE: 
+    INPUT_KEY: ***
+    INPUT_KEY_PATH: 
+    INPUT_FINGERPRINT: 
+    INPUT_PROXY_HOST: 
+    INPUT_PROXY_PORT: ***
+    INPUT_PROXY_USERNAME: 
+    INPUT_PROXY_PASSWORD: 
+    INPUT_PROXY_PASSPHRASE: 
+    INPUT_PROXY_KEY: 
+    INPUT_PROXY_KEY_PATH: 
+    INPUT_PROXY_FINGERPRINT: 
+    INPUT_TIMEOUT: 3***s
+    INPUT_PROXY_TIMEOUT: 3***s
+    INPUT_COMMAND_TIMEOUT: 1***m
+    INPUT_SCRIPT: set -e
+  APP_DIR="/opt/cadet_journal"
+  REPO_URL="git@github.com:Pavel9876543/journal_cadet.git"
+  
+  if [ ! -d "$APP_DIR/.git" ]; then
+    git clone "$REPO_URL" "$APP_DIR"
+  fi
+  
+  cd "$APP_DIR"
+  git fetch origin
+  git checkout main
+  git pull --ff-only origin main
+  
+  cat > .env.prod <<ENVEOF
+  DEBUG=***
+  SECRET_KEY=
+  ALLOWED_HOSTS=
+  CSRF_TRUSTED_ORIGINS=
+  DB_ENGINE=django.db.backends.postgresql
+  DB_NAME=***
+  DB_USER=***
+  DB_PASSWORD=***
+  DB_HOST=db
+  DB_PORT=5432
+  WAIT_FOR_DB=1
+  POSTGRES_DB=***
+  POSTGRES_USER=***
+  POSTGRES_PASSWORD=***
+  DJANGO_SUPERUSER_USERNAME=***
+  DJANGO_SUPERUSER_EMAIL=***
+  DJANGO_SUPERUSER_PASSWORD=***
+  DJANGO_SUPERUSER_ROTATE_PASSWORD=***
+  APP_IMAGE=cadet-journal:web
+  ENVEOF
+  
+  chmod 6*** .env.prod
+  ./scripts/run-prod.sh
+  docker image prune -f
+  
+    INPUT_SCRIPT_FILE: 
+    INPUT_SCRIPT_STOP: true
+    INPUT_ENVS: 
+    INPUT_ENVS_FORMAT: 
+    INPUT_DEBUG: 
+    INPUT_ALL_ENVS: 
+    INPUT_REQUEST_PTY: 
+    INPUT_USE_INSECURE_CIPHER: 
+    INPUT_CIPHER: 
+    INPUT_PROXY_USE_INSECURE_CIPHER: 
+    INPUT_PROXY_CIPHER: 
+    INPUT_SYNC: 
+Will download drone-ssh-1.8.***-linux-amd64 from https://github.com/appleboy/drone-ssh/releases/download/v1.8.***
+======= CLI Version =======
+Drone SSH version 1.8.***
+===========================
+2***26/***5/23 18:44:28 ssh.ParsePrivateKey: ssh: no key found
+2***26/***5/23 18:44:29 ssh: handshake failed: ssh: unable to authenticate, attempted methods [none], no supported methods remain
+Error: Process completed with exit code 1.
+0s
+Cleaning up orphan processes
