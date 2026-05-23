@@ -18,7 +18,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY . .
 
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 8000
 
