@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-./scripts/ensure-env-files.sh
+./scripts/ensure-env-files.sh .env.dev
 
 docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 

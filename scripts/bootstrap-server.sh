@@ -25,7 +25,7 @@ fi
 
 cd "$TARGET_DIR"
 
-./scripts/ensure-env-files.sh
+./scripts/ensure-env-files.sh .env.prod
 
 docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 

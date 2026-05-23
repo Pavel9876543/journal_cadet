@@ -4,9 +4,12 @@ from importlib.util import find_spec
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Загружаем переменные из локального .env, если файл создан.
-env_path = BASE_DIR / '.env'
-if env_path.exists():
+# Загружаем переменные из локальных env-файлов, если они есть.
+# Приоритет: уже заданные переменные окружения > значения из файлов.
+for env_filename in ('.env.dev', '.env.prod'):
+    env_path = BASE_DIR / env_filename
+    if not env_path.exists():
+        continue
     for raw_line in env_path.read_text(encoding='utf-8').splitlines():
         line = raw_line.strip()
         if not line or line.startswith('#') or '=' not in line:
@@ -68,7 +71,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-# По умолчанию оставляем SQLite, но на сервере это можно переопределить через .env.
+# По умолчанию оставляем SQLite, но можно переопределить через env-переменные.
 DB_ENGINE = os.getenv('DB_ENGINE', 'django.db.backends.sqlite3')
 DATABASES = {
     'default': {
