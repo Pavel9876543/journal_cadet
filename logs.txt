@@ -1,0 +1,97 @@
+Containers
+cadet-journal-db-1
+
+cadet-journal-db-1
+0cddf2c5992c
+postgres:16-alpine
+5432:5432
+STATUS
+Running (5 minutes ago)
+
+
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+
+2026-05-23 15:30:09.707 UTC [1] LOG:  starting PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+
+2026-05-23 15:30:09.707 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+
+2026-05-23 15:30:09.707 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+
+2026-05-23 15:30:09.728 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+
+2026-05-23 15:30:09.747 UTC [29] LOG:  database system was shut down at 2026-05-23 15:16:39 UTC
+
+2026-05-23 15:30:09.781 UTC [1] LOG:  database system is ready to accept connections
+
+2026-05-23 15:35:09.755 UTC [27] LOG:  checkpoint starting: time
+
+2026-05-23 15:35:09.783 UTC [27] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.008 s, sync=0.004 s, total=0.029 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/195FDE8, redo lsn=0/195FDB0
+
+Containers
+cadet-journal-web-1
+
+cadet-journal-web-1
+0d771f70e5a8
+cadet-journal:web
+8000:8000
+STATUS
+Restarting
+
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
+
+env: ‘sh\r’: No such file or directory
+
+env: use -[v]S to pass options in shebang lines
