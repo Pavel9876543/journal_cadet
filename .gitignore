@@ -10,5 +10,6 @@ journal_db
 .env
 .env.dev
 .env.prod
+.idea
 
 secrets
