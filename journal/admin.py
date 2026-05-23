@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
 
-from .models import Grade, Group, Student, Subject, Teacher
+from .models import Grade, Group, Student, Subject, SubjectResult, Teacher
 
 try:
     admin.site.unregister(AuthUser)
@@ -52,3 +52,9 @@ class StudentAdmin(admin.ModelAdmin):
 class GradeAdmin(admin.ModelAdmin):
     list_display = ('student', 'subject', 'teacher', 'date', 'value')
     list_filter = ('subject', 'teacher', 'date', 'student__group')
+
+
+@admin.register(SubjectResult)
+class SubjectResultAdmin(admin.ModelAdmin):
+    list_display = ('student', 'subject', 'exam_grade', 'final_grade')
+    list_filter = ('subject', 'student__group')

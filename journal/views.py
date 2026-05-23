@@ -7,11 +7,12 @@ from django.core.exceptions import ValidationError
 from django.shortcuts import redirect, render
 
 from .forms import GradeCreateForm
-from .models import Grade, Group, Student, Subject, Teacher
+from .models import Grade, Group, Student, Subject, SubjectResult, Teacher
 
 
-def _build_journal_tables(students, table_subjects, grade_qs):
+def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
     journal_tables = []
+    result_map = {(result.student_id, result.subject_id): result for result in results_qs}
 
     # Формируем таблицы в формате: строки=ученики, столбцы=даты, ячейки=оценки.
     for subject in table_subjects:
@@ -27,7 +28,16 @@ def _build_journal_tables(students, table_subjects, grade_qs):
             grades_by_date = {}
             for lesson_date in dates:
                 grades_by_date[lesson_date] = row_map[student.id][lesson_date]
-            rows.append({'student': student, 'grades_by_date': grades_by_date})
+            subject_result = result_map.get((student.id, subject.id))
+            rows.append(
+                {
+                    'student': student,
+                    'grades_by_date': grades_by_date,
+                    'average_grade': '',
+                    'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
+                    'final_grade': '' if subject_result is None or subject_result.final_grade is None else subject_result.final_grade,
+                }
+            )
 
         journal_tables.append(
             {
@@ -44,7 +54,53 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
     changed = 0
 
     for field_name, raw_value in request.POST.items():
-        if not field_name.startswith('grade__'):
+        if not field_name.startswith('grade__') and not field_name.startswith('exam__') and not field_name.startswith('final__'):
+            continue
+
+        if field_name.startswith('grade__'):
+            field_mode = 'grade'
+        elif field_name.startswith('exam__'):
+            field_mode = 'exam'
+        else:
+            field_mode = 'final'
+
+        value = raw_value.strip()
+        if value and value not in {'1', '2', '3', '4', '5'}:
+            messages.error(request, 'Оценка должна быть числом от 1 до 5.')
+            return False
+
+        if field_mode in {'exam', 'final'}:
+            parts = field_name.split('__')
+            if len(parts) != 3:
+                continue
+            _, subject_id_raw, student_id_raw = parts
+            try:
+                subject_id = int(subject_id_raw)
+                student_id = int(student_id_raw)
+            except (TypeError, ValueError):
+                continue
+
+            student = Student.objects.filter(pk=student_id, group=selected_group).first()
+            subject = subjects.filter(pk=subject_id).first()
+            if student is None or subject is None:
+                continue
+
+            if role_mode == 'teacher' and (teacher is None or not teacher.subjects.filter(pk=subject.id).exists()):
+                continue
+
+            result, _ = SubjectResult.objects.get_or_create(student=student, subject=subject)
+            new_value = int(value) if value else None
+
+            if field_mode == 'exam':
+                if result.exam_grade == new_value:
+                    continue
+                result.exam_grade = new_value
+            else:
+                if result.final_grade == new_value:
+                    continue
+                result.final_grade = new_value
+            result.save()
+            changed += 1
             continue
 
         parts = field_name.split('__')
@@ -58,11 +114,6 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
             grade_date = date.fromisoformat(grade_date_raw)
         except (TypeError, ValueError):
             continue
-
-        value = raw_value.strip()
-        if value and value not in {'1', '2', '3', '4', '5'}:
-            messages.error(request, 'Оценка должна быть числом от 1 до 5.')
-            return False
 
         grade = Grade.objects.filter(
             student_id=student_id,
@@ -124,15 +175,20 @@ def journal_view(request):
                     'subject',
                     'teacher',
                 )
+                results_qs = SubjectResult.objects.filter(
+                    student__group=selected_group,
+                    subject__in=subjects,
+                ).select_related('student', 'subject')
 
                 if selected_subject_id:
                     grade_qs = grade_qs.filter(subject_id=selected_subject_id)
                     table_subjects = list(subjects.filter(pk=selected_subject_id))
+                    results_qs = results_qs.filter(subject_id=selected_subject_id)
                 else:
                     table_subjects = list(subjects)
 
                 students = list(selected_group.students.all())
-                journal_tables = _build_journal_tables(students, table_subjects, grade_qs)
+                journal_tables = _build_journal_tables(students, table_subjects, grade_qs, results_qs)
 
                 grade_form = GradeCreateForm(
                     request.POST or None,
@@ -223,15 +279,20 @@ def journal_view(request):
                     student__group=selected_group,
                     subject__in=subjects,
                 ).select_related('student', 'subject', 'teacher')
+                results_qs = SubjectResult.objects.filter(
+                    student__group=selected_group,
+                    subject__in=subjects,
+                ).select_related('student', 'subject')
 
                 if selected_subject_id:
                     grade_qs = grade_qs.filter(subject_id=selected_subject_id)
                     table_subjects = list(subjects.filter(pk=selected_subject_id))
+                    results_qs = results_qs.filter(subject_id=selected_subject_id)
                 else:
                     table_subjects = list(subjects)
 
                 students = list(selected_group.students.all())
-                journal_tables = _build_journal_tables(students, table_subjects, grade_qs)
+                journal_tables = _build_journal_tables(students, table_subjects, grade_qs, results_qs)
 
         grade_form = None
         if selected_group:
@@ -290,14 +351,19 @@ def journal_view(request):
         'subject',
         'teacher',
     )
+    results_qs = SubjectResult.objects.filter(
+        student=student_profile,
+        subject__in=subjects,
+    ).select_related('student', 'subject')
 
     if selected_subject_id:
         grade_qs = grade_qs.filter(subject_id=selected_subject_id)
         table_subjects = list(subjects.filter(pk=selected_subject_id))
+        results_qs = results_qs.filter(subject_id=selected_subject_id)
     else:
         table_subjects = list(subjects)
 
-    journal_tables = _build_journal_tables(students, table_subjects, grade_qs)
+    journal_tables = _build_journal_tables(students, table_subjects, grade_qs, results_qs)
 
     if request.method == 'POST':
         messages.error(request, 'Ученику недоступно редактирование оценок.')

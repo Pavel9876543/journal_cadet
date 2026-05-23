@@ -329,6 +329,9 @@
                                     {% for lesson_date in table.dates %}
                                         <th>{{ lesson_date|date:"d.m" }}</th>
                                     {% endfor %}
+                                    <th>Средняя оценка</th>
+                                    <th>Экзамен</th>
+                                    <th>Итоговая оценка</th>
                                 </tr>
                                 </thead>
                                 <tbody>
@@ -360,6 +363,47 @@
                                                 </td>
                                             {% endwith %}
                                         {% endfor %}
+                                        <td>
+                                            {% if row.average_grade %}
+                                                {{ row.average_grade }}
+                                            {% else %}
+                                                <span class="muted">—</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="5"
+                                                    name="exam__{{ table.subject.id }}__{{ row.student.id }}"
+                                                    value="{{ row.exam_grade }}"
+                                                >
+                                            {% else %}
+                                                {% if row.exam_grade %}
+                                                    {{ row.exam_grade }}
+                                                {% else %}
+                                                    <span class="muted">—</span>
+                                                {% endif %}
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="5"
+                                                    name="final__{{ table.subject.id }}__{{ row.student.id }}"
+                                                    value="{{ row.final_grade }}"
+                                                >
+                                            {% else %}
+                                                {% if row.final_grade %}
+                                                    {{ row.final_grade }}
+                                                {% else %}
+                                                    <span class="muted">—</span>
+                                                {% endif %}
+                                            {% endif %}
+                                        </td>
                                     </tr>
                                 {% endfor %}
                                 </tbody>

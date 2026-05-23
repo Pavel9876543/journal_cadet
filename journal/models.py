@@ -119,3 +119,31 @@ class Grade(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+class SubjectResult(models.Model):
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='subject_results', verbose_name='Ученик')
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='subject_results', verbose_name='Предмет')
+    exam_grade = models.PositiveSmallIntegerField(
+        'Экзамен',
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+    )
+    final_grade = models.PositiveSmallIntegerField(
+        'Итоговая оценка',
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+    )
+
+    class Meta:
+        verbose_name = 'Итог по предмету'
+        verbose_name_plural = 'Итоги по предметам'
+        ordering = ['student__full_name', 'subject__name']
+        constraints = [
+            models.UniqueConstraint(fields=['student', 'subject'], name='unique_student_subject_result')
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.student} | {self.subject}'
