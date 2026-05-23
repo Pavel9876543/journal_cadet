@@ -5,13 +5,47 @@
 - CI: lint + Django checks + tests + Docker build check
 - CD: on `main` push builds Docker image, pushes to GHCR, deploys to server over SSH
 - Production deploy uses prebuilt image (`ghcr.io/...:latest`) for fast updates
-- Production `.env.prod` is generated from GitHub Secrets on every deploy
 - Superuser is created/verified automatically during container start
 - Containers auto-start after reboot via `restart: unless-stopped`
 
-## 1) Required repository settings
+## Environment files behavior
+
+All Docker start scripts now use `scripts/ensure-env-files.sh` (or equivalent logic on Windows):
+
+- If `.env` is missing -> create from `.env.example`
+- If `.env.dev` is missing -> create from `.env.dev.example`
+- If `.env.prod` is missing -> create from `.env.prod.example`
+- If file already exists -> keep existing file unchanged
+
+This means manual copying of env files is not required before script-based startup.
+
+## Local Docker run (no GitHub required)
+
+For local development, GitHub access is not required.
+
+```bash
+./scripts/run-local.sh
+```
+
+The script prepares env files automatically and starts:
+
+```bash
+docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+Open: `http://localhost:8000`
+
+Windows:
+
+```bat
+scripts\start-docker.cmd
+```
+
+## 1) Required repository settings (GitHub Actions)
 
 Set in GitHub repository -> `Settings` -> `Secrets and variables`.
+
+These settings are required for CI/CD and server auto-deploy flows, not for local Docker run.
 
 ### Secrets (`Actions secrets`)
 
@@ -49,9 +83,6 @@ sudo systemctl enable docker
 sudo systemctl start docker
 ```
 
-No manual `.env.prod` creation is required.
-CD will generate it from secrets automatically.
-
 ## 3) First deploy / new server deploy
 
 1. Add all secrets and variables once in GitHub repo settings.
@@ -71,11 +102,12 @@ During deploy, workflow will:
 2. CI checks
 3. CD builds image and deploys automatically
 
-## 5) Local development mode
+## 5) Manual production run from server repo
+
+If you run production manually from the checked-out repo:
 
 ```bash
-cp .env.dev.example .env.dev
-./scripts/run-local.sh
+./scripts/run-prod.sh
 ```
 
-Open: `http://localhost:8000`
+This script also auto-creates missing `.env*` files from `*.example` before starting compose with `.env.prod`.

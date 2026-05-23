@@ -25,10 +25,7 @@ fi
 
 cd "$TARGET_DIR"
 
-if [[ ! -f .env.prod ]]; then
-  cp .env.prod.example .env.prod
-  echo "Created .env.prod. Edit it now: $TARGET_DIR/.env.prod"
-fi
+./scripts/ensure-env-files.sh
 
 docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
