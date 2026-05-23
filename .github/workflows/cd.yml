@@ -30,10 +30,10 @@ jobs:
           script: |
             set -e
             APP_DIR="${{ vars.APP_DIR || '/opt/cadet_journal' }}"
-            REPO_URL="${{ vars.REPO_URL }}"
+            REPO_CLONE_URL="${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}"
 
             if [ ! -d "$APP_DIR/.git" ]; then
-              git clone "$REPO_URL" "$APP_DIR"
+              git clone "$REPO_CLONE_URL" "$APP_DIR"
             fi
 
             cd "$APP_DIR"
