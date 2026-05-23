@@ -25,7 +25,6 @@ def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
     journal_tables = []
     result_map = {(result.student_id, result.subject_id): result for result in results_qs}
 
-    # Формируем таблицы в формате: строки=ученики, столбцы=даты, ячейки=оценки.
     for subject in table_subjects:
         subject_grades = grade_qs.filter(subject=subject).order_by('date')
         dates = sorted({grade.date for grade in subject_grades})
@@ -42,6 +41,7 @@ def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
                 grades_by_date[lesson_date] = row_map[student.id][lesson_date]
                 if row_map[student.id][lesson_date]:
                     grade_values.append(row_map[student.id][lesson_date])
+
             subject_result = result_map.get((student.id, subject.id))
             rows.append(
                 {
@@ -58,6 +58,7 @@ def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
                 'subject': subject,
                 'dates': dates,
                 'rows': rows,
+                'final_grade_options': sorted(subject.get_final_grade_allowed_values()),
             }
         )
 
@@ -78,15 +79,13 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
         else:
             field_mode = 'final'
 
-        value = raw_value.strip().upper()
-        if value and value not in {'1', '2', '3', '4', '5', 'Н'}:
-            messages.error(request, 'Оценка должна быть 1-5 или Н.')
-            return False
+        value = raw_value.strip()
 
         if field_mode in {'exam', 'final'}:
             parts = field_name.split('__')
             if len(parts) != 3:
                 continue
+
             _, subject_id_raw, student_id_raw = parts
             try:
                 subject_id = int(subject_id_raw)
@@ -102,11 +101,21 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
             if role_mode == 'teacher' and (teacher is None or not teacher.subjects.filter(pk=subject.id).exists()):
                 continue
 
-            result, _ = SubjectResult.objects.get_or_create(student=student, subject=subject)
-            if value == 'Н':
-                messages.error(request, 'Для столбцов "Экзамен" и "Итоговая оценка" допустимы только значения 1-5.')
+            normalized_value = value
+            if normalized_value.lower() == 'н':
+                normalized_value = 'Н'
+            elif normalized_value.lower() == 'зачет':
+                normalized_value = 'Зачет'
+            elif normalized_value.lower() == 'незачет':
+                normalized_value = 'Незачет'
+
+            allowed_values = subject.get_final_grade_allowed_values()
+            if normalized_value and normalized_value not in allowed_values:
+                messages.error(request, 'Недопустимое значение для итоговой оценки по выбранному предмету.')
                 return False
-            new_value = int(value) if value else None
+
+            result, _ = SubjectResult.objects.get_or_create(student=student, subject=subject)
+            new_value = normalized_value if normalized_value else None
 
             if field_mode == 'exam':
                 if result.exam_grade == new_value:
@@ -116,9 +125,15 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
                 if result.final_grade == new_value:
                     continue
                 result.final_grade = new_value
+
             result.save()
             changed += 1
             continue
+
+        normalized_grade_value = value.upper()
+        if normalized_grade_value and normalized_grade_value not in {'1', '2', '3', '4', '5', 'Н'}:
+            messages.error(request, 'Оценка должна быть 1-5 или Н.')
+            return False
 
         parts = field_name.split('__')
         if len(parts) != 4:
@@ -145,16 +160,15 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
         if role_mode == 'teacher' and (teacher is None or grade.teacher_id != teacher.id):
             continue
 
-        if value == '':
+        if normalized_grade_value == '':
             grade.delete()
             changed += 1
             continue
 
-        new_value = value
-        if grade.value == new_value:
+        if grade.value == normalized_grade_value:
             continue
 
-        grade.value = new_value
+        grade.value = normalized_grade_value
         try:
             grade.save()
         except ValidationError as exc:

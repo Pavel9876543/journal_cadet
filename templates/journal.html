@@ -372,13 +372,12 @@
                                         </td>
                                         <td>
                                             {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                                <input
-                                                    type="number"
-                                                    min="1"
-                                                    max="5"
-                                                    name="exam__{{ table.subject.id }}__{{ row.student.id }}"
-                                                    value="{{ row.exam_grade }}"
-                                                >
+                                                <select name="exam__{{ table.subject.id }}__{{ row.student.id }}">
+                                                    <option value="">—</option>
+                                                    {% for option in table.final_grade_options %}
+                                                        <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
+                                                    {% endfor %}
+                                                </select>
                                             {% else %}
                                                 {% if row.exam_grade %}
                                                     {{ row.exam_grade }}
@@ -389,13 +388,12 @@
                                         </td>
                                         <td>
                                             {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                                <input
-                                                    type="number"
-                                                    min="1"
-                                                    max="5"
-                                                    name="final__{{ table.subject.id }}__{{ row.student.id }}"
-                                                    value="{{ row.final_grade }}"
-                                                >
+                                                <select name="final__{{ table.subject.id }}__{{ row.student.id }}">
+                                                    <option value="">—</option>
+                                                    {% for option in table.final_grade_options %}
+                                                        <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>
+                                                    {% endfor %}
+                                                </select>
                                             {% else %}
                                                 {% if row.final_grade %}
                                                     {{ row.final_grade }}

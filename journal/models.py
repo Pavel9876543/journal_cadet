@@ -1,11 +1,23 @@
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
 class Subject(models.Model):
+    FINAL_GRADE_TYPE_NUMERIC = 'numeric'
+    FINAL_GRADE_TYPE_PASS_FAIL = 'pass_fail'
+    FINAL_GRADE_TYPE_CHOICES = (
+        (FINAL_GRADE_TYPE_NUMERIC, 'Пятибалльная (1-5, Н)'),
+        (FINAL_GRADE_TYPE_PASS_FAIL, 'Зачет/незачет (зачет, незачет, Н)'),
+    )
+
     name = models.CharField('Название предмета', max_length=100, unique=True)
+    final_grade_type = models.CharField(
+        'Тип итоговой оценки',
+        max_length=20,
+        choices=FINAL_GRADE_TYPE_CHOICES,
+        default=FINAL_GRADE_TYPE_NUMERIC,
+    )
 
     class Meta:
         verbose_name = 'Предмет'
@@ -14,6 +26,11 @@ class Subject(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    def get_final_grade_allowed_values(self):
+        if self.final_grade_type == self.FINAL_GRADE_TYPE_PASS_FAIL:
+            return {'Зачет', 'Незачет', 'Н'}
+        return {'1', '2', '3', '4', '5', 'Н'}
 
 
 class Group(models.Model):
@@ -131,17 +148,17 @@ class Grade(models.Model):
 class SubjectResult(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='subject_results', verbose_name='Ученик')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='subject_results', verbose_name='Предмет')
-    exam_grade = models.PositiveSmallIntegerField(
+    exam_grade = models.CharField(
         'Экзамен',
+        max_length=10,
         null=True,
         blank=True,
-        validators=[MinValueValidator(1), MaxValueValidator(5)],
     )
-    final_grade = models.PositiveSmallIntegerField(
+    final_grade = models.CharField(
         'Итоговая оценка',
+        max_length=10,
         null=True,
         blank=True,
-        validators=[MinValueValidator(1), MaxValueValidator(5)],
     )
 
     class Meta:
@@ -154,3 +171,28 @@ class SubjectResult(models.Model):
 
     def __str__(self) -> str:
         return f'{self.student} | {self.subject}'
+
+    def clean(self) -> None:
+        allowed_values = self.subject.get_final_grade_allowed_values()
+        for field_name in ('exam_grade', 'final_grade'):
+            value = getattr(self, field_name)
+            if value is None or value == '':
+                setattr(self, field_name, None)
+                continue
+
+            normalized = str(value).strip()
+            if normalized.lower() == 'н':
+                normalized = 'Н'
+            elif normalized.lower() == 'зачет':
+                normalized = 'Зачет'
+            elif normalized.lower() == 'незачет':
+                normalized = 'Незачет'
+
+            if normalized not in allowed_values:
+                raise ValidationError('Недопустимое значение итоговой оценки для выбранного предмета.')
+
+            setattr(self, field_name, normalized)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)

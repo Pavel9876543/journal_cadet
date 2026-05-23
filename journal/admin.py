@@ -33,7 +33,7 @@ class GroupAdmin(admin.ModelAdmin):
 
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
-    list_display = ('name',)
+    list_display = ('name', 'final_grade_type')
 
 
 @admin.register(Teacher)
