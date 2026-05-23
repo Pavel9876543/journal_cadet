@@ -9,6 +9,16 @@ class GradeCreateForm(forms.ModelForm):
         fields = ['student', 'subject', 'teacher', 'date', 'value']
         widgets = {
             'date': forms.DateInput(attrs={'type': 'date'}),
+            'value': forms.Select(
+                choices=(
+                    ('1', '1'),
+                    ('2', '2'),
+                    ('3', '3'),
+                    ('4', '4'),
+                    ('5', '5'),
+                    ('Н', 'Н'),
+                )
+            ),
         }
 
     def __init__(self, *args, teacher=None, group=None, **kwargs):
@@ -42,6 +52,12 @@ class GradeCreateForm(forms.ModelForm):
         if self.teacher and not self.teacher.subjects.filter(pk=subject.pk).exists():
             raise forms.ValidationError('Нельзя выставлять оценки по предметам другого преподавателя.')
         return subject
+
+    def clean_value(self):
+        value = str(self.cleaned_data['value']).strip().upper()
+        if value not in Grade.ALLOWED_VALUES:
+            raise forms.ValidationError('Оценка должна быть 1-5 или Н.')
+        return value
 
     def save(self, commit=True):
         grade = super().save(commit=False)

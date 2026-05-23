@@ -72,13 +72,15 @@ class Student(models.Model):
 
 
 class Grade(models.Model):
+    ALLOWED_VALUES = {'1', '2', '3', '4', '5', 'Н'}
+
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='grades', verbose_name='Ученик')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='grades', verbose_name='Предмет')
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name='grades', verbose_name='Преподаватель')
     date = models.DateField('Дата оценки')
-    value = models.PositiveSmallIntegerField(
+    value = models.CharField(
         'Оценка',
-        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        max_length=1,
     )
 
     class Meta:
@@ -115,6 +117,11 @@ class Grade(models.Model):
         # Проверяем, что преподаватель ведет выбранный предмет.
         if self.teacher_id and self.subject_id and not self.teacher.subjects.filter(pk=self.subject_id).exists():
             raise ValidationError('Преподаватель не ведет выбранный предмет.')
+
+        if self.value:
+            self.value = str(self.value).strip().upper()
+        if self.value not in self.ALLOWED_VALUES:
+            raise ValidationError('Оценка должна быть 1-5 или Н.')
 
     def save(self, *args, **kwargs):
         self.full_clean()

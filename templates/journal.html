@@ -344,9 +344,9 @@
                                                     {% if role_mode == 'teacher' or role_mode == 'superuser' %}
                                                         {% if cell %}
                                                             <input
-                                                                type="number"
-                                                                min="1"
-                                                                max="5"
+                                                                type="text"
+                                                                maxlength="1"
+                                                                pattern="[1-5Нн]"
                                                                 name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
                                                                 value="{{ cell }}"
                                                             >

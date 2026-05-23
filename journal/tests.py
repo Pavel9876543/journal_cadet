@@ -47,7 +47,7 @@ class JournalAccessTests(TestCase):
             subject=self.subject,
             teacher=self.teacher,
             date="2026-05-15",
-            value=3,
+            value="3",
         )
         self.client.login(username="teacher_test", password="Pass12345!")
         response = self.client.post(
@@ -56,7 +56,7 @@ class JournalAccessTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         grade.refresh_from_db()
-        self.assertEqual(grade.value, 5)
+        self.assertEqual(grade.value, "5")
 
     def test_admin_can_add_grade_by_form(self):
         self.client.login(username="admin_test", password="Pass12345!")
@@ -78,6 +78,6 @@ class JournalAccessTests(TestCase):
                 subject=self.subject,
                 teacher=self.teacher,
                 date="2026-05-16",
-                value=4,
+                value="4",
             ).exists()
         )

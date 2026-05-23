@@ -10,6 +10,17 @@ from .forms import GradeCreateForm
 from .models import Grade, Group, Student, Subject, SubjectResult, Teacher
 
 
+def _calculate_average(grade_values):
+    numeric_values = []
+    for value in grade_values:
+        text = str(value).strip().upper()
+        if text in {'1', '2', '3', '4', '5'}:
+            numeric_values.append(int(text))
+    if not numeric_values:
+        return ''
+    return f'{(sum(numeric_values) / len(numeric_values)):.2f}'
+
+
 def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
     journal_tables = []
     result_map = {(result.student_id, result.subject_id): result for result in results_qs}
@@ -26,14 +37,17 @@ def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
         rows = []
         for student in students:
             grades_by_date = {}
+            grade_values = []
             for lesson_date in dates:
                 grades_by_date[lesson_date] = row_map[student.id][lesson_date]
+                if row_map[student.id][lesson_date]:
+                    grade_values.append(row_map[student.id][lesson_date])
             subject_result = result_map.get((student.id, subject.id))
             rows.append(
                 {
                     'student': student,
                     'grades_by_date': grades_by_date,
-                    'average_grade': '',
+                    'average_grade': _calculate_average(grade_values),
                     'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
                     'final_grade': '' if subject_result is None or subject_result.final_grade is None else subject_result.final_grade,
                 }
@@ -64,9 +78,9 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
         else:
             field_mode = 'final'
 
-        value = raw_value.strip()
-        if value and value not in {'1', '2', '3', '4', '5'}:
-            messages.error(request, 'Оценка должна быть числом от 1 до 5.')
+        value = raw_value.strip().upper()
+        if value and value not in {'1', '2', '3', '4', '5', 'Н'}:
+            messages.error(request, 'Оценка должна быть 1-5 или Н.')
             return False
 
         if field_mode in {'exam', 'final'}:
@@ -89,6 +103,9 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
                 continue
 
             result, _ = SubjectResult.objects.get_or_create(student=student, subject=subject)
+            if value == 'Н':
+                messages.error(request, 'Для столбцов "Экзамен" и "Итоговая оценка" допустимы только значения 1-5.')
+                return False
             new_value = int(value) if value else None
 
             if field_mode == 'exam':
@@ -133,7 +150,7 @@ def _save_inline_grades(request, *, role_mode, selected_group, subjects, teacher
             changed += 1
             continue
 
-        new_value = int(value)
+        new_value = value
         if grade.value == new_value:
             continue
 
