@@ -9,4 +9,4 @@ docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod
 
 docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
 
-echo "Production stack started."
+echo "Продакшен-стек запущен."

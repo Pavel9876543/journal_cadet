@@ -1,113 +1,113 @@
-# Docker deployment and CI/CD
+# Развертывание Docker и CI/CD
 
-## What is implemented
+## Что реализовано
 
-- CI: lint + Django checks + tests + Docker build check
-- CD: on `main` push builds Docker image, pushes to GHCR, deploys to server over SSH
-- Production deploy uses prebuilt image (`ghcr.io/...:latest`) for fast updates
-- Superuser is created/verified automatically during container start
-- Containers auto-start after reboot via `restart: unless-stopped`
+- CI: линтинг + проверки Django + тесты + проверка сборки Docker-образа
+- CD: при push в `main` собирается Docker-образ, отправляется в GHCR и выполняется деплой на сервер по SSH
+- Для production используется готовый образ (`ghcr.io/...:latest`) для быстрых обновлений
+- Суперпользователь создаётся/проверяется автоматически при старте контейнера
+- Контейнеры автоматически поднимаются после перезагрузки через `restart: unless-stopped`
 
-## Environment files behavior
+## Поведение файлов окружения
 
-All Docker start scripts now use `scripts/ensure-env-files.sh` (or equivalent logic on Windows):
+Все Docker-скрипты запуска используют `scripts/ensure-env-files.sh` (или эквивалентную логику в Windows-скрипте):
 
-- If `.env` is missing -> create from `.env.example`
-- If `.env.dev` is missing -> create from `.env.dev.example`
-- If `.env.prod` is missing -> create from `.env.prod.example`
-- If file already exists -> keep existing file unchanged
+- Если отсутствует `.env` -> создаётся из `.env.example`
+- Если отсутствует `.env.dev` -> создаётся из `.env.dev.example`
+- Если отсутствует `.env.prod` -> создаётся из `.env.prod.example`
+- Если файл уже существует -> используется существующий файл без перезаписи
 
-This means manual copying of env files is not required before script-based startup.
+Это означает, что перед запуском через скрипты не нужно вручную копировать env-файлы.
 
-## Local Docker run (no GitHub required)
+## Локальный запуск Docker (GitHub не нужен)
 
-For local development, GitHub access is not required.
+Для локальной разработки доступ к GitHub не требуется.
 
 ```bash
 ./scripts/run-local.sh
 ```
 
-The script prepares env files automatically and starts:
+Скрипт автоматически подготовит env-файлы и запустит:
 
 ```bash
 docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-Open: `http://localhost:8000`
+Откройте: `http://localhost:8000`
 
-Windows:
+Для Windows:
 
 ```bat
 scripts\start-docker.cmd
 ```
 
-## 1) Required repository settings (GitHub Actions)
+## 1) Обязательные настройки репозитория (GitHub Actions)
 
-Set in GitHub repository -> `Settings` -> `Secrets and variables`.
+Задаются в репозитории GitHub: `Settings` -> `Secrets and variables`.
 
-These settings are required for CI/CD and server auto-deploy flows, not for local Docker run.
+Эти настройки нужны для CI/CD и автодеплоя на сервер, но не для локального запуска Docker.
 
-### Secrets (`Actions secrets`)
+### Секреты (`Actions secrets`)
 
-Infrastructure:
+Инфраструктура:
 - `SSH_HOST`
 - `SSH_USER`
 - `SSH_PRIVATE_KEY`
-- `SSH_PORT` (usually `22`)
-- `GHCR_PULL_USER` (optional if image package is public)
-- `GHCR_PULL_TOKEN` (optional if image package is public)
+- `SSH_PORT` (обычно `22`)
+- `GHCR_PULL_USER` (опционально, если пакет образа публичный)
+- `GHCR_PULL_TOKEN` (опционально, если пакет образа публичный)
 
-Application and database:
+Приложение и база данных:
 - `DJANGO_SECRET_KEY`
-- `DJANGO_ALLOWED_HOSTS` (example: `example.com,www.example.com`)
-- `DJANGO_CSRF_TRUSTED_ORIGINS` (example: `https://example.com,https://www.example.com`)
+- `DJANGO_ALLOWED_HOSTS` (пример: `example.com,www.example.com`)
+- `DJANGO_CSRF_TRUSTED_ORIGINS` (пример: `https://example.com,https://www.example.com`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
 
-Superuser:
+Суперпользователь:
 - `DJANGO_SUPERUSER_USERNAME`
 - `DJANGO_SUPERUSER_EMAIL`
 - `DJANGO_SUPERUSER_PASSWORD`
-- `DJANGO_SUPERUSER_ROTATE_PASSWORD` (`0` or `1`)
+- `DJANGO_SUPERUSER_ROTATE_PASSWORD` (`0` или `1`)
 
-### Variables (`Actions variables`)
+### Переменные (`Actions variables`)
 
-- `REPO_URL` (example `git@github.com:ORG/REPO.git`)
-- `APP_DIR` (example `/opt/cadet_journal`)
+- `REPO_URL` (пример: `git@github.com:ORG/REPO.git`)
+- `APP_DIR` (пример: `/opt/cadet_journal`)
 
-## 2) One-time server preparation
+## 2) Одноразовая подготовка сервера
 
 ```bash
 sudo systemctl enable docker
 sudo systemctl start docker
 ```
 
-## 3) First deploy / new server deploy
+## 3) Первый деплой / деплой на новый сервер
 
-1. Add all secrets and variables once in GitHub repo settings.
-2. Ensure server has SSH access and Docker installed.
-3. Run GitHub Action `CD` (manual `workflow_dispatch`) or push to `main`.
+1. Один раз добавьте все секреты и переменные в настройках GitHub-репозитория.
+2. Убедитесь, что на сервере есть SSH-доступ и установлен Docker.
+3. Запустите GitHub Action `CD` (вручную через `workflow_dispatch`) или выполните push в `main`.
 
-During deploy, workflow will:
-- clone repo if not present
-- generate `.env.prod` from secrets
-- pull newest image from GHCR
-- run `docker compose up -d`
-- run migrations and ensure superuser at container startup
+Во время деплоя workflow выполнит:
+- клонирование репозитория, если его ещё нет на сервере
+- генерацию `.env.prod` из секретов
+- загрузку свежего образа из GHCR
+- запуск `docker compose up -d`
+- применение миграций и проверку/создание суперпользователя при старте контейнера
 
-## 4) Daily fast deploy flow
+## 4) Ежедневный быстрый процесс деплоя
 
-1. Push commit to `main`
-2. CI checks
-3. CD builds image and deploys automatically
+1. Сделать push коммита в `main`
+2. Дождаться прохождения CI
+3. CD автоматически соберёт образ и выполнит деплой
 
-## 5) Manual production run from server repo
+## 5) Ручной запуск production из репозитория на сервере
 
-If you run production manually from the checked-out repo:
+Если запускаете production вручную из клонированного репозитория:
 
 ```bash
 ./scripts/run-prod.sh
 ```
 
-This script also auto-creates missing `.env*` files from `*.example` before starting compose with `.env.prod`.
+Этот скрипт также автоматически создаёт отсутствующие файлы `.env*` из `*.example` перед запуском compose с `.env.prod`.

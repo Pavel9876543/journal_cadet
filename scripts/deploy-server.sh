@@ -10,4 +10,4 @@ git pull --ff-only origin "${CURRENT_BRANCH}"
 
 ./scripts/run-prod.sh
 
-echo "Deploy complete on branch ${CURRENT_BRANCH}."
+echo "Деплой завершен в ветке ${CURRENT_BRANCH}."

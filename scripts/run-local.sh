@@ -7,4 +7,4 @@ cd "$(dirname "$0")/.."
 
 docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
-echo "Local dev started: http://localhost:8000"
+echo "Локальный запуск выполнен: http://localhost:8000"

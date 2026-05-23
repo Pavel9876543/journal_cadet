@@ -8,17 +8,17 @@ ensure_from_example() {
   local example="$2"
 
   if [[ -f "$target" ]]; then
-    echo "Using existing $target"
+    echo "Используется существующий $target"
     return
   fi
 
   if [[ ! -f "$example" ]]; then
-    echo "Missing $example; cannot create $target"
+    echo "Отсутствует $example; не удалось создать $target"
     exit 1
   fi
 
   cp "$example" "$target"
-  echo "Created $target from $example"
+  echo "Создан $target из $example"
 }
 
 ensure_from_example ".env" ".env.example"
