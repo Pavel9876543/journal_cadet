@@ -29,6 +29,7 @@ def _env_list(name: str, default: str = '') -> list[str]:
 ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', '*')
 
 INSTALLED_APPS = [
+    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
