@@ -11,5 +11,6 @@ journal_db
 .env.dev
 .env.prod
 .idea
+staticfiles/
 
 secrets
