@@ -8,7 +8,7 @@ class Subject(models.Model):
     FINAL_GRADE_TYPE_PASS_FAIL = 'pass_fail'
     FINAL_GRADE_TYPE_CHOICES = (
         (FINAL_GRADE_TYPE_NUMERIC, 'Пятибалльная (1-5, Н)'),
-        (FINAL_GRADE_TYPE_PASS_FAIL, 'Зачет/незачет (зачет, незачет, Н)'),
+        (FINAL_GRADE_TYPE_PASS_FAIL, 'Зачет/незачет (зачет, незачет)'),
     )
 
     name = models.CharField('Название предмета', max_length=100, unique=True)
@@ -17,6 +17,12 @@ class Subject(models.Model):
         max_length=20,
         choices=FINAL_GRADE_TYPE_CHOICES,
         default=FINAL_GRADE_TYPE_NUMERIC,
+    )
+    students = models.ManyToManyField(
+        'Student',
+        related_name='individual_subjects',
+        blank=True,
+        verbose_name='Индивидуальные ученики',
     )
 
     class Meta:
@@ -29,7 +35,7 @@ class Subject(models.Model):
 
     def get_final_grade_allowed_values(self):
         if self.final_grade_type == self.FINAL_GRADE_TYPE_PASS_FAIL:
-            return {'Зачет', 'Незачет', 'Н'}
+            return {'Зачет', 'Незачет'}
         return {'1', '2', '3', '4', '5', 'Н'}
 
 
@@ -115,7 +121,6 @@ class Grade(models.Model):
         return f'{self.student} | {self.subject} | {self.value}'
 
     def clean(self) -> None:
-        # Запрещаем более одной оценки в день по одному предмету для одного ученика.
         if self.student_id and self.subject_id and self.date:
             duplicate_qs = Grade.objects.filter(
                 student_id=self.student_id,
@@ -127,11 +132,12 @@ class Grade(models.Model):
             if duplicate_qs.exists():
                 raise ValidationError('Нельзя поставить несколько оценок в один день по одному предмету одному ученику.')
 
-        # Запрещаем ставить оценку по предмету, которого нет у группы ученика.
-        if self.student_id and self.subject_id and not self.student.group.subjects.filter(pk=self.subject_id).exists():
-            raise ValidationError('Ученик не может получить оценку по предмету вне своей группы.')
+        if self.student_id and self.subject_id:
+            in_group_subjects = self.student.group.subjects.filter(pk=self.subject_id).exists()
+            in_individual_subject = self.subject.students.filter(pk=self.student_id).exists()
+            if not in_group_subjects and not in_individual_subject:
+                raise ValidationError('Ученик не может получить оценку по предмету вне своей группы или индивидуального списка.')
 
-        # Проверяем, что преподаватель ведет выбранный предмет.
         if self.teacher_id and self.subject_id and not self.teacher.subjects.filter(pk=self.subject_id).exists():
             raise ValidationError('Преподаватель не ведет выбранный предмет.')
 
@@ -181,9 +187,7 @@ class SubjectResult(models.Model):
                 continue
 
             normalized = str(value).strip()
-            if normalized.lower() == 'н':
-                normalized = 'Н'
-            elif normalized.lower() == 'зачет':
+            if normalized.lower() == 'зачет':
                 normalized = 'Зачет'
             elif normalized.lower() == 'незачет':
                 normalized = 'Незачет'

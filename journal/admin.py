@@ -34,6 +34,7 @@ class GroupAdmin(admin.ModelAdmin):
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
     list_display = ('name', 'final_grade_type')
+    filter_horizontal = ('students',)
 
 
 @admin.register(Teacher)

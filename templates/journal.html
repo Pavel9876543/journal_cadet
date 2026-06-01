@@ -229,9 +229,9 @@
         <form method="get">
             {% if role_mode == 'teacher' or role_mode == 'superuser' %}
                 <div>
-                    <label for="group">Группа</label>
+                    <label for="group">Группа (необязательно)</label>
                     <select id="group" name="group">
-                        <option value="">Выберите группу</option>
+                        <option value="">Все группы</option>
                         {% for group in groups %}
                             <option value="{{ group.id }}" {% if selected_group_id == group.id|stringformat:"s" %}selected{% endif %}>
                                 {{ group.name }}
@@ -299,10 +299,10 @@
             {% endif %}
         {% endif %}
 
-        {% if role_mode == 'teacher' and not selected_group_id or role_mode == 'superuser' and not selected_group_id %}
-            <p class="muted">Выберите группу, чтобы увидеть журнал.</p>
+        {% if role_mode == 'teacher' and not selected_group_id and not selected_subject_id or role_mode == 'superuser' and not selected_group_id and not selected_subject_id %}
+            <p class="muted">Выберите группу или предмет, чтобы увидеть журнал.</p>
         {% elif not students %}
-            <p class="muted">В выбранной группе нет учеников.</p>
+            <p class="muted">По выбранным фильтрам нет учеников.</p>
         {% elif not journal_tables %}
             <p class="muted">Нет данных по выбранным фильтрам.</p>
         {% else %}

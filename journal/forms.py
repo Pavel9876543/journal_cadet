@@ -21,11 +21,10 @@ class GradeCreateForm(forms.ModelForm):
             ),
         }
 
-    def __init__(self, *args, teacher=None, group=None, **kwargs):
+    def __init__(self, *args, teacher=None, group=None, students_queryset=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.teacher = teacher
 
-        # Для преподавателя оставляем только его предметы; для админа показываем предметы выбранной группы.
         subject_qs = Subject.objects.all()
         if teacher is not None:
             subject_qs = teacher.subjects.all()
@@ -33,9 +32,10 @@ class GradeCreateForm(forms.ModelForm):
             subject_qs = subject_qs.filter(groups=group)
         self.fields['subject'].queryset = subject_qs.distinct()
 
-        # Ученики ограничены выбранной группой.
         student_qs = Student.objects.none()
-        if group is not None:
+        if students_queryset is not None:
+            student_qs = students_queryset
+        elif group is not None:
             student_qs = group.students.all()
         self.fields['student'].queryset = student_qs
 
@@ -52,6 +52,19 @@ class GradeCreateForm(forms.ModelForm):
         if self.teacher and not self.teacher.subjects.filter(pk=subject.pk).exists():
             raise forms.ValidationError('Нельзя выставлять оценки по предметам другого преподавателя.')
         return subject
+
+    def clean(self):
+        cleaned_data = super().clean()
+        student = cleaned_data.get('student')
+        subject = cleaned_data.get('subject')
+
+        if student and subject:
+            in_group_subjects = student.group.subjects.filter(pk=subject.pk).exists()
+            in_individual_subject = subject.students.filter(pk=student.pk).exists()
+            if not in_group_subjects and not in_individual_subject:
+                raise forms.ValidationError('Ученик не может получить оценку по предмету вне своей группы или индивидуального списка.')
+
+        return cleaned_data
 
     def clean_value(self):
         value = str(self.cleaned_data['value']).strip().upper()
