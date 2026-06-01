@@ -299,20 +299,12 @@
             {% endif %}
         {% endif %}
 
-        {% if role_mode == 'teacher' and not selected_group_id and not selected_subject_id or role_mode == 'superuser' and not selected_group_id and not selected_subject_id %}
-            <p class="muted">Выберите группу или предмет, чтобы увидеть журнал.</p>
-        {% elif not students %}
-            <p class="muted">По выбранным фильтрам нет учеников.</p>
-        {% elif not journal_tables %}
+        {% if not journal_tables %}
             <p class="muted">Нет данных по выбранным фильтрам.</p>
         {% else %}
             {% for table in journal_tables %}
                 <h2>
-                    {% if single_subject_mode %}
-                        Журнал: {{ table.subject.name }}
-                    {% else %}
-                        Предмет: {{ table.subject.name }}
-                    {% endif %}
+                    Группа: {{ table.group.name }} | Предмет: {{ table.subject.name }}
                 </h2>
 
                 {% if not table.dates %}

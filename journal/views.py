@@ -1,3 +1,4 @@
+from collections import defaultdict
 from urllib.parse import urlencode
 from datetime import date
 
@@ -22,8 +23,8 @@ def _calculate_average(grade_values):
     return f'{(sum(numeric_values) / len(numeric_values)):.2f}'
 
 
-def _students_for_subject(subject, *, base_students=None):
-    students = Student.objects.filter(
+def _students_for_group_subject(group, subject, *, base_students=None):
+    students = Student.objects.filter(group=group).filter(
         Q(group__subjects=subject) | Q(individual_subjects=subject)
     ).distinct()
     if base_students is not None:
@@ -31,46 +32,66 @@ def _students_for_subject(subject, *, base_students=None):
     return students.order_by('full_name')
 
 
-def _build_journal_tables(students, table_subjects, grade_qs, results_qs):
+def _build_journal_tables(groups, subjects, students, grade_qs, results_qs):
     journal_tables = []
     result_map = {(result.student_id, result.subject_id): result for result in results_qs}
+    grades_map = defaultdict(list)
+    students_by_group = defaultdict(list)
+    group_subject_ids = {group.id: set(group.subjects.values_list('id', flat=True)) for group in groups}
+    subject_student_ids = {subject.id: set(subject.students.values_list('id', flat=True)) for subject in subjects}
 
-    for subject in table_subjects:
-        subject_grades = grade_qs.filter(subject=subject).order_by('date')
-        dates = sorted({grade.date for grade in subject_grades})
+    for grade in grade_qs:
+        grades_map[(grade.student.group_id, grade.subject_id)].append(grade)
 
-        row_map = {student.id: {lesson_date: '' for lesson_date in dates} for student in students}
-        for grade in subject_grades:
-            row_map[grade.student_id][grade.date] = str(grade.value)
+    for student in students:
+        students_by_group[student.group_id].append(student)
 
-        rows = []
-        for student in students:
-            grades_by_date = {}
-            grade_values = []
-            for lesson_date in dates:
-                grades_by_date[lesson_date] = row_map[student.id][lesson_date]
-                if row_map[student.id][lesson_date]:
-                    grade_values.append(row_map[student.id][lesson_date])
+    for group in groups:
+        group_students = students_by_group.get(group.id, [])
+        allowed_subject_ids = group_subject_ids.get(group.id, set())
 
-            subject_result = result_map.get((student.id, subject.id))
-            rows.append(
+        for subject in subjects:
+            if subject.id in allowed_subject_ids:
+                table_students = group_students
+            else:
+                allowed_student_ids = subject_student_ids.get(subject.id, set())
+                table_students = [student for student in group_students if student.id in allowed_student_ids]
+
+            subject_grades = grades_map.get((group.id, subject.id), [])
+            dates = sorted({grade.date for grade in subject_grades})
+            row_map = {student.id: {lesson_date: '' for lesson_date in dates} for student in table_students}
+            for grade in subject_grades:
+                row_map[grade.student_id][grade.date] = str(grade.value)
+
+            rows = []
+            for student in table_students:
+                grades_by_date = {}
+                grade_values = []
+                for lesson_date in dates:
+                    grades_by_date[lesson_date] = row_map[student.id][lesson_date]
+                    if row_map[student.id][lesson_date]:
+                        grade_values.append(row_map[student.id][lesson_date])
+
+                subject_result = result_map.get((student.id, subject.id))
+                rows.append(
+                    {
+                        'student': student,
+                        'grades_by_date': grades_by_date,
+                        'average_grade': _calculate_average(grade_values),
+                        'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
+                        'final_grade': '' if subject_result is None or subject_result.final_grade is None else subject_result.final_grade,
+                    }
+                )
+
+            journal_tables.append(
                 {
-                    'student': student,
-                    'grades_by_date': grades_by_date,
-                    'average_grade': _calculate_average(grade_values),
-                    'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
-                    'final_grade': '' if subject_result is None or subject_result.final_grade is None else subject_result.final_grade,
+                    'group': group,
+                    'subject': subject,
+                    'dates': dates,
+                    'rows': rows,
+                    'final_grade_options': sorted(subject.get_final_grade_allowed_values()),
                 }
             )
-
-        journal_tables.append(
-            {
-                'subject': subject,
-                'dates': dates,
-                'rows': rows,
-                'final_grade_options': sorted(subject.get_final_grade_allowed_values()),
-            }
-        )
 
     return journal_tables
 
@@ -203,41 +224,30 @@ def journal_view(request):
         selected_group = groups.filter(pk=selected_group_id).first() if selected_group_id else None
         selected_subject = subjects.filter(pk=selected_subject_id).first() if selected_subject_id else None
 
-        if selected_group:
-            subjects = subjects.filter(Q(groups=selected_group) | Q(students__group=selected_group)).distinct()
+        groups_to_show = [selected_group] if selected_group else list(groups)
+        subjects_to_show = [selected_subject] if selected_subject else list(subjects)
+        students_qs = Student.objects.filter(
+            Q(group__in=groups_to_show) | Q(individual_subjects__in=subjects_to_show)
+        ).distinct()
 
-        base_students = Student.objects.all()
-        if selected_group:
-            base_students = base_students.filter(group=selected_group)
-
-        if selected_subject:
-            students_qs = _students_for_subject(selected_subject, base_students=base_students)
-            table_subjects = [selected_subject]
-        elif selected_group:
-            students_qs = base_students.order_by('full_name')
-            table_subjects = list(subjects)
-        else:
-            students_qs = Student.objects.none()
-            table_subjects = []
-
-        students = list(students_qs)
-        grade_qs = Grade.objects.filter(student__in=students_qs, subject__in=table_subjects).select_related(
+        students = list(students_qs.order_by('full_name'))
+        grade_qs = Grade.objects.filter(student__in=students_qs, subject__in=subjects_to_show).select_related(
             'student',
             'subject',
             'teacher',
         )
-        results_qs = SubjectResult.objects.filter(student__in=students_qs, subject__in=table_subjects).select_related(
+        results_qs = SubjectResult.objects.filter(student__in=students_qs, subject__in=subjects_to_show).select_related(
             'student',
             'subject',
         )
-        journal_tables = _build_journal_tables(students, table_subjects, grade_qs, results_qs)
+        journal_tables = _build_journal_tables(groups_to_show, subjects_to_show, students, grade_qs, results_qs)
 
         grade_form = None
-        if selected_subject and (selected_group or students):
+        if selected_group and selected_subject:
             grade_form = GradeCreateForm(
                 request.POST or None,
                 group=selected_group,
-                students_queryset=students_qs,
+                students_queryset=_students_for_group_subject(selected_group, selected_subject),
             )
 
             if request.method == 'POST' and request.POST.get('action') == 'add_grade':
@@ -270,7 +280,6 @@ def journal_view(request):
             'subjects': subjects,
             'students': students,
             'journal_tables': journal_tables,
-            'single_subject_mode': bool(selected_subject_id),
             'selected_group': selected_group,
             'selected_group_id': str(selected_group_id or ''),
             'selected_subject_id': str(selected_subject_id or ''),
@@ -298,7 +307,6 @@ def journal_view(request):
                 'subjects': [],
                 'students': [],
                 'journal_tables': [],
-                'single_subject_mode': False,
                 'selected_group_id': '',
                 'selected_subject_id': '',
                 'grade_form': None,
@@ -309,45 +317,39 @@ def journal_view(request):
     if teacher is not None:
         role_mode = 'teacher'
 
-        groups = Group.objects.filter(subjects__in=teacher.subjects.all()).distinct().order_by('name')
+        groups = Group.objects.filter(
+            Q(subjects__in=teacher.subjects.all()) | Q(students__individual_subjects__in=teacher.subjects.all())
+        ).distinct().order_by('name')
         subjects = teacher.subjects.all().order_by('name')
         selected_group = groups.filter(pk=selected_group_id).first() if selected_group_id else None
         selected_subject = subjects.filter(pk=selected_subject_id).first() if selected_subject_id else None
 
-        base_students = Student.objects.all()
-        if selected_group:
-            base_students = base_students.filter(group=selected_group)
+        groups_to_show = [selected_group] if selected_group else list(groups)
+        subjects_to_show = [selected_subject] if selected_subject else list(subjects)
+        students_qs = Student.objects.filter(
+            Q(group__in=groups_to_show) | Q(individual_subjects__in=subjects_to_show)
+        ).distinct()
 
-        if selected_subject:
-            students_qs = _students_for_subject(selected_subject, base_students=base_students)
-            table_subjects = [selected_subject]
-        elif selected_group:
-            students_qs = base_students.order_by('full_name')
-            table_subjects = list(subjects.filter(groups=selected_group).distinct())
-        else:
-            students_qs = Student.objects.none()
-            table_subjects = []
-
-        students = list(students_qs)
+        students = list(students_qs.order_by('full_name'))
         grade_qs = Grade.objects.filter(
             teacher=teacher,
             student__in=students_qs,
-            subject__in=table_subjects,
+            subject__in=subjects_to_show,
         ).select_related('student', 'subject', 'teacher')
         results_qs = SubjectResult.objects.filter(
             student__in=students_qs,
-            subject__in=table_subjects,
+            subject__in=subjects_to_show,
         ).select_related('student', 'subject')
 
-        journal_tables = _build_journal_tables(students, table_subjects, grade_qs, results_qs)
+        journal_tables = _build_journal_tables(groups_to_show, subjects_to_show, students, grade_qs, results_qs)
 
         grade_form = None
-        if selected_subject and (selected_group or students):
+        if selected_group and selected_subject:
             grade_form = GradeCreateForm(
                 request.POST or None,
                 teacher=teacher,
                 group=selected_group,
-                students_queryset=students_qs,
+                students_queryset=_students_for_group_subject(selected_group, selected_subject),
             )
             if request.method == 'POST' and request.POST.get('action') == 'add_grade':
                 if grade_form.is_valid():
@@ -380,7 +382,6 @@ def journal_view(request):
             'subjects': subjects,
             'students': students,
             'journal_tables': journal_tables,
-            'single_subject_mode': bool(selected_subject_id),
             'selected_group': selected_group,
             'selected_group_id': str(selected_group_id or ''),
             'selected_subject_id': str(selected_subject_id or ''),
@@ -426,7 +427,6 @@ def journal_view(request):
         'subjects': subjects,
         'students': students,
         'journal_tables': journal_tables,
-        'single_subject_mode': bool(selected_subject_id),
         'selected_group': selected_group,
         'selected_group_id': str(selected_group.id),
         'selected_subject_id': str(selected_subject_id or ''),
