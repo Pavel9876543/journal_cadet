@@ -2,6 +2,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from journal import account_utils
 from journal.models import Teacher
 
 
@@ -12,23 +13,29 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         credentials = []
 
-        for teacher in Teacher.objects.order_by('id'):
+        for teacher in Teacher.objects.select_related('user').order_by('id'):
             username = f'teacher{teacher.id}'
-            password = f'Music2026!T{teacher.id}'
+            password = account_utils.generate_temporary_password()
+            first_name, last_name = account_utils.split_user_name(teacher.full_name)
 
             user, created = User.objects.get_or_create(
                 username=username,
                 defaults={
-                    'first_name': teacher.full_name,
+                    'first_name': first_name,
+                    'last_name': last_name,
                     'is_staff': False,
                     'is_superuser': False,
                     'is_active': True,
                 },
             )
 
-            # Для MVP пароль фиксированный и предсказуемый, чтобы легко войти в тестовый стенд.
+            user.first_name = first_name
+            user.last_name = last_name
+            user.is_staff = False
+            user.is_superuser = False
+            user.is_active = True
             user.set_password(password)
-            user.save(update_fields=['password'])
+            user.save()
 
             teacher.user = user
             teacher.save(update_fields=['user'])

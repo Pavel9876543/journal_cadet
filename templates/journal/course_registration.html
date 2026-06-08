@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Регистрация на курсы</title>
+    {% if submitted and redirect_url %}
+        <meta http-equiv="refresh" content="{{ redirect_delay_seconds }};url={{ redirect_url|escape }}">
+    {% endif %}
+    <style>
+        :root {
+            --bg: #eef2ff;
+            --bg-2: #ecfeff;
+            --card: rgba(255, 255, 255, 0.92);
+            --border: #dbe4f0;
+            --text: #102033;
+            --muted: #5f6b7a;
+            --accent: #1d4ed8;
+            --accent-2: #0f766e;
+            --danger: #b91c1c;
+            --danger-bg: #fef2f2;
+            --success: #166534;
+            --success-bg: #f0fdf4;
+            --shadow: 0 20px 50px rgba(15, 23, 42, 0.15);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Segoe UI", Tahoma, sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(29, 78, 216, 0.18), transparent 30%),
+                radial-gradient(circle at top right, rgba(15, 118, 110, 0.16), transparent 24%),
+                linear-gradient(150deg, var(--bg), var(--bg-2) 56%, #ffffff 100%);
+        }
+        .wrap {
+            width: min(1180px, calc(100% - 24px));
+            margin: 0 auto;
+            padding: 24px 0 32px;
+        }
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 18px;
+            flex-wrap: wrap;
+        }
+        .brand {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .brand h1 {
+            margin: 0;
+            font-size: clamp(1.6rem, 3vw, 2.4rem);
+            line-height: 1.1;
+        }
+        .brand p {
+            margin: 0;
+            color: var(--muted);
+            max-width: 70ch;
+        }
+        .nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .nav a {
+            text-decoration: none;
+            color: var(--accent);
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(29, 78, 216, 0.18);
+            border-radius: 999px;
+            padding: 10px 14px;
+            font-weight: 600;
+        }
+        .panel {
+            background: var(--card);
+            border: 1px solid rgba(219, 228, 240, 0.95);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+        }
+        .panel__hero {
+            padding: 24px 24px 16px;
+            display: grid;
+            gap: 10px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(255,255,255,0.5));
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(29, 78, 216, 0.1);
+            color: var(--accent);
+            font-weight: 700;
+            font-size: 0.88rem;
+        }
+        .content {
+            padding: 24px;
+        }
+        .success-card {
+            display: grid;
+            gap: 14px;
+            padding: 24px;
+            border-radius: 18px;
+            background: linear-gradient(180deg, var(--success-bg), #ffffff);
+            border: 1px solid rgba(22, 101, 52, 0.18);
+        }
+        .success-card h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .success-card p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+        .telegram-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: fit-content;
+            border-radius: 12px;
+            padding: 12px 16px;
+            text-decoration: none;
+            color: #fff;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            font-weight: 700;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .field--full {
+            grid-column: 1 / -1;
+        }
+        .field label,
+        .field-label {
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+        .required {
+            color: var(--danger);
+            margin-left: 4px;
+        }
+        .field input,
+        .field select,
+        .field textarea {
+            width: 100%;
+            border: 1px solid #cfd9e6;
+            background: #fff;
+            color: var(--text);
+            border-radius: 14px;
+            padding: 12px 14px;
+            font: inherit;
+            outline: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .field textarea { resize: vertical; min-height: 120px; }
+        .field input:focus,
+        .field select:focus,
+        .field textarea:focus {
+            border-color: rgba(29, 78, 216, 0.65);
+            box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.12);
+        }
+        .field input[readonly] {
+            background: #f8fafc;
+            color: #475569;
+        }
+        .help,
+        .hint {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.93rem;
+            line-height: 1.5;
+            white-space: pre-line;
+        }
+        .error {
+            margin: 0;
+            color: var(--danger);
+            font-size: 0.92rem;
+            line-height: 1.45;
+        }
+        .nonfield-errors {
+            margin: 0 0 18px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: var(--danger-bg);
+            color: var(--danger);
+            border: 1px solid rgba(185, 28, 28, 0.15);
+        }
+        .gender-group {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .gender-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid #cfd9e6;
+            border-radius: 14px;
+            background: #fff;
+            padding: 10px 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .gender-option input {
+            width: auto;
+            margin: 0;
+        }
+        .gender-option:focus-within {
+            border-color: rgba(29, 78, 216, 0.65);
+            box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.12);
+        }
+        .field input[name="city_church"] {
+            font-size: 0.93rem;
+        }
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+        .submit {
+            border: none;
+            border-radius: 14px;
+            padding: 14px 18px;
+            background: linear-gradient(135deg, var(--accent), #2563eb 50%, var(--accent-2));
+            color: #fff;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 10px 18px rgba(29, 78, 216, 0.2);
+        }
+        .submit[disabled] {
+            opacity: 0.55;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .secondary-link {
+            border: 1px solid #cfd9e6;
+            border-radius: 14px;
+            padding: 14px 18px;
+            text-decoration: none;
+            color: var(--text);
+            background: #fff;
+            font-weight: 700;
+        }
+        .status-box {
+            margin-bottom: 16px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: #eef2ff;
+            color: #1e3a8a;
+            border: 1px solid rgba(30, 58, 138, 0.14);
+        }
+        .status-box.error {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: rgba(185, 28, 28, 0.15);
+        }
+        .age-note.invalid {
+            color: var(--danger);
+            font-weight: 700;
+        }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 640px) {
+            .wrap { width: min(100% - 16px, 1180px); padding: 12px 0 18px; }
+            .content, .panel__hero { padding-left: 16px; padding-right: 16px; }
+            .gender-group { grid-template-columns: 1fr; }
+            .field input[name="city_church"] { font-size: 0.84rem; }
+            .actions { flex-direction: column; }
+            .submit, .secondary-link, .telegram-link { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="topbar">
+        <div class="brand">
+            <h1>Регистрация на курсы</h1>
+            <p>Подайте заявку на обучение на музыкальных курсах. Поля, отмеченные звёздочкой, обязательны для заполнения.</p>
+        </div>
+        <nav class="nav" aria-label="Навигация">
+            <a href="{% url 'journal' %}">Электронный журнал</a>
+            <a href="{% url 'login' %}">Вход</a>
+        </nav>
+    </div>
+
+    <section class="panel">
+        <div class="panel__hero">
+            <span class="badge">Музыкальные курсы</span>
+            <div>
+                <strong>Заявка сохраняется в базе данных автоматически.</strong>
+                <p class="hint">После успешной отправки форма перенаправит вас в Telegram-группу курсов.</p>
+            </div>
+        </div>
+
+        <div class="content">
+            {% if submitted %}
+                <div class="success-card">
+                    <h2>Заявка успешно отправлена.</h2>
+                    <p>Через несколько секунд вы будете перенаправлены в Telegram.</p>
+                    {% if redirect_url %}
+                        <a class="telegram-link" href="{{ redirect_url }}">Открыть Telegram-группу</a>
+                    {% else %}
+                        <p>Ссылка на Telegram-группу ещё не настроена администратором.</p>
+                    {% endif %}
+                </div>
+                {% if redirect_url %}
+                {% endif %}
+                <script>
+                    document.addEventListener('DOMContentLoaded', function () {
+                        var redirectUrl = "{{ redirect_url|escapejs }}";
+                        var delayMs = {{ redirect_delay_seconds|default:2 }} * 1000;
+                        if (redirectUrl) {
+                            window.setTimeout(function () {
+                                window.location.href = redirectUrl;
+                            }, delayMs);
+                        }
+                    });
+                </script>
+            {% else %}
+                {% if form.non_field_errors %}
+                    <div class="nonfield-errors">
+                        {% for error in form.non_field_errors %}
+                            <div>{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+
+                <form method="post" id="course-registration-form" novalidate>
+                    {% csrf_token %}
+                    <div class="grid">
+                        {% for field in form.visible_fields %}
+                            <div class="field{% if field.name == 'parent_contacts' or field.name == 'comments' or field.name == 'instrument' or field.name == 'city_church' or field.name == 'gender' %} field--full{% endif %}">
+                                {% if field.name == 'gender' %}
+                                    <div class="field-label">
+                                        {{ field.label }}{% if field.field.required %}<span class="required">*</span>{% endif %}
+                                    </div>
+                                {% else %}
+                                    <label for="{{ field.id_for_label }}">
+                                        {{ field.label }}{% if field.field.required %}<span class="required">*</span>{% endif %}
+                                    </label>
+                                {% endif %}
+                                {% if field.name == 'gender' %}
+                                    <div class="gender-group" role="radiogroup" aria-label="{{ field.label }}">
+                                        {% for choice in field %}
+                                            <label class="gender-option" for="{{ choice.id_for_label }}">
+                                                {{ choice.tag }}
+                                                <span>{{ choice.choice_label }}</span>
+                                            </label>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    {{ field }}
+                                {% endif %}
+                                {% if field.name == 'birth_date' %}
+                                    <p class="hint age-note" id="age-note">Возраст будет рассчитан после выбора даты рождения.</p>
+                                {% endif %}
+                                {% if field.help_text %}
+                                    <p class="help">{{ field.help_text }}</p>
+                                {% endif %}
+                                {% for error in field.errors %}
+                                    <p class="error">{{ error }}</p>
+                                {% endfor %}
+                            </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="actions">
+                        <button class="submit" type="submit" id="submit-button">Отправить заявку</button>
+                        <a class="secondary-link" href="{% url 'login' %}">Войти в кабинет</a>
+                    </div>
+                </form>
+            {% endif %}
+        </div>
+    </section>
+</div>
+
+{% if not submitted %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var form = document.getElementById('course-registration-form');
+        if (!form) {
+            return;
+        }
+
+        var birthInput = form.querySelector('[name="birth_date"]');
+        var phoneInput = form.querySelector('[name="student_phone"]');
+        var submitButton = document.getElementById('submit-button');
+        var ageNote = document.getElementById('age-note');
+        var ageErrorMessage = 'Регистрация на курсы доступна только с 14 лет.';
+        var phoneErrorMessage = 'Неверный формат телефона.';
+
+        function calcAge(value) {
+            if (!value) {
+                return null;
+            }
+            var parts = value.split('-');
+            if (parts.length !== 3) {
+                return null;
+            }
+            var birth = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+            if (Number.isNaN(birth.getTime())) {
+                return null;
+            }
+
+            var today = new Date();
+            var age = today.getUTCFullYear() - birth.getUTCFullYear();
+            var monthDiff = today.getUTCMonth() - birth.getUTCMonth();
+            if (monthDiff < 0 || (monthDiff === 0 && today.getUTCDate() < birth.getUTCDate())) {
+                age -= 1;
+            }
+            return age;
+        }
+
+        function validatePhone() {
+            if (!phoneInput) {
+                return true;
+            }
+            var rawValue = (phoneInput.value || '').trim();
+            if (!rawValue) {
+                phoneInput.setCustomValidity('');
+                return true;
+            }
+            var digits = rawValue.replace(/\D+/g, '');
+            var valid = false;
+            if (digits.length === 10) {
+                valid = true;
+            }
+            if (digits.length === 11 && (digits[0] === '7' || digits[0] === '8')) {
+                valid = true;
+            }
+            phoneInput.setCustomValidity(valid ? '' : phoneErrorMessage);
+            return valid;
+        }
+
+        function updateAgeState() {
+            if (!birthInput || !ageNote || !submitButton) {
+                return;
+            }
+            var age = calcAge(birthInput.value);
+            var valid = age === null || age >= 14;
+            if (age === null) {
+                ageNote.textContent = 'Возраст будет рассчитан после выбора даты рождения.';
+                ageNote.classList.remove('invalid');
+            } else if (age < 14) {
+                ageNote.textContent = ageErrorMessage;
+                ageNote.classList.add('invalid');
+            } else {
+                ageNote.textContent = 'Возраст: ' + age + ' лет.';
+                ageNote.classList.remove('invalid');
+            }
+            birthInput.setCustomValidity(valid ? '' : ageErrorMessage);
+            submitButton.disabled = !valid;
+        }
+
+        if (phoneInput) {
+            phoneInput.addEventListener('input', function () {
+                validatePhone();
+                updateAgeState();
+            });
+            phoneInput.addEventListener('blur', function () {
+                validatePhone();
+                updateAgeState();
+            });
+        }
+
+        if (birthInput) {
+            birthInput.addEventListener('input', updateAgeState);
+            birthInput.addEventListener('change', updateAgeState);
+        }
+
+        form.addEventListener('submit', function (event) {
+            validatePhone();
+            updateAgeState();
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                form.reportValidity();
+            }
+        });
+
+        updateAgeState();
+    });
+</script>
+{% endif %}
+</body>
+</html>

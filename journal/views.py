@@ -1,15 +1,20 @@
 from collections import defaultdict
-from urllib.parse import urlencode
 from datetime import date
+import json
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.db.models import Q
+from django.http import HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
 
-from .forms import GradeCreateForm
-from .models import Grade, Group, Student, Subject, SubjectResult, Teacher
+from .forms import (
+    CourseApplicationPublicForm,
+    GradeCreateForm,
+)
+from .models import CourseApplication, CourseRegistrationSettings, Grade, Group, Student, Subject, SubjectResult, Teacher
 
 
 def _calculate_average(grade_values):
@@ -243,22 +248,32 @@ def journal_view(request):
         journal_tables = _build_journal_tables(groups_to_show, subjects_to_show, students, grade_qs, results_qs)
 
         grade_form = None
-        if selected_group and selected_subject:
+        if request.method == 'POST' and request.POST.get('action') == 'add_grade':
+            posted_group_id = request.POST.get('group') or selected_group_id
+            posted_subject_id = request.POST.get('subject') or selected_subject_id
+            posted_group = groups.filter(pk=posted_group_id).first() if posted_group_id else None
+            posted_subject = subjects.filter(pk=posted_subject_id).first() if posted_subject_id else None
+            if posted_group and posted_subject:
+                grade_form = GradeCreateForm(
+                    request.POST,
+                    group=posted_group,
+                    students_queryset=_students_for_group_subject(posted_group, posted_subject),
+                )
+                if grade_form.is_valid():
+                    grade_form.save()
+                    messages.success(request, 'Оценка успешно добавлена.')
+                    query = {'subject': posted_subject.id, 'group': posted_group.id}
+                    return redirect(f"/?{urlencode(query)}")
+                messages.error(request, 'Не удалось сохранить оценку. Проверьте данные формы.')
+            else:
+                messages.error(request, 'Не удалось сохранить оценку. Выберите группу и предмет.')
+
+        if selected_group and selected_subject and grade_form is None:
             grade_form = GradeCreateForm(
                 request.POST or None,
                 group=selected_group,
                 students_queryset=_students_for_group_subject(selected_group, selected_subject),
             )
-
-            if request.method == 'POST' and request.POST.get('action') == 'add_grade':
-                if grade_form.is_valid():
-                    grade_form.save()
-                    messages.success(request, 'Оценка успешно добавлена.')
-                    query = {'subject': selected_subject.id}
-                    if selected_group:
-                        query['group'] = selected_group.id
-                    return redirect(f"/?{urlencode(query)}")
-                messages.error(request, 'Не удалось сохранить оценку. Проверьте данные формы.')
 
         if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
             if _save_inline_grades(
@@ -415,7 +430,7 @@ def journal_view(request):
         subject__in=table_subjects,
     ).select_related('student', 'subject')
 
-    journal_tables = _build_journal_tables(students, table_subjects, grade_qs, results_qs)
+    journal_tables = _build_journal_tables(groups, table_subjects, students, grade_qs, results_qs)
 
     if request.method == 'POST':
         messages.error(request, 'Ученику недоступно редактирование оценок.')
@@ -433,3 +448,85 @@ def journal_view(request):
         'grade_form': None,
     }
     return render(request, 'journal.html', context)
+
+
+def _load_registration_payload(request):
+    if 'application/json' in request.headers.get('Content-Type', ''):
+        try:
+            return json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return None
+    return request.POST
+
+
+def _get_telegram_redirect_url() -> str:
+    settings_obj = CourseRegistrationSettings.objects.first()
+    if settings_obj is None:
+        settings_obj = CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='')
+    return settings_obj.telegram_group_url.strip()
+
+
+def course_registration_view(request):
+    if request.method not in {'GET', 'POST'}:
+        return HttpResponseNotAllowed(['GET', 'POST'])
+
+    form = CourseApplicationPublicForm(request.POST or None)
+    redirect_url = _get_telegram_redirect_url()
+
+    if request.method == 'POST' and form.is_valid():
+        application = form.save()
+        return render(
+            request,
+            'journal/course_registration.html',
+            {
+                'submitted': True,
+                'application': application,
+                'redirect_url': redirect_url,
+                'redirect_delay_seconds': 2,
+            },
+        )
+
+    return render(
+        request,
+        'journal/course_registration.html',
+        {
+            'form': form,
+            'submitted': False,
+            'redirect_url': redirect_url,
+            'redirect_delay_seconds': 2,
+        },
+    )
+
+
+def course_registration_api(request):
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    payload = _load_registration_payload(request)
+    if payload is None:
+        return JsonResponse({'success': False, 'message': 'Неверный формат запроса.'}, status=400)
+
+    form = CourseApplicationPublicForm(payload)
+    redirect_url = _get_telegram_redirect_url()
+
+    if form.is_valid():
+        application = form.save()
+        return JsonResponse(
+            {
+                'success': True,
+                'message': 'Заявка успешно отправлена.',
+                'redirect_url': redirect_url,
+                'application_id': application.id,
+                'status': application.status,
+            },
+            status=201,
+        )
+
+    return JsonResponse(
+        {
+            'success': False,
+            'message': 'Проверьте данные формы.',
+            'errors': form.errors,
+        },
+        status=400,
+    )

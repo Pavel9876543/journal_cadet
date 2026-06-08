@@ -2,6 +2,8 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from .registration_utils import normalize_parent_contacts, normalize_phone_number
+
 
 class Subject(models.Model):
     FINAL_GRADE_TYPE_NUMERIC = 'numeric'
@@ -196,6 +198,108 @@ class SubjectResult(models.Model):
                 raise ValidationError('Недопустимое значение итоговой оценки для выбранного предмета.')
 
             setattr(self, field_name, normalized)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
+class CourseRegistrationSettings(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    telegram_group_url = models.URLField(
+        'Ссылка на Telegram-группу',
+        max_length=500,
+        blank=True,
+    )
+    updated_at = models.DateTimeField('Дата изменения', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Настройка регистрации'
+        verbose_name_plural = 'Настройки регистрации'
+
+    def __str__(self) -> str:
+        return 'Настройки регистрации на курсы'
+
+
+class CourseApplication(models.Model):
+    GENDER_MALE = 'male'
+    GENDER_FEMALE = 'female'
+    GENDER_CHOICES = (
+        (GENDER_MALE, 'Мужской'),
+        (GENDER_FEMALE, 'Женский'),
+    )
+
+    MUSIC_EDUCATION_NONE = 'none'
+    MUSIC_EDUCATION_SELF = 'self_taught'
+    MUSIC_EDUCATION_BASIC = 'basic'
+    MUSIC_EDUCATION_SECONDARY = 'secondary'
+    MUSIC_EDUCATION_HIGHER = 'higher'
+    MUSIC_EDUCATION_CHOICES = (
+        (MUSIC_EDUCATION_NONE, 'Нет'),
+        (MUSIC_EDUCATION_SELF, 'Самоучка'),
+        (MUSIC_EDUCATION_BASIC, 'Начальное'),
+        (MUSIC_EDUCATION_SECONDARY, 'Среднее'),
+        (MUSIC_EDUCATION_HIGHER, 'Высшее'),
+    )
+
+    STATUS_NEW = 'new'
+    STATUS_CONFIRMED = 'confirmed'
+    STATUS_REJECTED = 'rejected'
+    STATUS_ENROLLED = 'enrolled'
+    STATUS_CHOICES = (
+        (STATUS_NEW, 'Новая'),
+        (STATUS_CONFIRMED, 'Подтверждена'),
+        (STATUS_REJECTED, 'Отклонена'),
+        (STATUS_ENROLLED, 'Зачислен'),
+    )
+
+    registration_date = models.DateTimeField('Дата регистрации', auto_now_add=True)
+    last_name = models.CharField('Фамилия', max_length=100)
+    first_name = models.CharField('Имя', max_length=100)
+    middle_name = models.CharField('Отчество', max_length=100)
+    gender = models.CharField('Пол', max_length=10, choices=GENDER_CHOICES)
+    birth_date = models.DateField('Дата рождения')
+    city_church = models.CharField('Город / Церковь', max_length=255)
+    instrument = models.CharField('Музыкальный инструмент / партия в оркестре', max_length=255)
+    music_education = models.CharField(
+        'Музыкальное образование',
+        max_length=20,
+        choices=MUSIC_EDUCATION_CHOICES,
+        default=MUSIC_EDUCATION_NONE,
+    )
+    student_phone = models.CharField('Телефон ученика', max_length=32)
+    parent_contacts = models.TextField('Телефон родителей', blank=True)
+    comments = models.TextField('Дополнительные вопросы или комментарии', blank=True)
+    status = models.CharField(
+        'Статус заявки',
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_NEW,
+    )
+
+    class Meta:
+        verbose_name = 'Заявка на курсы'
+        verbose_name_plural = 'Заявки на курсы'
+        ordering = ['-registration_date', '-id']
+        indexes = [
+            models.Index(fields=['status', '-registration_date'], name='course_app_status_reg_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.last_name} {self.first_name} {self.middle_name}'.strip()
+
+    @property
+    def age(self) -> int:
+        from .registration_utils import calculate_age
+
+        return calculate_age(self.birth_date)
+
+    def clean(self) -> None:
+        super().clean()
+        if self.student_phone:
+            self.student_phone = normalize_phone_number(self.student_phone)
+        if self.parent_contacts:
+            self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
 
     def save(self, *args, **kwargs):
         self.full_clean()
