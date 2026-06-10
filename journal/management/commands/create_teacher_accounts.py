@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from journal import account_utils
-from journal.models import Teacher
+from journal.models import Teacher, TemporaryCredential
 
 
 class Command(BaseCommand):
@@ -40,18 +40,21 @@ class Command(BaseCommand):
             teacher.user = user
             teacher.save(update_fields=['user'])
 
+            TemporaryCredential.objects.create(
+                login=account_utils.build_display_name_from_full_name(teacher.full_name),
+                temporary_password=password,
+            )
+
             credentials.append(
                 {
                     'teacher': teacher.full_name,
                     'username': username,
                     'password': password,
-                    'created': created,
                 }
             )
 
         self.stdout.write(self.style.SUCCESS('Учетные записи преподавателей готовы.'))
         for row in credentials:
-            status = 'создан' if row['created'] else 'обновлен'
             self.stdout.write(
-                f"{row['teacher']} | логин: {row['username']} | пароль: {row['password']} | {status}"
+                f"{row['teacher']} | логин: {row['username']} | пароль: {row['password']}"
             )

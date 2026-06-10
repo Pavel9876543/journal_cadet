@@ -5,7 +5,8 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from journal.models import Grade, Group, Student, Subject, SubjectResult, Teacher
+from journal.account_utils import build_display_name_from_full_name, build_username_from_full_name, generate_temporary_password, split_user_name
+from journal.models import Grade, Group, Student, Subject, SubjectResult, Teacher, TemporaryCredential, TemporaryStudentCredential
 
 
 class Command(BaseCommand):
@@ -19,6 +20,8 @@ class Command(BaseCommand):
         Teacher.objects.all().delete()
         Group.objects.all().delete()
         Subject.objects.all().delete()
+        TemporaryCredential.objects.all().delete()
+        TemporaryStudentCredential.objects.all().delete()
         User.objects.filter(is_superuser=False).delete()
 
         admin_user, _ = User.objects.get_or_create(
@@ -116,16 +119,24 @@ class Command(BaseCommand):
 
         students = []
         by_name = {}
-        student_counter = 1
+        used_usernames = set(User.objects.values_list('username', flat=True))
         for group_name, full_names in student_map.items():
             for full_name in full_names:
+                display_login = build_display_name_from_full_name(full_name)
+                username = build_username_from_full_name(full_name, existing_usernames=used_usernames)
+                temp_password = generate_temporary_password()
+                first_name, last_name = split_user_name(full_name)
                 user = User.objects.create_user(
-                    username=f'student{student_counter}',
-                    password='pass12345',
-                    first_name=full_name.split()[0],
-                    last_name=' '.join(full_name.split()[1:]),
+                    username=username,
+                    password=temp_password,
+                    first_name=first_name,
+                    last_name=last_name,
                 )
-                student_counter += 1
+                used_usernames.add(username)
+                TemporaryCredential.objects.create(
+                    login=display_login,
+                    temporary_password=temp_password,
+                )
                 student = Student.objects.create(full_name=full_name, group=groups[group_name], user=user)
                 students.append(student)
                 by_name[full_name] = student
@@ -191,4 +202,4 @@ class Command(BaseCommand):
             f'оценок: {Grade.objects.count()}, '
             f'итогов: {SubjectResult.objects.count()}'
         )
-        self.stdout.write('Логины: admin/admin12345, teacher1..teacher6/pass12345, student1..student15/pass12345')
+        self.stdout.write('Логины учеников и преподавателей создаются автоматически вместе с временными паролями.')

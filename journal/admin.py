@@ -12,6 +12,8 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
+    TemporaryCredential,
+    TemporaryStudentCredential,
 )
 
 try:
@@ -118,6 +120,20 @@ class CourseApplicationAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+
+@admin.register(TemporaryCredential)
+class TemporaryCredentialAdmin(admin.ModelAdmin):
+    list_display = ('login', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('login',)
+    readonly_fields = ('created_at',)
+
+
+@admin.register(TemporaryStudentCredential)
+class TemporaryStudentCredentialAdmin(admin.ModelAdmin):
+    list_display = ('login', 'phone_number')
+    search_fields = ('login', 'phone_number')
 
 
 @admin.register(CourseRegistrationSettings)

@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from journal import account_utils
-from journal.models import Student
+from journal.models import Student, TemporaryCredential
 
 
 class Command(BaseCommand):
@@ -19,6 +19,7 @@ class Command(BaseCommand):
             if user.pk and user.username in used_usernames:
                 used_usernames.remove(user.username)
 
+            display_login = account_utils.build_display_name_from_full_name(student.full_name)
             username = account_utils.build_username_from_full_name(
                 student.full_name,
                 existing_usernames=used_usernames,
@@ -39,9 +40,15 @@ class Command(BaseCommand):
             student.save(update_fields=['user'])
             used_usernames.add(username)
 
+            TemporaryCredential.objects.create(
+                login=display_login,
+                temporary_password=password,
+            )
+
             credentials.append(
                 {
                     'student': student.full_name,
+                    'login': display_login,
                     'username': username,
                     'password': password,
                 }
@@ -49,4 +56,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS('Учетные записи учеников готовы.'))
         for row in credentials:
-            self.stdout.write(f"{row['student']} | логин: {row['username']} | пароль: {row['password']}")
+            self.stdout.write(
+                f"{row['student']} | логин: {row['login']} | системный логин: {row['username']} | пароль: {row['password']}"
+            )

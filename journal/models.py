@@ -221,6 +221,34 @@ class CourseRegistrationSettings(models.Model):
         return 'Настройки регистрации на курсы'
 
 
+class TemporaryCredential(models.Model):
+    login = models.CharField('Логин', max_length=150)
+    temporary_password = models.CharField('Временный пароль', max_length=128)
+    created_at = models.DateTimeField('Дата и время создания', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Временные учетные данные'
+        verbose_name_plural = 'Временные учетные данные'
+        ordering = ['-created_at', '-id']
+
+    def __str__(self) -> str:
+        return self.login
+
+
+class TemporaryStudentCredential(models.Model):
+    login = models.CharField('Логин', max_length=150)
+    temporary_password = models.CharField('Временный пароль', max_length=128)
+    phone_number = models.CharField('Номер телефона', max_length=32)
+
+    class Meta:
+        verbose_name = 'Временные учетные данные ученика'
+        verbose_name_plural = 'Временные учетные данные учеников'
+        ordering = ['-id']
+
+    def __str__(self) -> str:
+        return self.login
+
+
 class CourseApplication(models.Model):
     GENDER_MALE = 'male'
     GENDER_FEMALE = 'female'
@@ -302,5 +330,19 @@ class CourseApplication(models.Model):
             self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
 
     def save(self, *args, **kwargs):
+        from django.db import transaction
+
+        from .account_utils import generate_temporary_password
+
+        is_new = self._state.adding
         self.full_clean()
-        super().save(*args, **kwargs)
+
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            if is_new:
+                TemporaryStudentCredential.objects.create(
+                    login=f'{self.last_name} {self.first_name}',
+                    temporary_password=generate_temporary_password(),
+                    phone_number=self.student_phone,
+                )

@@ -207,11 +207,10 @@
         <h1>Электронный журнал</h1>
         {% if request.user.is_authenticated %}
             <div class="auth-box">
-                <a class="btn-secondary" href="{% url 'course_registration' %}">Регистрация на курсы</a>
                 <a class="btn-secondary" href="{% url 'password_change' %}">Сменить пароль</a>
                 <span class="muted">
                     Вы вошли как: {{ request.user|display_user_name }}
-                    {% if role_mode == 'teacher' %}(преподаватель){% elif role_mode == 'student' %}(ученик){% elif role_mode == 'superuser' %}(суперпользователь){% endif %}
+                    {% if role_mode == 'teacher' %}(Преподаватель){% elif role_mode == 'student' %}(Ученик){% elif role_mode == 'superuser' %}(Администратор){% endif %}
                 </span>
                 <form method="post" action="{% url 'logout' %}" class="inline">
                     {% csrf_token %}
