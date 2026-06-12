@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from random import SystemRandom
 from string import ascii_letters, ascii_lowercase, ascii_uppercase, digits
 
 from django.contrib.auth.models import User
+from django.utils.crypto import get_random_string
 from django.utils.text import slugify
 
-_rng = SystemRandom()
 _TEMP_PASSWORD_ALPHABET = ascii_letters + digits + '!@#$%'
 
 
@@ -36,6 +35,19 @@ def build_username_from_full_name(full_name: str, *, existing_usernames: set[str
     return candidate
 
 
+def build_course_application_login(last_name: str, first_name: str, *, existing_logins: set[str] | None = None) -> str:
+    base = slugify(f'{last_name} {first_name}'.strip(), allow_unicode=True) or 'student'
+    existing = existing_logins or set()
+
+    candidate = base
+    suffix = 2
+    while candidate in existing:
+        candidate = f'{base}-{suffix}'
+        suffix += 1
+
+    return candidate
+
+
 def split_user_name(full_name: str) -> tuple[str, str]:
     parts = _name_parts(full_name)
     if not parts:
@@ -47,15 +59,7 @@ def split_user_name(full_name: str) -> tuple[str, str]:
 
 def generate_temporary_password(length: int = 12) -> str:
     length = max(length, 12)
-    password_chars = [
-        _rng.choice(ascii_lowercase),
-        _rng.choice(ascii_uppercase),
-        _rng.choice(digits),
-        _rng.choice('!@#$%'),
-    ]
-    password_chars.extend(_rng.choice(_TEMP_PASSWORD_ALPHABET) for _ in range(length - len(password_chars)))
-    _rng.shuffle(password_chars)
-    return ''.join(password_chars)
+    return get_random_string(length, allowed_chars=_TEMP_PASSWORD_ALPHABET)
 
 
 def display_name_for_user(user: User) -> str:

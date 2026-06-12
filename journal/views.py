@@ -1,20 +1,34 @@
 from collections import defaultdict
 from datetime import date
+from io import BytesIO
 import json
 from urllib.parse import urlencode
+from xml.sax.saxutils import escape
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from django.http import HttpResponseNotAllowed, JsonResponse
+from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
+from django.utils import timezone
 
 from .forms import (
     CourseApplicationPublicForm,
     GradeCreateForm,
 )
-from .models import CourseApplication, CourseRegistrationSettings, Grade, Group, Student, Subject, SubjectResult, Teacher
+from .models import (
+    CourseApplication,
+    CourseRegistrationSettings,
+    Grade,
+    Group,
+    Student,
+    Subject,
+    SubjectResult,
+    Teacher,
+    TemporaryStudentCredential,
+)
 
 
 def _calculate_average(grade_values):
@@ -26,6 +40,72 @@ def _calculate_average(grade_values):
     if not numeric_values:
         return ''
     return f'{(sum(numeric_values) / len(numeric_values)):.2f}'
+
+
+def _xlsx_cell(value):
+    return f'<c t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
+
+
+def _xlsx_row(values, row_number):
+    cells = ''.join(_xlsx_cell(value) for value in values)
+    return f'<row r="{row_number}">{cells}</row>'
+
+
+def _build_student_credentials_xlsx(rows):
+    sheet_rows = [
+        _xlsx_row(['Логин', 'Временный пароль', 'Телефон ученика'], 1),
+    ]
+    for index, row in enumerate(rows, start=2):
+        sheet_rows.append(_xlsx_row(row, index))
+
+    worksheet = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<cols><col min="1" max="1" width="28" customWidth="1"/>'
+        '<col min="2" max="2" width="24" customWidth="1"/>'
+        '<col min="3" max="3" width="22" customWidth="1"/></cols>'
+        f'<sheetData>{"".join(sheet_rows)}</sheetData>'
+        '</worksheet>'
+    )
+
+    output = BytesIO()
+    with ZipFile(output, 'w', ZIP_DEFLATED) as archive:
+        archive.writestr(
+            '[Content_Types].xml',
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '</Types>',
+        )
+        archive.writestr(
+            '_rels/.rels',
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>',
+        )
+        archive.writestr(
+            'xl/workbook.xml',
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Учетные данные" sheetId="1" r:id="rId1"/></sheets>'
+            '</workbook>',
+        )
+        archive.writestr(
+            'xl/_rels/workbook.xml.rels',
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '</Relationships>',
+        )
+        archive.writestr('xl/worksheets/sheet1.xml', worksheet)
+
+    return output.getvalue()
 
 
 def _students_for_group_subject(group, subject, *, base_students=None):
@@ -475,14 +555,16 @@ def course_registration_view(request):
 
     if request.method == 'POST' and form.is_valid():
         application = form.save()
+        credential = TemporaryStudentCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
         return render(
             request,
             'journal/course_registration.html',
             {
                 'submitted': True,
                 'application': application,
+                'credential': credential,
                 'redirect_url': redirect_url,
-                'redirect_delay_seconds': 2,
+                'redirect_delay_seconds': 10,
             },
         )
 
@@ -493,7 +575,7 @@ def course_registration_view(request):
             'form': form,
             'submitted': False,
             'redirect_url': redirect_url,
-            'redirect_delay_seconds': 2,
+            'redirect_delay_seconds': 10,
         },
     )
 
@@ -511,6 +593,7 @@ def course_registration_api(request):
 
     if form.is_valid():
         application = form.save()
+        credential = TemporaryStudentCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
         return JsonResponse(
             {
                 'success': True,
@@ -518,6 +601,8 @@ def course_registration_api(request):
                 'redirect_url': redirect_url,
                 'application_id': application.id,
                 'status': application.status,
+                'login': credential.login if credential else '',
+                'temporary_password': credential.temporary_password if credential else '',
             },
             status=201,
         )
@@ -530,3 +615,20 @@ def course_registration_api(request):
         },
         status=400,
     )
+
+
+@user_passes_test(lambda user: user.is_active and user.is_superuser)
+def export_student_credentials_xlsx(request):
+    rows = TemporaryStudentCredential.objects.order_by('id').values_list(
+        'login',
+        'temporary_password',
+        'student_phone',
+    )
+    content = _build_student_credentials_xlsx(rows)
+    response = HttpResponse(
+        content,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    filename = f'student_credentials_{timezone.localdate():%Y_%m_%d}.xlsx'
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response

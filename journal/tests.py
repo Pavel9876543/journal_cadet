@@ -1,14 +1,15 @@
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from zipfile import ZipFile
 
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
-from journal.account_utils import build_display_name_from_full_name, build_username_from_full_name, display_name_for_user
+from journal.account_utils import build_course_application_login, build_display_name_from_full_name, build_username_from_full_name, display_name_for_user
 from journal.forms import CourseApplicationPublicForm
 from journal.models import CourseApplication, Grade, Group, Student, Subject, Teacher, TemporaryCredential, TemporaryStudentCredential
 
@@ -128,33 +129,130 @@ class CourseApplicationFormTests(TestCase):
 
 
 class CourseRegistrationTemporaryCredentialTests(TestCase):
+    def _registration_payload(self, **overrides):
+        payload = {
+            'last_name': 'Иванов',
+            'first_name': 'Иван',
+            'middle_name': 'Иванович',
+            'gender': 'male',
+            'birth_date': '2000-01-01',
+            'city_church': 'Тамбов',
+            'instrument': 'Баян I',
+            'music_education': 'none',
+            'student_phone': '+7 (999) 123-45-67',
+            'parent_contacts': '',
+            'comments': '',
+        }
+        payload.update(overrides)
+        return payload
+
     def test_course_application_save_creates_temporary_student_credential(self):
         with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            application = CourseApplication.objects.create(
-                last_name='Иванов',
-                first_name='Иван',
-                middle_name='Иванович',
-                gender='male',
-                birth_date='2000-01-01',
-                city_church='Тамбов',
-                instrument='Баян I',
-                music_education='none',
-                student_phone='+7 (999) 123-45-67',
-                parent_contacts='',
-                comments='',
-            )
+            application = CourseApplication.objects.create(**self._registration_payload())
 
         credential = TemporaryStudentCredential.objects.get()
+        user = User.objects.get(username='иванов-иван')
+        student = Student.objects.get(user=user)
         self.assertEqual(application.student_phone, '+7 (999) 123-45-67')
-        self.assertEqual(credential.login, 'Иванов Иван')
+        self.assertEqual(credential.login, 'иванов-иван')
         self.assertEqual(credential.temporary_password, 'Temp12345!')
-        self.assertEqual(credential.phone_number, '+7 (999) 123-45-67')
+        self.assertEqual(credential.student_phone, '+7 (999) 123-45-67')
+        self.assertTrue(user.check_password('Temp12345!'))
+        self.assertEqual(student.full_name, 'Иван Иванов')
+        self.assertEqual(student.group.name, CourseApplication.STUDENT_COURSE_GROUP_NAME)
+
+    def test_course_application_save_adds_suffix_for_duplicate_login(self):
+        payload = self._registration_payload()
+        second_payload = self._registration_payload(student_phone='+7 (999) 123-45-68')
+
+        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
+            CourseApplication.objects.create(**payload)
+            CourseApplication.objects.create(**second_payload)
+
+        self.assertEqual(
+            list(TemporaryStudentCredential.objects.order_by('id').values_list('login', flat=True)),
+            ['иванов-иван', 'иванов-иван-2'],
+        )
+        self.assertTrue(User.objects.filter(username='иванов-иван-2').exists())
+
+    def test_public_form_rejects_duplicate_student_phone(self):
+        CourseApplication.objects.create(**self._registration_payload())
+
+        form = CourseApplicationPublicForm(
+            data=self._registration_payload(
+                last_name='Петров',
+                first_name='Пётр',
+                middle_name='Петрович',
+                student_phone='8 999 123 45 67',
+            )
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('Ученик с таким номером телефона уже зарегистрирован.', form.errors['student_phone'])
+
+    def test_registration_page_shows_generated_credentials(self):
+        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
+            response = self.client.post(reverse('course_registration'), data=self._registration_payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'иванов-иван')
+        self.assertContains(response, 'Temp12345!')
+        self.assertEqual(CourseApplication.objects.count(), 1)
+        self.assertEqual(Student.objects.count(), 1)
+        self.assertEqual(User.objects.count(), 1)
+
+    def test_registered_student_can_login_with_generated_credentials(self):
+        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
+            self.client.post(reverse('course_registration'), data=self._registration_payload())
+
+        self.client.logout()
+        logged_in = self.client.login(username='иванов-иван', password='Temp12345!')
+
+        self.assertTrue(logged_in)
+        response = self.client.get(reverse('journal'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Иванов Иван')
+
+    def test_registration_page_rejects_duplicate_phone_without_second_registration(self):
+        CourseApplication.objects.create(**self._registration_payload())
+
+        response = self.client.post(
+            reverse('course_registration'),
+            data=self._registration_payload(last_name='Петров', first_name='Пётр', student_phone='8 999 123 45 67'),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Ученик с таким номером телефона уже зарегистрирован.')
+        self.assertEqual(CourseApplication.objects.count(), 1)
+        self.assertEqual(TemporaryStudentCredential.objects.count(), 1)
+
+    def test_registration_api_returns_generated_credentials(self):
+        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
+            response = self.client.post(reverse('course_registration_api'), data=self._registration_payload())
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['login'], 'иванов-иван')
+        self.assertEqual(payload['temporary_password'], 'Temp12345!')
+
+    def test_registration_api_rejects_duplicate_phone(self):
+        CourseApplication.objects.create(**self._registration_payload())
+
+        response = self.client.post(
+            reverse('course_registration_api'),
+            data=self._registration_payload(last_name='Петров', first_name='Пётр', student_phone='8 999 123 45 67'),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('student_phone', response.json()['errors'])
+        self.assertEqual(CourseApplication.objects.count(), 1)
 
 
 class AccountUtilityTests(TestCase):
     def test_build_username_from_full_name_uses_name_and_surname(self):
         self.assertEqual(build_display_name_from_full_name('Иван Иванов'), 'Иванов Иван')
         self.assertEqual(build_username_from_full_name('Иван Иванов'), 'иванов-иван')
+        self.assertEqual(build_course_application_login('Иванов', 'Иван'), 'иванов-иван')
 
     def test_display_name_for_user_prefers_profile_full_name(self):
         user = User.objects.create_user(username='tempuser', password='Pass12345!', first_name='Иван', last_name='Иванов')
@@ -231,9 +329,46 @@ class ExportStudentCredentialsWithPhoneTests(TestCase):
             call_command('export_student_credentials_with_phone', output=str(output_path))
 
             csv_output = output_path.read_text(encoding='utf-8')
-            self.assertIn('login,temporary_password,phone_number', csv_output)
-            self.assertIn('Петров Пётр', csv_output)
+            self.assertIn('login,temporary_password,student_phone', csv_output)
+            self.assertIn('петров-пётр', csv_output)
             self.assertIn('Temp12345!', csv_output)
             self.assertIn('+7 (999) 123-45-67', csv_output)
 
-        self.assertEqual(TemporaryStudentCredential.objects.count(), 0)
+        self.assertEqual(TemporaryStudentCredential.objects.count(), 1)
+
+class ExportStudentCredentialsXlsxTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(
+            username='admin_xlsx',
+            password='Pass12345!',
+            email='admin-xlsx@example.com',
+        )
+        self.regular_user = User.objects.create_user(username='regular_xlsx', password='Pass12345!')
+        TemporaryStudentCredential.objects.create(
+            login='иванов-иван',
+            temporary_password='Temp12345!',
+            student_phone='+7 (999) 123-45-67',
+        )
+
+    def test_superuser_can_download_xlsx(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+        response = self.client.get(reverse('export_student_credentials_xlsx'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        with ZipFile(BytesIO(response.content)) as archive:
+            sheet = archive.read('xl/worksheets/sheet1.xml').decode('utf-8')
+
+        self.assertIn('Логин', sheet)
+        self.assertIn('иванов-иван', sheet)
+        self.assertIn('Temp12345!', sheet)
+        self.assertIn('+7 (999) 123-45-67', sheet)
+
+    def test_regular_user_cannot_download_xlsx(self):
+        self.client.login(username='regular_xlsx', password='Pass12345!')
+        response = self.client.get(reverse('export_student_credentials_xlsx'))
+
+        self.assertEqual(response.status_code, 302)

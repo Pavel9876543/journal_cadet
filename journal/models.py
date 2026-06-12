@@ -236,9 +236,9 @@ class TemporaryCredential(models.Model):
 
 
 class TemporaryStudentCredential(models.Model):
-    login = models.CharField('Логин', max_length=150)
+    login = models.CharField('Логин', max_length=150, unique=True)
     temporary_password = models.CharField('Временный пароль', max_length=128)
-    phone_number = models.CharField('Номер телефона', max_length=32)
+    student_phone = models.CharField('Номер телефона ученика', max_length=32)
 
     class Meta:
         verbose_name = 'Временные учетные данные ученика'
@@ -250,6 +250,8 @@ class TemporaryStudentCredential(models.Model):
 
 
 class CourseApplication(models.Model):
+    STUDENT_COURSE_GROUP_NAME = 'Ученики курсов'
+
     GENDER_MALE = 'male'
     GENDER_FEMALE = 'female'
     GENDER_CHOICES = (
@@ -326,13 +328,18 @@ class CourseApplication(models.Model):
         super().clean()
         if self.student_phone:
             self.student_phone = normalize_phone_number(self.student_phone)
+            duplicate_qs = CourseApplication.objects.filter(student_phone=self.student_phone)
+            if self.pk:
+                duplicate_qs = duplicate_qs.exclude(pk=self.pk)
+            if duplicate_qs.exists():
+                raise ValidationError({'student_phone': 'Ученик с таким номером телефона уже зарегистрирован.'})
         if self.parent_contacts:
             self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
 
     def save(self, *args, **kwargs):
         from django.db import transaction
 
-        from .account_utils import generate_temporary_password
+        from .account_utils import build_course_application_login, generate_temporary_password
 
         is_new = self._state.adding
         self.full_clean()
@@ -341,8 +348,29 @@ class CourseApplication(models.Model):
             super().save(*args, **kwargs)
 
             if is_new:
+                existing_logins = set(TemporaryStudentCredential.objects.values_list('login', flat=True))
+                existing_logins.update(User.objects.values_list('username', flat=True))
+                login = build_course_application_login(
+                    self.last_name,
+                    self.first_name,
+                    existing_logins=existing_logins,
+                )
+                temporary_password = generate_temporary_password()
+
+                user = User.objects.create_user(
+                    username=login,
+                    password=temporary_password,
+                    first_name=self.first_name,
+                    last_name=self.last_name,
+                )
+                group, _ = Group.objects.get_or_create(name=self.STUDENT_COURSE_GROUP_NAME)
+                Student.objects.create(
+                    full_name=f'{self.first_name} {self.last_name}'.strip(),
+                    group=group,
+                    user=user,
+                )
                 TemporaryStudentCredential.objects.create(
-                    login=f'{self.last_name} {self.first_name}',
-                    temporary_password=generate_temporary_password(),
-                    phone_number=self.student_phone,
+                    login=login,
+                    temporary_password=temporary_password,
+                    student_phone=self.student_phone,
                 )

@@ -132,8 +132,8 @@ class TemporaryCredentialAdmin(admin.ModelAdmin):
 
 @admin.register(TemporaryStudentCredential)
 class TemporaryStudentCredentialAdmin(admin.ModelAdmin):
-    list_display = ('login', 'phone_number')
-    search_fields = ('login', 'phone_number')
+    list_display = ('login', 'student_phone')
+    search_fields = ('login', 'student_phone')
 
 
 @admin.register(CourseRegistrationSettings)
