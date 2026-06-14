@@ -59,17 +59,27 @@
     <p class="muted">Войдите в учетную запись преподавателя, чтобы просматривать журнал и ставить оценки.</p>
     <p class="muted">Нет аккаунта? <a href="{% url 'course_registration' %}">Подать заявку на курсы</a></p>
 
-    {% if form.errors %}
-        <p class="errorlist">Неверный логин или пароль.</p>
+    {% if form.non_field_errors %}
+        <div class="errorlist">
+            {% for error in form.non_field_errors %}
+                <div>{{ error }}</div>
+            {% endfor %}
+        </div>
     {% endif %}
 
     <form method="post">
         {% csrf_token %}
         <label for="id_username">Логин</label>
         {{ form.username }}
+        {% for error in form.username.errors %}
+            <div class="errorlist">{{ error }}</div>
+        {% endfor %}
 
         <label for="id_password">Пароль</label>
         {{ form.password }}
+        {% for error in form.password.errors %}
+            <div class="errorlist">{{ error }}</div>
+        {% endfor %}
 
         <button type="submit">Войти</button>
         <input type="hidden" name="next" value="{{ next }}">

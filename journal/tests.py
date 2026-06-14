@@ -50,6 +50,49 @@ class JournalAccessTests(TestCase):
         response = self.client.get(reverse("password_change"))
         self.assertEqual(response.status_code, 200)
 
+    def test_password_change_shows_incorrect_current_password_message(self):
+        self.client.login(username="teacher_test", password="Pass12345!")
+        response = self.client.post(
+            reverse("password_change"),
+            data={
+                "old_password": "WrongPass123!",
+                "new_password1": "NewPass123!",
+                "new_password2": "NewPass123!",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Текущий пароль указан неверно.")
+        self.assertNotContains(response, "Проверьте текущий пароль и новые значения.")
+
+    def test_password_change_shows_mismatch_message(self):
+        self.client.login(username="teacher_test", password="Pass12345!")
+        response = self.client.post(
+            reverse("password_change"),
+            data={
+                "old_password": "Pass12345!",
+                "new_password1": "NewPass123!",
+                "new_password2": "OtherPass123!",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Новый пароль и подтверждение не совпадают.")
+
+    def test_password_change_rejects_unchanged_password(self):
+        self.client.login(username="teacher_test", password="Pass12345!")
+        response = self.client.post(
+            reverse("password_change"),
+            data={
+                "old_password": "Pass12345!",
+                "new_password1": "Pass12345!",
+                "new_password2": "Pass12345!",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Новый пароль не должен совпадать со старым.")
+
     def test_student_cannot_edit_inline(self):
         self.client.login(username="student_test", password="Pass12345!")
         response = self.client.post(
@@ -197,6 +240,12 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'иванов-иван')
         self.assertContains(response, 'Temp12345!')
+        self.assertContains(response, 'Сохраните логин и временный пароль перед переходом в Telegram-группу.')
+        self.assertContains(response, 'Копировать')
+        self.assertContains(response, 'Скопировано')
+        self.assertNotContains(response, 'http-equiv="refresh"')
+        self.assertNotContains(response, 'window.location.href')
+        self.assertNotContains(response, 'Через несколько секунд')
         self.assertEqual(CourseApplication.objects.count(), 1)
         self.assertEqual(Student.objects.count(), 1)
         self.assertEqual(User.objects.count(), 1)

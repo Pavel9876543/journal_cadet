@@ -117,6 +117,15 @@ def _students_for_group_subject(group, subject, *, base_students=None):
     return students.order_by('full_name')
 
 
+def _form_error_messages(form):
+    messages_by_field = []
+    for field_name, errors in form.errors.items():
+        label = form.fields[field_name].label if field_name in form.fields else ''
+        for error in errors:
+            messages_by_field.append(f'{label}: {error}' if label else str(error))
+    return messages_by_field
+
+
 def _build_journal_tables(groups, subjects, students, grade_qs, results_qs):
     journal_tables = []
     result_map = {(result.student_id, result.subject_id): result for result in results_qs}
@@ -344,9 +353,9 @@ def journal_view(request):
                     messages.success(request, 'Оценка успешно добавлена.')
                     query = {'subject': posted_subject.id, 'group': posted_group.id}
                     return redirect(f"/?{urlencode(query)}")
-                messages.error(request, 'Не удалось сохранить оценку. Проверьте данные формы.')
+                messages.error(request, ' '.join(_form_error_messages(grade_form)))
             else:
-                messages.error(request, 'Не удалось сохранить оценку. Выберите группу и предмет.')
+                messages.error(request, 'Выберите группу и предмет перед сохранением оценки.')
 
         if selected_group and selected_subject and grade_form is None:
             grade_form = GradeCreateForm(
@@ -454,7 +463,7 @@ def journal_view(request):
                     if selected_group:
                         query['group'] = selected_group.id
                     return redirect(f"/?{urlencode(query)}")
-                messages.error(request, 'Не удалось сохранить оценку. Проверьте данные формы.')
+                messages.error(request, ' '.join(_form_error_messages(grade_form)))
 
         if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
             if _save_inline_grades(
@@ -564,7 +573,6 @@ def course_registration_view(request):
                 'application': application,
                 'credential': credential,
                 'redirect_url': redirect_url,
-                'redirect_delay_seconds': 10,
             },
         )
 
@@ -575,7 +583,6 @@ def course_registration_view(request):
             'form': form,
             'submitted': False,
             'redirect_url': redirect_url,
-            'redirect_delay_seconds': 10,
         },
     )
 
@@ -610,7 +617,7 @@ def course_registration_api(request):
     return JsonResponse(
         {
             'success': False,
-            'message': 'Проверьте данные формы.',
+            'message': ' '.join(_form_error_messages(form)) or 'Форма не содержит данных для проверки.',
             'errors': form.errors,
         },
         status=400,

@@ -1,6 +1,8 @@
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
+from journal.forms import DetailedPasswordChangeForm
 from journal.views import export_student_credentials_xlsx
 
 urlpatterns = [
@@ -10,6 +12,11 @@ urlpatterns = [
         name='export_student_credentials_xlsx',
     ),
     path('admin/', admin.site.urls),
+    path(
+        'accounts/password_change/',
+        auth_views.PasswordChangeView.as_view(form_class=DetailedPasswordChangeForm),
+        name='password_change',
+    ),
     path('accounts/', include('django.contrib.auth.urls')),
     path('', include('journal.urls')),
 ]

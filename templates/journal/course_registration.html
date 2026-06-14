@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Регистрация на курсы</title>
-    {% if submitted and redirect_url %}
-        <meta http-equiv="refresh" content="{{ redirect_delay_seconds }};url={{ redirect_url|escape }}">
-    {% endif %}
     <style>
         :root {
             --bg: #eef2ff;
@@ -133,7 +130,7 @@
         }
         .credential-row {
             display: grid;
-            grid-template-columns: 160px minmax(0, 1fr);
+            grid-template-columns: 160px minmax(0, 1fr) auto;
             gap: 10px;
             align-items: center;
         }
@@ -144,6 +141,29 @@
         .credential-value {
             overflow-wrap: anywhere;
             font-family: Consolas, "Liberation Mono", monospace;
+            font-weight: 700;
+        }
+        .copy-button {
+            width: auto;
+            border: 1px solid rgba(29, 78, 216, 0.25);
+            border-radius: 10px;
+            padding: 8px 12px;
+            color: var(--accent);
+            background: #eff6ff;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .copy-status {
+            min-height: 20px;
+            color: var(--success);
+            font-weight: 700;
+        }
+        .credential-warning {
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: #fffbeb;
+            color: #92400e;
+            border: 1px solid rgba(217, 119, 6, 0.28);
             font-weight: 700;
         }
         .telegram-link {
@@ -333,7 +353,7 @@
             <span class="badge">Музыкальные курсы</span>
             <div>
                 <strong>Заявка сохраняется в базе данных автоматически.</strong>
-                <p class="hint">После успешной отправки форма перенаправит вас в Telegram-группу курсов.</p>
+                <p class="hint">После успешной отправки вы получите логин и временный пароль для входа.</p>
             </div>
         </div>
 
@@ -342,35 +362,62 @@
                 <div class="success-card">
                     <h2>Заявка успешно отправлена.</h2>
                     {% if credential %}
+                        <p class="credential-warning">Сохраните логин и временный пароль перед переходом в Telegram-группу.</p>
                         <div class="credential-box">
                             <div class="credential-row">
                                 <span class="credential-label">Логин</span>
-                                <span class="credential-value">{{ credential.login }}</span>
+                                <span class="credential-value" id="credential-login">{{ credential.login }}</span>
+                                <button class="copy-button" type="button" data-copy-target="credential-login">Копировать</button>
                             </div>
                             <div class="credential-row">
                                 <span class="credential-label">Временный пароль</span>
-                                <span class="credential-value">{{ credential.temporary_password }}</span>
+                                <span class="credential-value" id="credential-password">{{ credential.temporary_password }}</span>
+                                <button class="copy-button" type="button" data-copy-target="credential-password">Копировать</button>
                             </div>
                         </div>
+                        <div class="copy-status" role="status" aria-live="polite"></div>
                     {% endif %}
-                    <p>Через несколько секунд вы будете перенаправлены в Telegram.</p>
                     {% if redirect_url %}
-                        <a class="telegram-link" href="{{ redirect_url }}">Открыть Telegram-группу</a>
+                        <a class="telegram-link" href="{{ redirect_url }}">Перейти в Telegram-группу</a>
                     {% else %}
                         <p>Ссылка на Telegram-группу ещё не настроена администратором.</p>
                     {% endif %}
                 </div>
-                {% if redirect_url %}
-                {% endif %}
                 <script>
                     document.addEventListener('DOMContentLoaded', function () {
-                        var redirectUrl = "{{ redirect_url|escapejs }}";
-                        var delayMs = {{ redirect_delay_seconds|default:2 }} * 1000;
-                        if (redirectUrl) {
-                            window.setTimeout(function () {
-                                window.location.href = redirectUrl;
-                            }, delayMs);
+                        var status = document.querySelector('.copy-status');
+                        var buttons = document.querySelectorAll('[data-copy-target]');
+
+                        function showCopied() {
+                            if (!status) {
+                                return;
+                            }
+                            status.textContent = 'Скопировано';
                         }
+
+                        buttons.forEach(function (button) {
+                            button.addEventListener('click', function () {
+                                var target = document.getElementById(button.dataset.copyTarget);
+                                var value = target ? target.textContent.trim() : '';
+                                if (!value) {
+                                    return;
+                                }
+                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    navigator.clipboard.writeText(value).then(showCopied);
+                                    return;
+                                }
+                                var tempInput = document.createElement('textarea');
+                                tempInput.value = value;
+                                tempInput.setAttribute('readonly', '');
+                                tempInput.style.position = 'absolute';
+                                tempInput.style.left = '-9999px';
+                                document.body.appendChild(tempInput);
+                                tempInput.select();
+                                document.execCommand('copy');
+                                document.body.removeChild(tempInput);
+                                showCopied();
+                            });
+                        });
                     });
                 </script>
             {% else %}

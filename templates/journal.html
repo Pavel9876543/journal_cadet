@@ -272,31 +272,48 @@
                 <div>
                     <label for="id_student">Ученик</label>
                     {{ grade_form.student }}
+                    {% for error in grade_form.student.errors %}
+                        <div class="alert error">{{ error }}</div>
+                    {% endfor %}
                 </div>
                 <div>
                     <label for="id_subject">Предмет</label>
                     {{ grade_form.subject }}
+                    {% for error in grade_form.subject.errors %}
+                        <div class="alert error">{{ error }}</div>
+                    {% endfor %}
                 </div>
                 {% if role_mode == 'superuser' %}
                     <div>
                         <label for="id_teacher">Преподаватель</label>
                         {{ grade_form.teacher }}
+                        {% for error in grade_form.teacher.errors %}
+                            <div class="alert error">{{ error }}</div>
+                        {% endfor %}
                     </div>
                 {% endif %}
                 <div>
                     <label for="id_date">Дата</label>
                     {{ grade_form.date }}
+                    {% for error in grade_form.date.errors %}
+                        <div class="alert error">{{ error }}</div>
+                    {% endfor %}
                 </div>
                 <div>
                     <label for="id_value">Оценка</label>
                     {{ grade_form.value }}
+                    {% for error in grade_form.value.errors %}
+                        <div class="alert error">{{ error }}</div>
+                    {% endfor %}
                 </div>
                 <div>
                     <button type="submit">Сохранить оценку</button>
                 </div>
             </form>
-            {% if grade_form.errors %}
-                <div class="alert error">{{ grade_form.errors }}</div>
+            {% if grade_form.non_field_errors %}
+                {% for error in grade_form.non_field_errors %}
+                    <div class="alert error">{{ error }}</div>
+                {% endfor %}
             {% endif %}
         {% endif %}
 

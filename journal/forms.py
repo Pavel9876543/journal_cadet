@@ -1,6 +1,7 @@
 from datetime import date
 
 from django import forms
+from django.contrib.auth.forms import PasswordChangeForm
 
 from .models import (
     CourseApplication,
@@ -11,6 +12,28 @@ from .models import (
     Teacher,
 )
 from .registration_utils import calculate_age, minimum_birth_date_for_age, normalize_parent_contacts, normalize_phone_number
+
+
+class DetailedPasswordChangeForm(PasswordChangeForm):
+    error_messages = {
+        **PasswordChangeForm.error_messages,
+        'password_incorrect': 'Текущий пароль указан неверно.',
+        'password_mismatch': 'Новый пароль и подтверждение не совпадают.',
+        'password_unchanged': 'Новый пароль не должен совпадать со старым.',
+    }
+
+    def clean(self):
+        cleaned_data = super().clean()
+        password2 = cleaned_data.get('new_password2')
+        if password2 and self.user.check_password(password2):
+            self.add_error(
+                'new_password2',
+                forms.ValidationError(
+                    self.error_messages['password_unchanged'],
+                    code='password_unchanged',
+                ),
+            )
+        return cleaned_data
 
 
 class GradeCreateForm(forms.ModelForm):
