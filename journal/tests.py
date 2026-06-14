@@ -194,10 +194,10 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
             application = CourseApplication.objects.create(**self._registration_payload())
 
         credential = TemporaryStudentCredential.objects.get()
-        user = User.objects.get(username='иванов-иван')
+        user = User.objects.get(username='Иванов Иван')
         student = Student.objects.get(user=user)
         self.assertEqual(application.student_phone, '+7 (999) 123-45-67')
-        self.assertEqual(credential.login, 'иванов-иван')
+        self.assertEqual(credential.login, 'Иванов Иван')
         self.assertEqual(credential.temporary_password, 'Temp12345!')
         self.assertEqual(credential.student_phone, '+7 (999) 123-45-67')
         self.assertTrue(user.check_password('Temp12345!'))
@@ -214,9 +214,9 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
 
         self.assertEqual(
             list(TemporaryStudentCredential.objects.order_by('id').values_list('login', flat=True)),
-            ['иванов-иван', 'иванов-иван-2'],
+            ['Иванов Иван', 'Иванов Иван 2'],
         )
-        self.assertTrue(User.objects.filter(username='иванов-иван-2').exists())
+        self.assertTrue(User.objects.filter(username='Иванов Иван 2').exists())
 
     def test_public_form_rejects_duplicate_student_phone(self):
         CourseApplication.objects.create(**self._registration_payload())
@@ -238,7 +238,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
             response = self.client.post(reverse('course_registration'), data=self._registration_payload())
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'иванов-иван')
+        self.assertContains(response, 'Иванов Иван')
         self.assertContains(response, 'Temp12345!')
         self.assertContains(response, 'Сохраните логин и временный пароль перед переходом в Telegram-группу.')
         self.assertContains(response, 'Копировать')
@@ -255,7 +255,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
             self.client.post(reverse('course_registration'), data=self._registration_payload())
 
         self.client.logout()
-        logged_in = self.client.login(username='иванов-иван', password='Temp12345!')
+        logged_in = self.client.login(username='Иванов Иван', password='Temp12345!')
 
         self.assertTrue(logged_in)
         response = self.client.get(reverse('journal'))
@@ -281,7 +281,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         payload = response.json()
-        self.assertEqual(payload['login'], 'иванов-иван')
+        self.assertEqual(payload['login'], 'Иванов Иван')
         self.assertEqual(payload['temporary_password'], 'Temp12345!')
 
     def test_registration_api_rejects_duplicate_phone(self):
@@ -301,7 +301,7 @@ class AccountUtilityTests(TestCase):
     def test_build_username_from_full_name_uses_name_and_surname(self):
         self.assertEqual(build_display_name_from_full_name('Иван Иванов'), 'Иванов Иван')
         self.assertEqual(build_username_from_full_name('Иван Иванов'), 'иванов-иван')
-        self.assertEqual(build_course_application_login('Иванов', 'Иван'), 'иванов-иван')
+        self.assertEqual(build_course_application_login('Иванов', 'Иван'), 'Иванов Иван')
 
     def test_display_name_for_user_prefers_profile_full_name(self):
         user = User.objects.create_user(username='tempuser', password='Pass12345!', first_name='Иван', last_name='Иванов')
@@ -379,7 +379,7 @@ class ExportStudentCredentialsWithPhoneTests(TestCase):
 
             csv_output = output_path.read_text(encoding='utf-8')
             self.assertIn('login,temporary_password,student_phone', csv_output)
-            self.assertIn('петров-пётр', csv_output)
+            self.assertIn('Петров Пётр', csv_output)
             self.assertIn('Temp12345!', csv_output)
             self.assertIn('+7 (999) 123-45-67', csv_output)
 
@@ -394,7 +394,7 @@ class ExportStudentCredentialsXlsxTests(TestCase):
         )
         self.regular_user = User.objects.create_user(username='regular_xlsx', password='Pass12345!')
         TemporaryStudentCredential.objects.create(
-            login='иванов-иван',
+            login='Иванов Иван',
             temporary_password='Temp12345!',
             student_phone='+7 (999) 123-45-67',
         )
@@ -412,7 +412,7 @@ class ExportStudentCredentialsXlsxTests(TestCase):
             sheet = archive.read('xl/worksheets/sheet1.xml').decode('utf-8')
 
         self.assertIn('Логин', sheet)
-        self.assertIn('иванов-иван', sheet)
+        self.assertIn('Иванов Иван', sheet)
         self.assertIn('Temp12345!', sheet)
         self.assertIn('+7 (999) 123-45-67', sheet)
 

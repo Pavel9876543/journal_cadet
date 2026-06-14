@@ -36,13 +36,13 @@ def build_username_from_full_name(full_name: str, *, existing_usernames: set[str
 
 
 def build_course_application_login(last_name: str, first_name: str, *, existing_logins: set[str] | None = None) -> str:
-    base = slugify(f'{last_name} {first_name}'.strip(), allow_unicode=True) or 'student'
+    base = ' '.join(part for part in (str(last_name).strip(), str(first_name).strip()) if part) or 'student'
     existing = existing_logins or set()
 
     candidate = base
     suffix = 2
     while candidate in existing:
-        candidate = f'{base}-{suffix}'
+        candidate = f'{base} {suffix}'
         suffix += 1
 
     return candidate
