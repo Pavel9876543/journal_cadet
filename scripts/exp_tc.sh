@@ -11,7 +11,7 @@ else
   python_bin="python3"
 fi
 
-"$python_bin" manage.py export_temporary_credentials --output "$output"
+"$python_bin" manage.py export_student_credentials_with_phone --output "$output"
 
 echo "Экспорт выполнен: $output"
 nano "$output"
