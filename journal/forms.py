@@ -1,7 +1,7 @@
 from datetime import date
 
 from django import forms
-from django.contrib.auth.forms import PasswordChangeForm
+from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm
 
 from .models import (
     CourseApplication,
@@ -34,6 +34,18 @@ class DetailedPasswordChangeForm(PasswordChangeForm):
                 ),
             )
         return cleaned_data
+
+
+class SiteAuthenticationForm(AuthenticationForm):
+    def __init__(self, request=None, *args, **kwargs):
+        super().__init__(request, *args, **kwargs)
+        self.fields['username'].widget.attrs.update(
+            {
+                'autocomplete': 'username',
+                'inputmode': 'text',
+            }
+        )
+        self.fields['password'].widget.attrs.update({'autocomplete': 'current-password'})
 
 
 class GradeCreateForm(forms.ModelForm):

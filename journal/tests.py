@@ -50,6 +50,15 @@ class JournalAccessTests(TestCase):
         response = self.client.get(reverse("password_change"))
         self.assertEqual(response.status_code, 200)
 
+    def test_login_form_uses_password_manager_autocomplete_fields(self):
+        response = self.client.get(reverse("login"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="username"')
+        self.assertContains(response, 'autocomplete="username"')
+        self.assertContains(response, 'name="password"')
+        self.assertContains(response, 'autocomplete="current-password"')
+
     def test_password_change_shows_incorrect_current_password_message(self):
         self.client.login(username="teacher_test", password="Pass12345!")
         response = self.client.post(
@@ -64,6 +73,8 @@ class JournalAccessTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Текущий пароль указан неверно.")
         self.assertNotContains(response, "Проверьте текущий пароль и новые значения.")
+        self.assertContains(response, 'data-error-for="old_password"')
+        self.assertContains(response, 'scrollIntoView')
 
     def test_password_change_shows_mismatch_message(self):
         self.client.login(username="teacher_test", password="Pass12345!")
@@ -141,6 +152,24 @@ class JournalAccessTests(TestCase):
                 value="4",
             ).exists()
         )
+
+    def test_grade_form_error_scrolls_to_invalid_field(self):
+        self.client.login(username="admin_test", password="Pass12345!")
+        response = self.client.post(
+            f"{reverse('journal')}?group={self.group.id}&subject={self.subject.id}",
+            data={
+                "action": "add_grade",
+                "student": self.student.id,
+                "subject": self.subject.id,
+                "teacher": self.teacher.id,
+                "date": "",
+                "value": 4,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-error-for="date"')
+        self.assertContains(response, 'scrollIntoView')
 
 
 class CourseApplicationFormTests(TestCase):
@@ -241,8 +270,15 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
         self.assertContains(response, 'Иванов Иван')
         self.assertContains(response, 'Temp12345!')
         self.assertContains(response, 'Сохраните логин и временный пароль перед переходом в Telegram-группу.')
-        self.assertContains(response, 'Копировать')
-        self.assertContains(response, 'Скопировано')
+        self.assertContains(response, 'Скопировать данные')
+        self.assertContains(response, 'Данные скопированы.')
+        self.assertContains(response, 'Логин: ')
+        self.assertContains(response, 'Пароль: ')
+        self.assertContains(response, 'name="username"')
+        self.assertContains(response, 'autocomplete="username"')
+        self.assertContains(response, 'name="password"')
+        self.assertContains(response, 'autocomplete="current-password"')
+        self.assertContains(response, 'PasswordCredential')
         self.assertNotContains(response, 'http-equiv="refresh"')
         self.assertNotContains(response, 'window.location.href')
         self.assertNotContains(response, 'Через несколько секунд')
@@ -272,6 +308,8 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Ученик с таким номером телефона уже зарегистрирован.')
+        self.assertContains(response, 'data-error-for="student_phone"')
+        self.assertContains(response, 'scrollToFirstServerError')
         self.assertEqual(CourseApplication.objects.count(), 1)
         self.assertEqual(TemporaryStudentCredential.objects.count(), 1)
 

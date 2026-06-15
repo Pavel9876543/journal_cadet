@@ -72,18 +72,38 @@
         <label for="id_username">Логин</label>
         {{ form.username }}
         {% for error in form.username.errors %}
-            <div class="errorlist">{{ error }}</div>
+            <div class="errorlist" data-error-for="username">{{ error }}</div>
         {% endfor %}
 
         <label for="id_password">Пароль</label>
         {{ form.password }}
         {% for error in form.password.errors %}
-            <div class="errorlist">{{ error }}</div>
+            <div class="errorlist" data-error-for="password">{{ error }}</div>
         {% endfor %}
 
         <button type="submit">Войти</button>
         <input type="hidden" name="next" value="{{ next }}">
     </form>
 </div>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var form = document.querySelector('form');
+        var firstError = document.querySelector('[data-error-for], .errorlist');
+        if (!form || !firstError) {
+            return;
+        }
+        var field = null;
+        if (firstError.dataset.errorFor) {
+            field = Array.prototype.find.call(form.elements, function (element) {
+                return element.name === firstError.dataset.errorFor;
+            });
+        }
+        var target = field || firstError;
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (field && typeof field.focus === 'function') {
+            field.focus({ preventScroll: true });
+        }
+    });
+</script>
 </body>
 </html>

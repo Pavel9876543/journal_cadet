@@ -130,7 +130,7 @@
         }
         .credential-row {
             display: grid;
-            grid-template-columns: 160px minmax(0, 1fr) auto;
+            grid-template-columns: 160px minmax(0, 1fr);
             gap: 10px;
             align-items: center;
         }
@@ -157,6 +157,36 @@
             min-height: 20px;
             color: var(--success);
             font-weight: 700;
+        }
+        .password-manager-form {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+            gap: 10px;
+            align-items: end;
+            margin: 0;
+        }
+        .password-manager-form label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--muted);
+            font-weight: 600;
+        }
+        .password-manager-form input {
+            width: 100%;
+            border: 1px solid #cfd9e6;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font: inherit;
+        }
+        .password-manager-form button {
+            border: 1px solid #cfd9e6;
+            border-radius: 10px;
+            padding: 10px 12px;
+            color: var(--text);
+            background: #fff;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
         }
         .credential-warning {
             padding: 12px 14px;
@@ -329,6 +359,7 @@
             .content, .panel__hero { padding-left: 16px; padding-right: 16px; }
             .gender-group { grid-template-columns: 1fr; }
             .credential-row { grid-template-columns: 1fr; }
+            .password-manager-form { grid-template-columns: 1fr; }
             .field input[name="city_church"] { font-size: 0.84rem; }
             .actions { flex-direction: column; }
             .submit, .secondary-link, .telegram-link { width: 100%; }
@@ -367,15 +398,27 @@
                             <div class="credential-row">
                                 <span class="credential-label">Логин</span>
                                 <span class="credential-value" id="credential-login">{{ credential.login }}</span>
-                                <button class="copy-button" type="button" data-copy-target="credential-login">Копировать</button>
                             </div>
                             <div class="credential-row">
                                 <span class="credential-label">Временный пароль</span>
                                 <span class="credential-value" id="credential-password">{{ credential.temporary_password }}</span>
-                                <button class="copy-button" type="button" data-copy-target="credential-password">Копировать</button>
                             </div>
+                            <button class="copy-button" type="button" id="copy-credentials">Скопировать данные</button>
                         </div>
                         <div class="copy-status" role="status" aria-live="polite"></div>
+                        <form class="password-manager-form" id="credential-login-form" method="post" action="{% url 'login' %}">
+                            {% csrf_token %}
+                            <div>
+                                <label for="credential-form-username">Логин</label>
+                                <input id="credential-form-username" name="username" type="text" value="{{ credential.login }}" autocomplete="username">
+                            </div>
+                            <div>
+                                <label for="credential-form-password">Пароль</label>
+                                <input id="credential-form-password" name="password" type="password" value="{{ credential.temporary_password }}" autocomplete="current-password">
+                            </div>
+                            <input type="hidden" name="next" value="{% url 'journal' %}">
+                            <button type="submit">Войти в кабинет</button>
+                        </form>
                     {% endif %}
                     {% if redirect_url %}
                         <a class="telegram-link" href="{{ redirect_url }}">Перейти в Telegram-группу</a>
@@ -386,37 +429,51 @@
                 <script>
                     document.addEventListener('DOMContentLoaded', function () {
                         var status = document.querySelector('.copy-status');
-                        var buttons = document.querySelectorAll('[data-copy-target]');
+                        var copyButton = document.getElementById('copy-credentials');
+                        var loginInput = document.getElementById('credential-form-username');
+                        var passwordInput = document.getElementById('credential-form-password');
+                        var loginValue = loginInput ? loginInput.value : '';
+                        var passwordValue = passwordInput ? passwordInput.value : '';
 
                         function showCopied() {
                             if (!status) {
                                 return;
                             }
-                            status.textContent = 'Скопировано';
+                            status.textContent = 'Данные скопированы.';
                         }
 
-                        buttons.forEach(function (button) {
-                            button.addEventListener('click', function () {
-                                var target = document.getElementById(button.dataset.copyTarget);
-                                var value = target ? target.textContent.trim() : '';
-                                if (!value) {
-                                    return;
-                                }
-                                if (navigator.clipboard && navigator.clipboard.writeText) {
-                                    navigator.clipboard.writeText(value).then(showCopied);
-                                    return;
-                                }
-                                var tempInput = document.createElement('textarea');
-                                tempInput.value = value;
-                                tempInput.setAttribute('readonly', '');
-                                tempInput.style.position = 'absolute';
-                                tempInput.style.left = '-9999px';
-                                document.body.appendChild(tempInput);
-                                tempInput.select();
-                                document.execCommand('copy');
-                                document.body.removeChild(tempInput);
-                                showCopied();
-                            });
+                        if (window.PasswordCredential && navigator.credentials && navigator.credentials.store && loginValue && passwordValue) {
+                            navigator.credentials.store(
+                                new PasswordCredential({
+                                    id: loginValue,
+                                    name: loginValue,
+                                    password: passwordValue
+                                })
+                            ).catch(function () {});
+                        }
+
+                        if (!copyButton) {
+                            return;
+                        }
+                        copyButton.addEventListener('click', function () {
+                            var value = 'Логин: ' + loginValue + '\nПароль: ' + passwordValue;
+                            if (!loginValue || !passwordValue) {
+                                return;
+                            }
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(value).then(showCopied);
+                                return;
+                            }
+                            var tempInput = document.createElement('textarea');
+                            tempInput.value = value;
+                            tempInput.setAttribute('readonly', '');
+                            tempInput.style.position = 'absolute';
+                            tempInput.style.left = '-9999px';
+                            document.body.appendChild(tempInput);
+                            tempInput.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(tempInput);
+                            showCopied();
                         });
                     });
                 </script>
@@ -462,7 +519,7 @@
                                     <p class="help">{{ field.help_text }}</p>
                                 {% endif %}
                                 {% for error in field.errors %}
-                                    <p class="error">{{ error }}</p>
+                                    <p class="error" data-error-for="{{ field.name }}">{{ error }}</p>
                                 {% endfor %}
                             </div>
                         {% endfor %}
@@ -492,6 +549,39 @@
         var ageNote = document.getElementById('age-note');
         var ageErrorMessage = 'Регистрация на курсы доступна только с 14 лет.';
         var phoneErrorMessage = 'Неверный формат телефона.';
+
+        function scrollToField(field) {
+            if (!field) {
+                return;
+            }
+            var fieldWrap = field.closest('.field') || field;
+            fieldWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (typeof field.focus === 'function') {
+                field.focus({ preventScroll: true });
+            }
+        }
+
+        function scrollToFirstServerError() {
+            var firstFieldError = form.querySelector('[data-error-for]');
+            if (!firstFieldError) {
+                return false;
+            }
+            var fieldName = firstFieldError.dataset.errorFor;
+            var field = Array.prototype.find.call(form.elements, function (element) {
+                return element.name === fieldName;
+            });
+            scrollToField(field || firstFieldError);
+            return true;
+        }
+
+        function scrollToFirstInvalidField() {
+            var invalidField = form.querySelector(':invalid');
+            if (invalidField) {
+                scrollToField(invalidField);
+                return true;
+            }
+            return false;
+        }
 
         function calcAge(value) {
             if (!value) {
@@ -577,11 +667,13 @@
             updateAgeState();
             if (!form.checkValidity()) {
                 event.preventDefault();
+                scrollToFirstInvalidField();
                 form.reportValidity();
             }
         });
 
         updateAgeState();
+        scrollToFirstServerError();
     });
 </script>
 {% endif %}

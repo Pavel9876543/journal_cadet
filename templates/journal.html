@@ -266,21 +266,21 @@
 
         {% if grade_form and role_mode != 'student' %}
             <h2>Поставить оценку</h2>
-            <form method="post">
+            <form method="post" id="grade-create-form">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="add_grade">
                 <div>
                     <label for="id_student">Ученик</label>
                     {{ grade_form.student }}
                     {% for error in grade_form.student.errors %}
-                        <div class="alert error">{{ error }}</div>
+                        <div class="alert error" data-error-for="student">{{ error }}</div>
                     {% endfor %}
                 </div>
                 <div>
                     <label for="id_subject">Предмет</label>
                     {{ grade_form.subject }}
                     {% for error in grade_form.subject.errors %}
-                        <div class="alert error">{{ error }}</div>
+                        <div class="alert error" data-error-for="subject">{{ error }}</div>
                     {% endfor %}
                 </div>
                 {% if role_mode == 'superuser' %}
@@ -288,7 +288,7 @@
                         <label for="id_teacher">Преподаватель</label>
                         {{ grade_form.teacher }}
                         {% for error in grade_form.teacher.errors %}
-                            <div class="alert error">{{ error }}</div>
+                            <div class="alert error" data-error-for="teacher">{{ error }}</div>
                         {% endfor %}
                     </div>
                 {% endif %}
@@ -296,14 +296,14 @@
                     <label for="id_date">Дата</label>
                     {{ grade_form.date }}
                     {% for error in grade_form.date.errors %}
-                        <div class="alert error">{{ error }}</div>
+                        <div class="alert error" data-error-for="date">{{ error }}</div>
                     {% endfor %}
                 </div>
                 <div>
                     <label for="id_value">Оценка</label>
                     {{ grade_form.value }}
                     {% for error in grade_form.value.errors %}
-                        <div class="alert error">{{ error }}</div>
+                        <div class="alert error" data-error-for="value">{{ error }}</div>
                     {% endfor %}
                 </div>
                 <div>
@@ -429,6 +429,23 @@
 <script>
     (function () {
         const key = 'journal-scroll-y';
+        const firstFieldError = document.querySelector('[data-error-for]');
+
+        if (firstFieldError) {
+            sessionStorage.removeItem(key);
+            const form = firstFieldError.closest('form') || document.querySelector('#grade-create-form');
+            const fieldName = firstFieldError.dataset.errorFor;
+            let field = null;
+            if (form && fieldName) {
+                field = Array.prototype.find.call(form.elements, (element) => element.name === fieldName);
+            }
+            const target = field || firstFieldError;
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (field && typeof field.focus === 'function') {
+                field.focus({ preventScroll: true });
+            }
+            return;
+        }
 
         const savedY = sessionStorage.getItem(key);
         if (savedY !== null) {
