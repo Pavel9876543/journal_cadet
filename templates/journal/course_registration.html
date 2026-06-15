@@ -158,36 +158,6 @@
             color: var(--success);
             font-weight: 700;
         }
-        .password-manager-form {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
-            gap: 10px;
-            align-items: end;
-            margin: 0;
-        }
-        .password-manager-form label {
-            display: block;
-            margin-bottom: 6px;
-            color: var(--muted);
-            font-weight: 600;
-        }
-        .password-manager-form input {
-            width: 100%;
-            border: 1px solid #cfd9e6;
-            border-radius: 10px;
-            padding: 10px 12px;
-            font: inherit;
-        }
-        .password-manager-form button {
-            border: 1px solid #cfd9e6;
-            border-radius: 10px;
-            padding: 10px 12px;
-            color: var(--text);
-            background: #fff;
-            font: inherit;
-            font-weight: 700;
-            cursor: pointer;
-        }
         .credential-warning {
             padding: 12px 14px;
             border-radius: 12px;
@@ -359,7 +329,6 @@
             .content, .panel__hero { padding-left: 16px; padding-right: 16px; }
             .gender-group { grid-template-columns: 1fr; }
             .credential-row { grid-template-columns: 1fr; }
-            .password-manager-form { grid-template-columns: 1fr; }
             .field input[name="city_church"] { font-size: 0.84rem; }
             .actions { flex-direction: column; }
             .submit, .secondary-link, .telegram-link { width: 100%; }
@@ -406,19 +375,6 @@
                             <button class="copy-button" type="button" id="copy-credentials">Скопировать данные</button>
                         </div>
                         <div class="copy-status" role="status" aria-live="polite"></div>
-                        <form class="password-manager-form" id="credential-login-form" method="post" action="{% url 'login' %}">
-                            {% csrf_token %}
-                            <div>
-                                <label for="credential-form-username">Логин</label>
-                                <input id="credential-form-username" name="username" type="text" value="{{ credential.login }}" autocomplete="username">
-                            </div>
-                            <div>
-                                <label for="credential-form-password">Пароль</label>
-                                <input id="credential-form-password" name="password" type="password" value="{{ credential.temporary_password }}" autocomplete="current-password">
-                            </div>
-                            <input type="hidden" name="next" value="{% url 'journal' %}">
-                            <button type="submit">Войти в кабинет</button>
-                        </form>
                     {% endif %}
                     {% if redirect_url %}
                         <a class="telegram-link" href="{{ redirect_url }}">Перейти в Telegram-группу</a>
@@ -430,26 +386,16 @@
                     document.addEventListener('DOMContentLoaded', function () {
                         var status = document.querySelector('.copy-status');
                         var copyButton = document.getElementById('copy-credentials');
-                        var loginInput = document.getElementById('credential-form-username');
-                        var passwordInput = document.getElementById('credential-form-password');
-                        var loginValue = loginInput ? loginInput.value : '';
-                        var passwordValue = passwordInput ? passwordInput.value : '';
+                        var loginElement = document.getElementById('credential-login');
+                        var passwordElement = document.getElementById('credential-password');
+                        var loginValue = loginElement ? loginElement.textContent.trim() : '';
+                        var passwordValue = passwordElement ? passwordElement.textContent.trim() : '';
 
                         function showCopied() {
                             if (!status) {
                                 return;
                             }
                             status.textContent = 'Данные скопированы.';
-                        }
-
-                        if (window.PasswordCredential && navigator.credentials && navigator.credentials.store && loginValue && passwordValue) {
-                            navigator.credentials.store(
-                                new PasswordCredential({
-                                    id: loginValue,
-                                    name: loginValue,
-                                    password: passwordValue
-                                })
-                            ).catch(function () {});
                         }
 
                         if (!copyButton) {
