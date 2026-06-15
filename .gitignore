@@ -14,3 +14,4 @@ journal_db
 staticfiles/
 
 secrets
+export.csv
