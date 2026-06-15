@@ -2,11 +2,7 @@
 setlocal
 cd /d %~dp0\..
 
-if not exist exports (
-  mkdir exports
-)
-
-set OUTPUT=exports\temporary_credentials.csv
+set OUTPUT=export.csv
 
 if exist .venv\Scripts\python.exe (
   .venv\Scripts\python.exe manage.py export_temporary_credentials --output "%OUTPUT%"
@@ -17,3 +13,4 @@ if exist .venv\Scripts\python.exe (
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 echo Экспорт выполнен: %OUTPUT%
+nano "%OUTPUT%"
