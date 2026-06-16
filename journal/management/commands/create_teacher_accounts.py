@@ -12,23 +12,22 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         credentials = []
+        used_usernames = set(User.objects.values_list('username', flat=True))
 
         for teacher in Teacher.objects.select_related('user').order_by('id'):
-            username = f'teacher{teacher.id}'
+            user = teacher.user or User(is_staff=False, is_superuser=False, is_active=True)
+            if user.pk and user.username in used_usernames:
+                used_usernames.remove(user.username)
+
+            login = account_utils.build_display_name_from_full_name(teacher.full_name)
+            username = account_utils.build_username_from_full_name(
+                teacher.full_name,
+                existing_usernames=used_usernames,
+            )
             password = account_utils.generate_temporary_password()
             first_name, last_name = account_utils.split_user_name(teacher.full_name)
 
-            user, created = User.objects.get_or_create(
-                username=username,
-                defaults={
-                    'first_name': first_name,
-                    'last_name': last_name,
-                    'is_staff': False,
-                    'is_superuser': False,
-                    'is_active': True,
-                },
-            )
-
+            user.username = username
             user.first_name = first_name
             user.last_name = last_name
             user.is_staff = False
@@ -39,16 +38,17 @@ class Command(BaseCommand):
 
             teacher.user = user
             teacher.save(update_fields=['user'])
+            used_usernames.add(username)
 
             TemporaryCredential.objects.create(
-                login=account_utils.build_display_name_from_full_name(teacher.full_name),
+                login=login,
                 temporary_password=password,
             )
 
             credentials.append(
                 {
                     'teacher': teacher.full_name,
-                    'username': username,
+                    'login': login,
                     'password': password,
                 }
             )
@@ -56,5 +56,5 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Учетные записи преподавателей готовы.'))
         for row in credentials:
             self.stdout.write(
-                f"{row['teacher']} | логин: {row['username']} | пароль: {row['password']}"
+                f"{row['teacher']} | логин: {row['login']} | пароль: {row['password']}"
             )

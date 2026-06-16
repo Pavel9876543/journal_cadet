@@ -337,7 +337,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
 class AccountUtilityTests(TestCase):
     def test_build_username_from_full_name_uses_name_and_surname(self):
         self.assertEqual(build_display_name_from_full_name('Иван Иванов'), 'Иванов Иван')
-        self.assertEqual(build_username_from_full_name('Иван Иванов'), 'иванов-иван')
+        self.assertEqual(build_username_from_full_name('Иван Иванов'), 'Иванов Иван')
         self.assertEqual(build_course_application_login('Иванов', 'Иван'), 'Иванов Иван')
 
     def test_display_name_for_user_prefers_profile_full_name(self):
@@ -357,7 +357,7 @@ class AccountCommandTests(TestCase):
 
         student.refresh_from_db()
         self.assertIsNotNone(student.user)
-        self.assertEqual(student.user.username, 'иванов-иван')
+        self.assertEqual(student.user.username, 'Иванов Иван')
         self.assertTrue(student.user.check_password('Temp12345!'))
         credential = TemporaryCredential.objects.get(login='Иванов Иван')
         self.assertEqual(credential.temporary_password, 'Temp12345!')
@@ -372,8 +372,8 @@ class AccountCommandTests(TestCase):
 
         first.refresh_from_db()
         second.refresh_from_db()
-        self.assertEqual(first.user.username, 'иванов-иван')
-        self.assertEqual(second.user.username, 'иванов-иван-2')
+        self.assertEqual(first.user.username, 'Иванов Иван')
+        self.assertEqual(second.user.username, 'Иванов Иван 2')
 
 
 class ExportTemporaryCredentialsTests(TestCase):

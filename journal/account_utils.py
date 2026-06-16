@@ -4,7 +4,6 @@ from string import ascii_letters, ascii_lowercase, ascii_uppercase, digits
 
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
-from django.utils.text import slugify
 
 _TEMP_PASSWORD_ALPHABET = ascii_letters + digits + '!@#$%'
 
@@ -23,13 +22,13 @@ def build_display_name_from_full_name(full_name: str) -> str:
 
 
 def build_username_from_full_name(full_name: str, *, existing_usernames: set[str] | None = None) -> str:
-    base = slugify(build_display_name_from_full_name(full_name), allow_unicode=True) or 'user'
+    base = build_display_name_from_full_name(full_name) or 'user'
     existing = existing_usernames or set()
 
     candidate = base
     suffix = 2
     while candidate in existing:
-        candidate = f'{base}-{suffix}'
+        candidate = f'{base} {suffix}'
         suffix += 1
 
     return candidate

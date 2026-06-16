@@ -1,4 +1,6 @@
 from datetime import date, timedelta
+from csv import writer
+from pathlib import Path
 from random import Random
 
 from django.contrib.auth.models import User
@@ -6,34 +8,61 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from journal.account_utils import build_display_name_from_full_name, build_username_from_full_name, generate_temporary_password, split_user_name
-from journal.models import Grade, Group, Student, Subject, SubjectResult, Teacher, TemporaryCredential, TemporaryStudentCredential
+from journal.models import (
+    CourseApplication,
+    CourseRegistrationSettings,
+    Grade,
+    Group,
+    Student,
+    Subject,
+    SubjectResult,
+    Teacher,
+    TemporaryCredential,
+    TemporaryStudentCredential,
+)
 
 
 class Command(BaseCommand):
     help = 'Полностью заполняет БД тестовыми данными (группы, предметы, преподаватели, ученики, оценки, итоги, пользователи).'
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--credentials-output',
+            default='',
+            help='Путь к CSV с тестовыми логинами/паролями. По умолчанию: secrets.csv в корне проекта.',
+        )
+
     @transaction.atomic
     def handle(self, *args, **options):
+        credentials = []
+
+        CourseApplication.objects.all().delete()
         Grade.objects.all().delete()
         SubjectResult.objects.all().delete()
         Student.objects.all().delete()
         Teacher.objects.all().delete()
         Group.objects.all().delete()
         Subject.objects.all().delete()
+        CourseRegistrationSettings.objects.all().delete()
         TemporaryCredential.objects.all().delete()
         TemporaryStudentCredential.objects.all().delete()
-        User.objects.filter(is_superuser=False).delete()
+        User.objects.all().delete()
 
-        admin_user, _ = User.objects.get_or_create(
+        admin_password = generate_temporary_password()
+        admin_user = User.objects.create_user(
             username='admin',
-            defaults={
-                'is_staff': True,
-                'is_superuser': True,
-                'email': 'admin@example.com',
-            },
+            email='admin@example.com',
+            password=admin_password,
         )
-        admin_user.set_password('admin12345')
-        admin_user.save()
+        admin_user.is_staff = True
+        admin_user.is_superuser = True
+        admin_user.save(update_fields=['is_staff', 'is_superuser'])
+        credentials.append({
+            'role': 'admin',
+            'name': 'Администратор',
+            'login': admin_user.username,
+            'password': admin_password,
+        })
 
         subjects = {
             'Сольфеджио': Subject.objects.create(name='Сольфеджио', final_grade_type=Subject.FINAL_GRADE_TYPE_NUMERIC),
@@ -82,16 +111,31 @@ class Command(BaseCommand):
         ]
 
         teachers = {}
-        for idx, (full_name, subject_names) in enumerate(teacher_specs, start=1):
+        used_usernames = set(User.objects.values_list('username', flat=True))
+        for full_name, subject_names in teacher_specs:
+            password = generate_temporary_password()
+            display_login = build_display_name_from_full_name(full_name)
+            username = build_username_from_full_name(full_name, existing_usernames=used_usernames)
             user = User.objects.create_user(
-                username=f'teacher{idx}',
-                password='pass12345',
+                username=username,
+                password=password,
                 first_name=full_name.split()[0],
                 last_name=' '.join(full_name.split()[1:]),
             )
+            used_usernames.add(username)
             teacher = Teacher.objects.create(full_name=full_name, user=user)
             teacher.subjects.set([subjects[name] for name in subject_names])
             teachers[full_name] = teacher
+            TemporaryCredential.objects.create(
+                login=display_login,
+                temporary_password=password,
+            )
+            credentials.append({
+                'role': 'teacher',
+                'name': full_name,
+                'login': display_login,
+                'password': password,
+            })
 
         student_map = {
             'Группа A (начинающие)': [
@@ -119,7 +163,6 @@ class Command(BaseCommand):
 
         students = []
         by_name = {}
-        used_usernames = set(User.objects.values_list('username', flat=True))
         for group_name, full_names in student_map.items():
             for full_name in full_names:
                 display_login = build_display_name_from_full_name(full_name)
@@ -140,6 +183,12 @@ class Command(BaseCommand):
                 student = Student.objects.create(full_name=full_name, group=groups[group_name], user=user)
                 students.append(student)
                 by_name[full_name] = student
+                credentials.append({
+                    'role': 'student',
+                    'name': full_name,
+                    'login': display_login,
+                    'password': temp_password,
+                })
 
         bayan_subject = subjects['Специальность по баяну']
         bayan_students = [
@@ -192,7 +241,26 @@ class Command(BaseCommand):
                     final_grade=final_value,
                 )
 
+        output = options['credentials_output'].strip()
+        if output:
+            credentials_path = Path(output)
+        else:
+            credentials_path = Path.cwd() / 'secrets.csv'
+
+        credentials_path.parent.mkdir(parents=True, exist_ok=True)
+        with credentials_path.open('w', encoding='utf-8', newline='') as stream:
+            csv_writer = writer(stream)
+            csv_writer.writerow(['role', 'name', 'login', 'password'])
+            for row in credentials:
+                csv_writer.writerow([
+                    row['role'],
+                    row['name'],
+                    row['login'],
+                    row['password'],
+                ])
+
         self.stdout.write(self.style.SUCCESS('Тестовые данные успешно созданы.'))
+        self.stdout.write(self.style.SUCCESS(f'Логины и пароли сохранены: {credentials_path}'))
         self.stdout.write(
             f'Пользователей: {User.objects.count()}, '
             f'групп: {Group.objects.count()}, '
@@ -202,4 +270,3 @@ class Command(BaseCommand):
             f'оценок: {Grade.objects.count()}, '
             f'итогов: {SubjectResult.objects.count()}'
         )
-        self.stdout.write('Логины учеников и преподавателей создаются автоматически вместе с временными паролями.')

@@ -127,12 +127,9 @@ python manage.py collectstatic --noinput
 ```bash
 python manage.py migrate
 python manage.py seed_data
-python manage.py create_teacher_accounts
-python manage.py create_student_accounts
-python manage.py ensure_superuser
 ```
 
-Важно: `python manage.py seed_data` очищает существующие оценки, итоги, учеников, преподавателей, группы, предметы, временные учетные данные и всех пользователей, кроме суперпользователей. Используйте эту команду только для тестовой БД или когда перезаполнение допустимо.
+Важно: `python manage.py seed_data` очищает существующие заявки, оценки, итоги, учеников, преподавателей, группы, предметы, временные учетные данные и всех пользователей. Используйте эту команду только для тестовой БД или когда перезаполнение допустимо.
 
 Можно запускать команды отдельно:
 
@@ -154,10 +151,10 @@ docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.y
 
 ```text
 login: admin
-password: admin12345
+password: см. secrets.csv
 ```
 
-Также создаются тестовые преподаватели и ученики с временными паролями.
+Также создаются тестовые преподаватели и ученики с временными паролями. Все тестовые логины и пароли сохраняются в `secrets.csv` в корне проекта.
 
 ## Экспорт временных учетных данных в CSV
 

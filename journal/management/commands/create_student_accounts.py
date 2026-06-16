@@ -49,7 +49,6 @@ class Command(BaseCommand):
                 {
                     'student': student.full_name,
                     'login': display_login,
-                    'username': username,
                     'password': password,
                 }
             )
@@ -57,5 +56,5 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Учетные записи учеников готовы.'))
         for row in credentials:
             self.stdout.write(
-                f"{row['student']} | логин: {row['login']} | системный логин: {row['username']} | пароль: {row['password']}"
+                f"{row['student']} | логин: {row['login']} | пароль: {row['password']}"
             )
