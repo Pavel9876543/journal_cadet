@@ -27,7 +27,7 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
-    TemporaryStudentCredential,
+    TemporaryCredential,
 )
 
 
@@ -564,7 +564,7 @@ def course_registration_view(request):
 
     if request.method == 'POST' and form.is_valid():
         application = form.save()
-        credential = TemporaryStudentCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
+        credential = TemporaryCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
         return render(
             request,
             'journal/course_registration.html',
@@ -600,7 +600,7 @@ def course_registration_api(request):
 
     if form.is_valid():
         application = form.save()
-        credential = TemporaryStudentCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
+        credential = TemporaryCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
         return JsonResponse(
             {
                 'success': True,
@@ -626,7 +626,7 @@ def course_registration_api(request):
 
 @user_passes_test(lambda user: user.is_active and user.is_superuser)
 def export_student_credentials_xlsx(request):
-    rows = TemporaryStudentCredential.objects.order_by('id').values_list(
+    rows = TemporaryCredential.objects.exclude(student_phone='').order_by('id').values_list(
         'login',
         'temporary_password',
         'student_phone',

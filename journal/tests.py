@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from journal.account_utils import build_course_application_login, build_display_name_from_full_name, build_username_from_full_name, display_name_for_user
 from journal.forms import CourseApplicationPublicForm
-from journal.models import CourseApplication, Grade, Group, Student, Subject, Teacher, TemporaryCredential, TemporaryStudentCredential
+from journal.models import CourseApplication, CourseRegistrationSettings, Grade, Group, Student, Subject, Teacher, TemporaryCredential
 
 
 class JournalAccessTests(TestCase):
@@ -222,7 +222,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
         with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
             application = CourseApplication.objects.create(**self._registration_payload())
 
-        credential = TemporaryStudentCredential.objects.get()
+        credential = TemporaryCredential.objects.get()
         user = User.objects.get(username='Иванов Иван')
         student = Student.objects.get(user=user)
         self.assertEqual(application.student_phone, '+7 (999) 123-45-67')
@@ -242,7 +242,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
             CourseApplication.objects.create(**second_payload)
 
         self.assertEqual(
-            list(TemporaryStudentCredential.objects.order_by('id').values_list('login', flat=True)),
+            list(TemporaryCredential.objects.order_by('id').values_list('login', flat=True)),
             ['Иванов Иван', 'Иванов Иван 2'],
         )
         self.assertTrue(User.objects.filter(username='Иванов Иван 2').exists())
@@ -310,7 +310,7 @@ class CourseRegistrationTemporaryCredentialTests(TestCase):
         self.assertContains(response, 'data-error-for="student_phone"')
         self.assertContains(response, 'scrollToFirstServerError')
         self.assertEqual(CourseApplication.objects.count(), 1)
-        self.assertEqual(TemporaryStudentCredential.objects.count(), 1)
+        self.assertEqual(TemporaryCredential.objects.count(), 1)
 
     def test_registration_api_returns_generated_credentials(self):
         with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
@@ -388,7 +388,7 @@ class ExportTemporaryCredentialsTests(TestCase):
         call_command('export_temporary_credentials', stdout=output)
 
         csv_output = output.getvalue()
-        self.assertIn('login,temporary_password,created_at', csv_output)
+        self.assertIn('login,temporary_password,created_at,student_phone', csv_output)
         self.assertIn('Иванов Иван', csv_output)
         self.assertIn('Temp12345!', csv_output)
 
@@ -420,7 +420,7 @@ class ExportStudentCredentialsWithPhoneTests(TestCase):
             self.assertIn('Temp12345!', csv_output)
             self.assertIn('+7 (999) 123-45-67', csv_output)
 
-        self.assertEqual(TemporaryStudentCredential.objects.count(), 1)
+        self.assertEqual(TemporaryCredential.objects.count(), 1)
 
 class ExportStudentCredentialsXlsxTests(TestCase):
     def setUp(self):
@@ -430,7 +430,7 @@ class ExportStudentCredentialsXlsxTests(TestCase):
             email='admin-xlsx@example.com',
         )
         self.regular_user = User.objects.create_user(username='regular_xlsx', password='Pass12345!')
-        TemporaryStudentCredential.objects.create(
+        TemporaryCredential.objects.create(
             login='Иванов Иван',
             temporary_password='Temp12345!',
             student_phone='+7 (999) 123-45-67',
@@ -458,3 +458,11 @@ class ExportStudentCredentialsXlsxTests(TestCase):
         response = self.client.get(reverse('export_student_credentials_xlsx'))
 
         self.assertEqual(response.status_code, 302)
+
+
+class SeedDataCommandTests(TestCase):
+    def test_seed_data_recreates_course_registration_settings(self):
+        call_command('seed_data', stdout=StringIO())
+
+        settings = CourseRegistrationSettings.objects.get(pk=1)
+        self.assertEqual(settings.telegram_group_url, '')

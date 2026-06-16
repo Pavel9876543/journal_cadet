@@ -18,7 +18,6 @@ from journal.models import (
     SubjectResult,
     Teacher,
     TemporaryCredential,
-    TemporaryStudentCredential,
 )
 
 
@@ -45,8 +44,9 @@ class Command(BaseCommand):
         Subject.objects.all().delete()
         CourseRegistrationSettings.objects.all().delete()
         TemporaryCredential.objects.all().delete()
-        TemporaryStudentCredential.objects.all().delete()
         User.objects.all().delete()
+
+        CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='')
 
         admin_password = generate_temporary_password()
         admin_user = User.objects.create_user(

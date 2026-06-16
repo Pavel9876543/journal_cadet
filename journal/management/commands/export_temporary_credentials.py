@@ -21,6 +21,7 @@ class Command(BaseCommand):
             'login',
             'temporary_password',
             'created_at',
+            'student_phone',
         )
 
         if output == '-':
@@ -32,9 +33,9 @@ class Command(BaseCommand):
 
         try:
             csv_writer = writer(stream)
-            csv_writer.writerow(['login', 'temporary_password', 'created_at'])
-            for login, temporary_password, created_at in rows:
-                csv_writer.writerow([login, temporary_password, created_at.isoformat()])
+            csv_writer.writerow(['login', 'temporary_password', 'created_at', 'student_phone'])
+            for login, temporary_password, created_at, student_phone in rows:
+                csv_writer.writerow([login, temporary_password, created_at.isoformat(), student_phone])
         finally:
             if close_stream:
                 stream.close()

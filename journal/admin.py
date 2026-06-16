@@ -13,7 +13,6 @@ from .models import (
     SubjectResult,
     Teacher,
     TemporaryCredential,
-    TemporaryStudentCredential,
 )
 
 try:
@@ -124,16 +123,10 @@ class CourseApplicationAdmin(admin.ModelAdmin):
 
 @admin.register(TemporaryCredential)
 class TemporaryCredentialAdmin(admin.ModelAdmin):
-    list_display = ('login', 'created_at')
+    list_display = ('login', 'student_phone', 'created_at')
     list_filter = ('created_at',)
-    search_fields = ('login',)
-    readonly_fields = ('created_at',)
-
-
-@admin.register(TemporaryStudentCredential)
-class TemporaryStudentCredentialAdmin(admin.ModelAdmin):
-    list_display = ('login', 'student_phone')
     search_fields = ('login', 'student_phone')
+    readonly_fields = ('created_at',)
 
 
 @admin.register(CourseRegistrationSettings)
@@ -143,7 +136,7 @@ class CourseRegistrationSettingsAdmin(admin.ModelAdmin):
     readonly_fields = ('updated_at',)
 
     def has_add_permission(self, request):
-        return False
+        return not CourseRegistrationSettings.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
         return False

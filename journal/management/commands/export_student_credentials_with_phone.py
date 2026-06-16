@@ -4,7 +4,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from journal.models import TemporaryStudentCredential
+from journal.models import TemporaryCredential
 
 
 class Command(BaseCommand):
@@ -27,7 +27,7 @@ class Command(BaseCommand):
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         rows = list(
-            TemporaryStudentCredential.objects.order_by('id').values_list(
+            TemporaryCredential.objects.exclude(student_phone='').order_by('id').values_list(
                 'login',
                 'temporary_password',
                 'student_phone',

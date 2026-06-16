@@ -160,7 +160,7 @@ password: см. secrets.csv
 
 ### Таблица `TemporaryCredential`
 
-Эта таблица содержит временные логины и пароли, созданные командами `create_teacher_accounts`, `create_student_accounts` и тестовым наполнением.
+Эта таблица содержит все временные учетные данные: логин, временный пароль, дату и время создания, а также номер телефона ученика, если учетная запись была создана через заявку на курсы.
 
 Вывести CSV в терминал:
 
@@ -177,12 +177,10 @@ python manage.py export_temporary_credentials --output exports/temporary_credent
 Колонки CSV:
 
 ```text
-login,temporary_password,created_at
+login,temporary_password,created_at,student_phone
 ```
 
-### Таблица `TemporaryStudentCredential`
-
-Эта таблица содержит временные учетные данные учеников, созданные при регистрации заявки на курсы, включая телефон ученика.
+Для выгрузки только учетных данных учеников с телефоном:
 
 Сохранить CSV в файл по умолчанию:
 

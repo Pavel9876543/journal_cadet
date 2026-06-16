@@ -225,25 +225,12 @@ class TemporaryCredential(models.Model):
     login = models.CharField('Логин', max_length=150)
     temporary_password = models.CharField('Временный пароль', max_length=128)
     created_at = models.DateTimeField('Дата и время создания', auto_now_add=True)
+    student_phone = models.CharField('Номер телефона ученика', max_length=32, blank=True)
 
     class Meta:
         verbose_name = 'Временные учетные данные'
         verbose_name_plural = 'Временные учетные данные'
         ordering = ['-created_at', '-id']
-
-    def __str__(self) -> str:
-        return self.login
-
-
-class TemporaryStudentCredential(models.Model):
-    login = models.CharField('Логин', max_length=150, unique=True)
-    temporary_password = models.CharField('Временный пароль', max_length=128)
-    student_phone = models.CharField('Номер телефона ученика', max_length=32)
-
-    class Meta:
-        verbose_name = 'Временные учетные данные ученика'
-        verbose_name_plural = 'Временные учетные данные учеников'
-        ordering = ['-id']
 
     def __str__(self) -> str:
         return self.login
@@ -348,7 +335,7 @@ class CourseApplication(models.Model):
             super().save(*args, **kwargs)
 
             if is_new:
-                existing_logins = set(TemporaryStudentCredential.objects.values_list('login', flat=True))
+                existing_logins = set(TemporaryCredential.objects.values_list('login', flat=True))
                 existing_logins.update(User.objects.values_list('username', flat=True))
                 login = build_course_application_login(
                     self.last_name,
@@ -369,7 +356,7 @@ class CourseApplication(models.Model):
                     group=group,
                     user=user,
                 )
-                TemporaryStudentCredential.objects.create(
+                TemporaryCredential.objects.create(
                     login=login,
                     temporary_password=temporary_password,
                     student_phone=self.student_phone,
