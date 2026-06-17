@@ -1,19 +1,36 @@
+from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
+from django.db.models import Count, Q
+from django.urls import reverse
+from django.utils.html import format_html
+from django.utils.translation import gettext_lazy as _
 
-from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm
+from .forms import CourseRegistrationSettingsForm
 from .models import (
+    AcademicYear,
     CourseApplication,
     CourseRegistrationSettings,
     Grade,
-    Group,
+    GroupSubject,
+    Instrument,
     Student,
+    StudentSubject,
+    StudyGroup,
     Subject,
     SubjectResult,
     Teacher,
+    TeacherSubject,
     TemporaryCredential,
 )
+
+
+admin.site.site_header = 'Электронный журнал музыкальной школы'
+admin.site.site_title = 'Электронный журнал'
+admin.site.index_title = 'Администрирование журнала'
+admin.site.empty_value_display = '—'
+
 
 try:
     admin.site.unregister(AuthUser)
@@ -28,48 +45,660 @@ except admin.sites.NotRegistered:
 
 @admin.register(AuthUser)
 class UserAdmin(BaseUserAdmin):
-    pass
+    list_display = ('username', 'last_name', 'first_name', 'email', 'is_staff', 'is_active')
+    list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups')
+    search_fields = ('username', 'first_name', 'last_name', 'email')
 
 
 @admin.register(AuthGroup)
 class AuthGroupAdmin(BaseGroupAdmin):
-    pass
+    search_fields = ('name',)
 
 
-@admin.register(Group)
-class GroupAdmin(admin.ModelAdmin):
-    list_display = ('name',)
-    filter_horizontal = ('subjects',)
+# -----------------------------------------------------------------------------
+# Вспомогательные функции
+# -----------------------------------------------------------------------------
+
+
+def admin_change_link(obj, label=None):
+    if not obj:
+        return '—'
+    url = reverse(f'admin:{obj._meta.app_label}_{obj._meta.model_name}_change', args=[obj.pk])
+    return format_html('<a href="{}">{}</a>', url, label or str(obj))
+
+
+def truncate_text(value, length=80):
+    if not value:
+        return '—'
+    value = str(value)
+    if len(value) <= length:
+        return value
+    return f'{value[:length]}…'
+
+
+# -----------------------------------------------------------------------------
+# Forms для админки
+# -----------------------------------------------------------------------------
+
+
+class CourseApplicationAdminForm(forms.ModelForm):
+    """
+    Отдельная форма для админки.
+
+    Важно: публичная форма заявки не должна показывать поле status, а в админке
+    status нужен, чтобы администратор мог подтверждать/отклонять заявку.
+    """
+
+    class Meta:
+        model = CourseApplication
+        fields = '__all__'
+        widgets = {
+            'birth_date': forms.DateInput(attrs={'type': 'date'}),
+            'parent_contacts': forms.Textarea(attrs={'rows': 4}),
+            'comments': forms.Textarea(attrs={'rows': 4}),
+        }
+
+
+class GradeAdminForm(forms.ModelForm):
+    class Meta:
+        model = Grade
+        fields = '__all__'
+        widgets = {
+            'date': forms.DateInput(attrs={'type': 'date'}),
+            'comment': forms.TextInput(attrs={'size': 80}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        instance = self.instance if self.instance and self.instance.pk else None
+        student = getattr(instance, 'student', None)
+        subject = getattr(instance, 'subject', None)
+
+        student_id = self.data.get('student') or getattr(instance, 'student_id', None)
+        subject_id = self.data.get('subject') or getattr(instance, 'subject_id', None)
+
+        if student_id:
+            try:
+                student = Student.objects.select_related('group').get(pk=student_id)
+            except (Student.DoesNotExist, ValueError, TypeError):
+                student = None
+
+        if subject_id:
+            try:
+                subject = Subject.objects.get(pk=subject_id)
+            except (Subject.DoesNotExist, ValueError, TypeError):
+                subject = None
+
+        if student:
+            group_subject_ids = GroupSubject.objects.filter(
+                group_id=student.group_id,
+                is_active=True,
+            ).values_list('subject_id', flat=True)
+            individual_subject_ids = StudentSubject.objects.filter(
+                student_id=student.pk,
+                is_active=True,
+            ).values_list('subject_id', flat=True)
+            self.fields['subject'].queryset = Subject.objects.filter(
+                Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids)
+            ).distinct().order_by('name')
+
+        if student and subject:
+            group_teacher_ids = GroupSubject.objects.filter(
+                group_id=student.group_id,
+                subject=subject,
+                is_active=True,
+            ).values_list('teacher_id', flat=True)
+            individual_teacher_ids = StudentSubject.objects.filter(
+                student=student,
+                subject=subject,
+                is_active=True,
+            ).values_list('teacher_id', flat=True)
+            self.fields['teacher'].queryset = Teacher.objects.filter(
+                Q(pk__in=group_teacher_ids) | Q(pk__in=individual_teacher_ids)
+            ).distinct().order_by('full_name')
+
+
+class SubjectResultAdminForm(forms.ModelForm):
+    class Meta:
+        model = SubjectResult
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        instance = self.instance if self.instance and self.instance.pk else None
+        student_id = self.data.get('student') or getattr(instance, 'student_id', None)
+
+        if student_id:
+            try:
+                student = Student.objects.select_related('group').get(pk=student_id)
+            except (Student.DoesNotExist, ValueError, TypeError):
+                student = None
+
+            if student:
+                group_subject_ids = GroupSubject.objects.filter(
+                    group_id=student.group_id,
+                    is_active=True,
+                ).values_list('subject_id', flat=True)
+                individual_subject_ids = StudentSubject.objects.filter(
+                    student_id=student.pk,
+                    is_active=True,
+                ).values_list('subject_id', flat=True)
+                self.fields['subject'].queryset = Subject.objects.filter(
+                    Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids)
+                ).distinct().order_by('name')
+
+
+# -----------------------------------------------------------------------------
+# Inline-классы
+# -----------------------------------------------------------------------------
+
+
+class TeacherSubjectInline(admin.TabularInline):
+    model = TeacherSubject
+    extra = 1
+    autocomplete_fields = ('subject',)
+    fields = ('subject',)
+    show_change_link = True
+
+
+class TeacherSubjectForSubjectInline(admin.TabularInline):
+    model = TeacherSubject
+    extra = 1
+    autocomplete_fields = ('teacher',)
+    fields = ('teacher',)
+    show_change_link = True
+
+
+class GroupSubjectInline(admin.TabularInline):
+    model = GroupSubject
+    extra = 1
+    autocomplete_fields = ('subject', 'teacher')
+    fields = ('subject', 'teacher', 'sort_order', 'is_active')
+    show_change_link = True
+
+
+class GroupSubjectForTeacherInline(admin.TabularInline):
+    model = GroupSubject
+    extra = 0
+    autocomplete_fields = ('group', 'subject')
+    fields = ('group', 'subject', 'sort_order', 'is_active')
+    show_change_link = True
+
+
+class GroupSubjectForSubjectInline(admin.TabularInline):
+    model = GroupSubject
+    extra = 0
+    autocomplete_fields = ('group', 'teacher')
+    fields = ('group', 'teacher', 'sort_order', 'is_active')
+    show_change_link = True
+
+
+class StudentSubjectInline(admin.TabularInline):
+    model = StudentSubject
+    extra = 1
+    autocomplete_fields = ('subject', 'teacher')
+    fields = ('subject', 'teacher', 'is_specialty', 'is_active')
+    show_change_link = True
+
+
+class StudentSubjectForTeacherInline(admin.TabularInline):
+    model = StudentSubject
+    extra = 0
+    autocomplete_fields = ('student', 'subject')
+    fields = ('student', 'subject', 'is_specialty', 'is_active')
+    show_change_link = True
+
+
+class StudentSubjectForSubjectInline(admin.TabularInline):
+    model = StudentSubject
+    extra = 0
+    autocomplete_fields = ('student', 'teacher')
+    fields = ('student', 'teacher', 'is_specialty', 'is_active')
+    show_change_link = True
+
+
+class StudentInline(admin.TabularInline):
+    model = Student
+    extra = 0
+    autocomplete_fields = ('user', 'instrument')
+    fields = (
+        'full_name',
+        'instrument',
+        'specialty_teacher_inline',
+        'user',
+        'is_active',
+    )
+    readonly_fields = ('specialty_teacher_inline',)
+    show_change_link = True
+
+    @admin.display(description='Преподаватель по специальности')
+    def specialty_teacher_inline(self, obj):
+        if not obj or not obj.pk:
+            return '—'
+        teacher = obj.specialty_teacher
+        return teacher or '—'
+
+
+class GradeInline(admin.TabularInline):
+    model = Grade
+    form = GradeAdminForm
+    extra = 0
+    autocomplete_fields = ('subject', 'teacher', 'academic_year')
+    fields = ('date', 'subject', 'teacher', 'value', 'academic_year', 'comment')
+    ordering = ('-date',)
+    show_change_link = True
+
+
+class SubjectResultInline(admin.TabularInline):
+    model = SubjectResult
+    form = SubjectResultAdminForm
+    extra = 0
+    autocomplete_fields = ('subject', 'academic_year')
+    fields = ('academic_year', 'subject', 'exam_grade', 'final_grade')
+    show_change_link = True
+
+
+# -----------------------------------------------------------------------------
+# Справочники
+# -----------------------------------------------------------------------------
+
+
+@admin.register(AcademicYear)
+class AcademicYearAdmin(admin.ModelAdmin):
+    list_display = ('name', 'starts_on', 'ends_on', 'is_active', 'groups_count')
+    list_filter = ('is_active',)
+    search_fields = ('name',)
+    ordering = ('-starts_on',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(_groups_count=Count('study_groups', distinct=True))
+
+    @admin.display(description='Групп')
+    def groups_count(self, obj):
+        return obj._groups_count
+
+
+@admin.register(Instrument)
+class InstrumentAdmin(admin.ModelAdmin):
+    list_display = ('name', 'students_count')
+    search_fields = ('name',)
+    ordering = ('name',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(_students_count=Count('students', distinct=True))
+
+    @admin.display(description='Учеников')
+    def students_count(self, obj):
+        return obj._students_count
 
 
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
-    list_display = ('name', 'final_grade_type')
-    filter_horizontal = ('students',)
+    list_display = (
+        'name',
+        'final_grade_type',
+        'is_specialty',
+        'is_active',
+        'groups_count',
+        'teachers_count',
+        'individual_students_count',
+    )
+    list_filter = ('final_grade_type', 'is_specialty', 'is_active')
+    search_fields = (
+        'name',
+        'group_subjects__group__name',
+        'group_subjects__teacher__full_name',
+        'individual_students__student__full_name',
+        'individual_students__teacher__full_name',
+    )
+    inlines = (
+        TeacherSubjectForSubjectInline,
+        GroupSubjectForSubjectInline,
+        StudentSubjectForSubjectInline,
+    )
+    ordering = ('name',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            _groups_count=Count(
+                'group_subjects__group',
+                filter=Q(group_subjects__is_active=True),
+                distinct=True,
+            ),
+            _teachers_count=Count(
+                'group_subjects__teacher',
+                filter=Q(group_subjects__is_active=True),
+                distinct=True,
+            ),
+            _individual_students_count=Count(
+                'individual_students__student',
+                filter=Q(individual_students__is_active=True),
+                distinct=True,
+            ),
+        )
+
+    @admin.display(description='Групп')
+    def groups_count(self, obj):
+        return obj._groups_count
+
+    @admin.display(description='Преподавателей')
+    def teachers_count(self, obj):
+        return obj._teachers_count
+
+    @admin.display(description='Индивидуальных учеников')
+    def individual_students_count(self, obj):
+        return obj._individual_students_count
+
+
+# -----------------------------------------------------------------------------
+# Основные учебные сущности
+# -----------------------------------------------------------------------------
+
+
+@admin.register(StudyGroup)
+class StudyGroupAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'academic_year',
+        'is_active',
+        'students_count_display',
+        'subjects_display_short',
+        'teachers_display_short',
+    )
+    list_filter = ('academic_year', 'is_active')
+    search_fields = (
+        'name',
+        'academic_year__name',
+        'students__full_name',
+        'group_subjects__subject__name',
+        'group_subjects__teacher__full_name',
+    )
+    autocomplete_fields = ('academic_year',)
+    inlines = (GroupSubjectInline, StudentInline)
+    ordering = ('academic_year__name', 'name')
+    list_select_related = ('academic_year',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            _students_count=Count('students', filter=Q(students__is_active=True), distinct=True),
+        ).prefetch_related(
+            'group_subjects__subject',
+            'group_subjects__teacher',
+        )
+
+    @admin.display(description='Учеников')
+    def students_count_display(self, obj):
+        return obj._students_count
+
+    @admin.display(description='Предметы')
+    def subjects_display_short(self, obj):
+        subjects = [
+            item.subject.name
+            for item in obj.group_subjects.all()
+            if item.is_active and item.subject_id
+        ]
+        return truncate_text(', '.join(subjects))
+
+    @admin.display(description='Преподаватели')
+    def teachers_display_short(self, obj):
+        pairs = [
+            f'{item.subject.name}: {item.teacher.full_name}'
+            for item in obj.group_subjects.all()
+            if item.is_active and item.subject_id and item.teacher_id
+        ]
+        return truncate_text(', '.join(pairs), length=120)
 
 
 @admin.register(Teacher)
 class TeacherAdmin(admin.ModelAdmin):
-    list_display = ('full_name', 'user')
-    filter_horizontal = ('subjects',)
+    list_display = (
+        'full_name',
+        'user_link',
+        'is_active',
+        'group_subjects_count',
+        'individual_students_count_display',
+        'group_subjects_short',
+    )
+    list_filter = (
+        'is_active',
+        'group_subjects__subject',
+        'group_subjects__group',
+        'individual_subjects__subject',
+    )
+    search_fields = (
+        'full_name',
+        'user__username',
+        'user__first_name',
+        'user__last_name',
+        'group_subjects__group__name',
+        'group_subjects__subject__name',
+        'individual_subjects__student__full_name',
+    )
+    autocomplete_fields = ('user',)
+    inlines = (TeacherSubjectInline, GroupSubjectForTeacherInline, StudentSubjectForTeacherInline)
+    ordering = ('full_name',)
+    list_select_related = ('user',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            _group_subjects_count=Count(
+                'group_subjects',
+                filter=Q(group_subjects__is_active=True),
+                distinct=True,
+            ),
+            _individual_students_count=Count(
+                'individual_subjects__student',
+                filter=Q(individual_subjects__is_active=True),
+                distinct=True,
+            ),
+        ).prefetch_related('group_subjects__group', 'group_subjects__subject')
+
+    @admin.display(description='Пользователь')
+    def user_link(self, obj):
+        return admin_change_link(obj.user)
+
+    @admin.display(description='Групповых предметов')
+    def group_subjects_count(self, obj):
+        return obj._group_subjects_count
+
+    @admin.display(description='Индивидуальных учеников')
+    def individual_students_count_display(self, obj):
+        return obj._individual_students_count
+
+    @admin.display(description='Группы и предметы')
+    def group_subjects_short(self, obj):
+        items = [
+            f'{item.group.name}: {item.subject.name}'
+            for item in obj.group_subjects.all()
+            if item.is_active and item.group_id and item.subject_id
+        ]
+        return truncate_text(', '.join(items), length=120)
 
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ('full_name', 'group', 'user')
-    list_filter = ('group',)
+    list_display = (
+        'full_name',
+        'group',
+        'instrument',
+        'specialty_teacher_display',
+        'specialty_subject_display',
+        'user_link',
+        'is_active',
+    )
+    list_filter = (
+        'is_active',
+        'group',
+        'group__academic_year',
+        'instrument',
+        'individual_subjects__teacher',
+        'individual_subjects__subject',
+    )
+    search_fields = (
+        'full_name',
+        'user__username',
+        'user__first_name',
+        'user__last_name',
+        'group__name',
+        'instrument__name',
+        'individual_subjects__teacher__full_name',
+        'individual_subjects__subject__name',
+    )
+    autocomplete_fields = ('user', 'group', 'instrument')
+    inlines = (StudentSubjectInline, SubjectResultInline, GradeInline)
+    ordering = ('full_name',)
+    list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
+
+    @admin.display(description='Пользователь')
+    def user_link(self, obj):
+        return admin_change_link(obj.user)
+
+    @admin.display(description='Преподаватель по специальности')
+    def specialty_teacher_display(self, obj):
+        teacher = obj.specialty_teacher
+        return teacher or '—'
+
+    @admin.display(description='Предмет специальности')
+    def specialty_subject_display(self, obj):
+        subject = obj.specialty_subject
+        return subject or '—'
+
+
+@admin.register(GroupSubject)
+class GroupSubjectAdmin(admin.ModelAdmin):
+    list_display = ('group', 'subject', 'teacher', 'sort_order', 'is_active')
+    list_filter = ('is_active', 'group__academic_year', 'group', 'subject', 'teacher')
+    search_fields = ('group__name', 'subject__name', 'teacher__full_name')
+    autocomplete_fields = ('group', 'subject', 'teacher')
+    list_select_related = ('group', 'group__academic_year', 'subject', 'teacher')
+    ordering = ('group__academic_year__name', 'group__name', 'sort_order', 'subject__name')
+
+
+@admin.register(StudentSubject)
+class StudentSubjectAdmin(admin.ModelAdmin):
+    list_display = ('student', 'student_group_display', 'subject', 'teacher', 'is_specialty', 'is_active')
+    list_filter = ('is_active', 'is_specialty', 'subject', 'teacher', 'student__group')
+    search_fields = ('student__full_name', 'student__group__name', 'subject__name', 'teacher__full_name')
+    autocomplete_fields = ('student', 'subject', 'teacher')
+    list_select_related = ('student', 'student__group', 'subject', 'teacher')
+    ordering = ('student__full_name', 'subject__name')
+
+    @admin.display(description='Группа')
+    def student_group_display(self, obj):
+        return obj.student.group if obj.student_id else '—'
 
 
 @admin.register(Grade)
 class GradeAdmin(admin.ModelAdmin):
-    list_display = ('student', 'subject', 'teacher', 'date', 'value')
-    list_filter = ('subject', 'teacher', 'date', 'student__group')
+    form = GradeAdminForm
+    list_display = (
+        'date',
+        'student',
+        'student_group_display',
+        'subject',
+        'teacher',
+        'value',
+        'academic_year',
+        'source_type_display',
+    )
+    list_filter = (
+        'academic_year',
+        'date',
+        'subject',
+        'teacher',
+        'student__group',
+        'student__group__academic_year',
+    )
+    search_fields = (
+        'student__full_name',
+        'student__group__name',
+        'subject__name',
+        'teacher__full_name',
+        'comment',
+    )
+    autocomplete_fields = ('student', 'subject', 'teacher', 'academic_year')
+    readonly_fields = ('source_type_display', 'student_group_display')
+    date_hierarchy = 'date'
+    list_select_related = ('student', 'student__group', 'subject', 'teacher', 'academic_year')
+    ordering = ('-date', 'student__full_name')
+
+    fieldsets = (
+        ('Оценка', {
+            'fields': ('date', 'student', 'student_group_display', 'subject', 'teacher', 'value', 'academic_year', 'comment')
+        }),
+        ('Проверка назначения', {
+            'fields': ('source_type_display',),
+            'classes': ('collapse',),
+        }),
+    )
+
+    @admin.display(description='Группа')
+    def student_group_display(self, obj):
+        if obj and obj.student_id:
+            return obj.student.group
+        return '—'
+
+    @admin.display(description='Тип назначения')
+    def source_type_display(self, obj):
+        if not obj or not obj.pk:
+            return 'Будет проверено при сохранении'
+        if obj.is_group_subject:
+            return 'Групповой предмет'
+        if obj.is_individual_subject:
+            return 'Индивидуальный предмет'
+        return 'Нет активного назначения'
 
 
 @admin.register(SubjectResult)
 class SubjectResultAdmin(admin.ModelAdmin):
-    list_display = ('student', 'subject', 'exam_grade', 'final_grade')
-    list_filter = ('subject', 'student__group')
+    form = SubjectResultAdminForm
+    list_display = (
+        'student',
+        'student_group_display',
+        'subject',
+        'academic_year',
+        'exam_grade',
+        'final_grade',
+    )
+    list_filter = ('academic_year', 'subject', 'student__group', 'student__group__academic_year')
+    search_fields = ('student__full_name', 'student__group__name', 'subject__name')
+    autocomplete_fields = ('student', 'subject', 'academic_year')
+    list_select_related = ('student', 'student__group', 'subject', 'academic_year')
+    ordering = ('academic_year__name', 'student__full_name', 'subject__name')
+
+    @admin.display(description='Группа')
+    def student_group_display(self, obj):
+        return obj.student.group if obj.student_id else '—'
+
+
+# -----------------------------------------------------------------------------
+# Заявки на курсы и служебные настройки
+# -----------------------------------------------------------------------------
+
+
+class HasJournalStudentFilter(admin.SimpleListFilter):
+    title = 'Ученик в журнале'
+    parameter_name = 'has_journal_student'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('yes', 'Создан'),
+            ('no', 'Не создан'),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.filter(student__isnull=False, user__isnull=False)
+        if self.value() == 'no':
+            return queryset.filter(Q(student__isnull=True) | Q(user__isnull=True))
+        return queryset
 
 
 @admin.register(CourseApplication)
@@ -77,56 +706,150 @@ class CourseApplicationAdmin(admin.ModelAdmin):
     form = CourseApplicationAdminForm
     list_display = (
         'registration_date',
+        'full_name_display',
+        'status',
+        'has_journal_student_display',
+        'generated_login',
+        'age_display',
+        'student_phone',
+        'city_church',
+        'instrument',
+    )
+    list_filter = (
+        'status',
+        HasJournalStudentFilter,
+        'gender',
+        'music_education',
+        'registration_date',
+    )
+    search_fields = (
         'last_name',
         'first_name',
         'middle_name',
-        'status',
-        'age',
         'student_phone',
+        'parent_contacts',
         'city_church',
+        'instrument',
+        'generated_login',
+        'user__username',
+        'student__full_name',
     )
-    list_filter = ('status', 'gender', 'music_education', 'registration_date')
-    search_fields = ('last_name', 'first_name', 'middle_name', 'student_phone', 'city_church', 'instrument')
-    readonly_fields = ('registration_date', 'age')
+    readonly_fields = (
+        'registration_date',
+        'age_display',
+        'has_journal_student_display',
+        'student_link',
+        'user_link',
+        'temporary_credential_link',
+        'generated_login',
+        'journal_created_at',
+        'journal_removed_at',
+    )
     date_hierarchy = 'registration_date'
+    list_select_related = ('student', 'user')
+    actions = ('confirm_applications', 'reject_applications')
+
     fieldsets = (
-        (
-            'Основные данные',
-            {
-                'fields': (
-                    'registration_date',
-                    'status',
-                    'last_name',
-                    'first_name',
-                    'middle_name',
-                    'gender',
-                    'birth_date',
-                    'age',
-                )
-            },
-        ),
-        (
-            'Контакты и обучение',
-            {
-                'fields': (
-                    'city_church',
-                    'instrument',
-                    'music_education',
-                    'student_phone',
-                    'parent_contacts',
-                    'comments',
-                )
-            },
-        ),
+        ('Статус заявки', {
+            'fields': (
+                'registration_date',
+                'status',
+                'has_journal_student_display',
+                'generated_login',
+                'student_link',
+                'user_link',
+                'temporary_credential_link',
+                'journal_created_at',
+                'journal_removed_at',
+            )
+        }),
+        ('Основные данные ученика', {
+            'fields': (
+                'last_name',
+                'first_name',
+                'middle_name',
+                'gender',
+                'birth_date',
+                'age_display',
+            )
+        }),
+        ('Контакты и обучение', {
+            'fields': (
+                'city_church',
+                'instrument',
+                'music_education',
+                'student_phone',
+                'parent_contacts',
+                'comments',
+            )
+        }),
     )
+
+    @admin.display(description='ФИО', ordering='last_name')
+    def full_name_display(self, obj):
+        return obj.full_name
+
+    @admin.display(description='Возраст')
+    def age_display(self, obj):
+        return obj.age if obj.birth_date else '—'
+
+    @admin.display(description='Ученик создан', boolean=True)
+    def has_journal_student_display(self, obj):
+        return obj.has_journal_student
+
+    @admin.display(description='Ученик в журнале')
+    def student_link(self, obj):
+        return admin_change_link(obj.student)
+
+    @admin.display(description='Пользователь')
+    def user_link(self, obj):
+        return admin_change_link(obj.user)
+
+    @admin.display(description='Временные учетные данные')
+    def temporary_credential_link(self, obj):
+        try:
+            credential = obj.temporary_credential
+        except TemporaryCredential.DoesNotExist:
+            credential = None
+        return admin_change_link(credential, label=credential.login if credential else None)
+
+    @admin.action(description='Подтвердить выбранные заявки и создать учеников')
+    def confirm_applications(self, request, queryset):
+        processed = 0
+        for application in queryset:
+            application.status = CourseApplication.STATUS_CONFIRMED
+            application.save()
+            processed += 1
+        self.message_user(request, f'Подтверждено заявок: {processed}.')
+
+    @admin.action(description='Отклонить выбранные заявки и удалить учеников из журнала')
+    def reject_applications(self, request, queryset):
+        processed = 0
+        for application in queryset:
+            application.status = CourseApplication.STATUS_REJECTED
+            application.save()
+            processed += 1
+        self.message_user(request, f'Отклонено заявок: {processed}. Ученики удалены из журнала.')
 
 
 @admin.register(TemporaryCredential)
 class TemporaryCredentialAdmin(admin.ModelAdmin):
-    list_display = ('login', 'student_phone', 'created_at')
+    list_display = ('login', 'course_application_link', 'student_phone', 'created_at')
     list_filter = ('created_at',)
-    search_fields = ('login', 'student_phone')
+    search_fields = (
+        'login',
+        'student_phone',
+        'course_application__last_name',
+        'course_application__first_name',
+        'course_application__middle_name',
+    )
     readonly_fields = ('created_at',)
+    autocomplete_fields = ('course_application',)
+    date_hierarchy = 'created_at'
+
+    @admin.display(description='Заявка')
+    def course_application_link(self, obj):
+        return admin_change_link(obj.course_application)
 
 
 @admin.register(CourseRegistrationSettings)

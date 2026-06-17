@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from datetime import date
 from io import BytesIO
 import json
+from typing import Iterable
 from urllib.parse import urlencode
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -9,21 +12,30 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import Q, QuerySet
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils import timezone
 
 from .forms import (
     CourseApplicationPublicForm,
     GradeCreateForm,
+    get_student_allowed_subjects,
+    get_student_subject_teachers,
+    get_students_for_group_subject,
+    get_teacher_groups,
+    get_teacher_subjects,
 )
 from .models import (
+    AcademicYear,
     CourseApplication,
     CourseRegistrationSettings,
     Grade,
-    Group,
+    GroupSubject,
     Student,
+    StudentSubject,
+    StudyGroup,
     Subject,
     SubjectResult,
     Teacher,
@@ -31,8 +43,13 @@ from .models import (
 )
 
 
-def _calculate_average(grade_values):
-    numeric_values = []
+# -----------------------------------------------------------------------------
+# Общие helper-функции журнала
+# -----------------------------------------------------------------------------
+
+
+def _calculate_average(grade_values: Iterable[str]) -> str:
+    numeric_values: list[int] = []
     for value in grade_values:
         text = str(value).strip().upper()
         if text in {'1', '2', '3', '4', '5'}:
@@ -40,6 +57,956 @@ def _calculate_average(grade_values):
     if not numeric_values:
         return ''
     return f'{(sum(numeric_values) / len(numeric_values)):.2f}'
+
+
+def _form_error_messages(form) -> list[str]:
+    messages_by_field: list[str] = []
+    for field_name, errors in form.errors.items():
+        label = form.fields[field_name].label if field_name in form.fields else ''
+        for error in errors:
+            messages_by_field.append(f'{label}: {error}' if label else str(error))
+    return messages_by_field
+
+
+def _normalize_grade_value(value: str) -> str:
+    return str(value or '').strip().upper()
+
+
+def _normalize_final_grade_value(subject: Subject, value: str):
+    normalized = Subject.normalize_final_grade(value)
+    if normalized is None:
+        return None
+    if normalized not in subject.get_final_grade_allowed_values():
+        raise ValidationError('Недопустимое значение для итоговой оценки по выбранному предмету.')
+    return normalized
+
+
+def _get_selected_object(queryset, raw_pk):
+    if not raw_pk:
+        return None
+    try:
+        return queryset.filter(pk=raw_pk).first()
+    except (TypeError, ValueError):
+        return None
+
+
+def _current_academic_year() -> AcademicYear | None:
+    return AcademicYear.get_for_date(timezone.localdate()) or AcademicYear.get_active()
+
+
+def _result_year_for_student(student: Student, selected_year: AcademicYear | None = None) -> AcademicYear | None:
+    if selected_year is not None:
+        return selected_year
+    if student and student.group_id:
+        return student.group.academic_year
+    return _current_academic_year()
+
+
+def _redirect_journal(*, group=None, subject=None, academic_year=None):
+    query = {}
+    if group is not None:
+        query['group'] = group.pk if hasattr(group, 'pk') else group
+    if subject is not None:
+        query['subject'] = subject.pk if hasattr(subject, 'pk') else subject
+    if academic_year is not None:
+        query['academic_year'] = academic_year.pk if hasattr(academic_year, 'pk') else academic_year
+
+    url = reverse('journal')
+    if query:
+        return redirect(f'{url}?{urlencode(query)}')
+    return redirect(url)
+
+
+def _student_subject_allowed_for_teacher(student: Student, subject: Subject, teacher: Teacher | None = None) -> bool:
+    if not student or not subject:
+        return False
+
+    if teacher is None:
+        return get_student_allowed_subjects(student).filter(pk=subject.pk).exists()
+
+    return get_student_subject_teachers(student, subject).filter(pk=teacher.pk).exists()
+
+
+def _subjects_for_groups(groups, *, teacher: Teacher | None = None):
+    group_ids = [group.pk for group in groups if group is not None]
+    if not group_ids:
+        return Subject.objects.none()
+
+    group_assignments = GroupSubject.objects.filter(
+        group_id__in=group_ids,
+        is_active=True,
+        subject__is_active=True,
+    )
+    individual_assignments = StudentSubject.objects.filter(
+        student__group_id__in=group_ids,
+        is_active=True,
+        subject__is_active=True,
+        student__is_active=True,
+    )
+
+    if teacher is not None:
+        group_assignments = group_assignments.filter(teacher=teacher)
+        individual_assignments = individual_assignments.filter(teacher=teacher)
+
+    group_subject_ids = group_assignments.values_list('subject_id', flat=True)
+    individual_subject_ids = individual_assignments.values_list('subject_id', flat=True)
+
+    return (
+        Subject.objects
+        .filter(Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids))
+        .distinct()
+        .order_by('name')
+    )
+
+
+def _students_for_table(
+    *,
+    group: StudyGroup,
+    subject: Subject,
+    students_by_group: dict[int, list[Student]],
+    teacher: Teacher | None = None,
+) -> list[Student]:
+    """
+    Возвращает учеников, которые должны попасть в таблицу конкретного предмета.
+
+    Ученик попадает в таблицу, если:
+    1) предмет назначен всей его группе через GroupSubject;
+    2) предмет назначен ему индивидуально через StudentSubject.
+
+    Для преподавателя дополнительно учитывается только его назначение.
+    """
+    group_students = students_by_group.get(group.pk, [])
+    if not group_students:
+        return []
+
+    group_assignment = GroupSubject.objects.filter(
+        group=group,
+        subject=subject,
+        is_active=True,
+    )
+    individual_student_ids = StudentSubject.objects.filter(
+        student__group=group,
+        subject=subject,
+        is_active=True,
+        student__is_active=True,
+    )
+
+    if teacher is not None:
+        group_assignment = group_assignment.filter(teacher=teacher)
+        individual_student_ids = individual_student_ids.filter(teacher=teacher)
+
+    table_student_ids: set[int] = set()
+    if group_assignment.exists():
+        table_student_ids.update(student.pk for student in group_students)
+
+    table_student_ids.update(individual_student_ids.values_list('student_id', flat=True))
+
+    if not table_student_ids:
+        return []
+
+    return [student for student in group_students if student.pk in table_student_ids]
+
+
+def _build_journal_tables(
+    *,
+    groups,
+    subjects,
+    students,
+    grade_qs,
+    results_qs,
+    selected_academic_year: AcademicYear | None = None,
+    teacher: Teacher | None = None,
+):
+    journal_tables = []
+
+    students_by_group: dict[int, list[Student]] = defaultdict(list)
+    for student in students:
+        if student.group_id:
+            students_by_group[student.group_id].append(student)
+
+    grades_map: dict[tuple[int, int], list[Grade]] = defaultdict(list)
+    for grade in grade_qs:
+        if grade.student and grade.student.group_id:
+            grades_map[(grade.student.group_id, grade.subject_id)].append(grade)
+
+    result_map: dict[tuple[int, int, int], SubjectResult] = {}
+    for result in results_qs:
+        result_map[(result.student_id, result.subject_id, result.academic_year_id)] = result
+
+    for group in groups:
+        if group is None:
+            continue
+
+        for subject in subjects:
+            if subject is None:
+                continue
+
+            table_students = _students_for_table(
+                group=group,
+                subject=subject,
+                students_by_group=students_by_group,
+                teacher=teacher,
+            )
+            if not table_students:
+                continue
+
+            subject_grades = [
+                grade
+                for grade in grades_map.get((group.pk, subject.pk), [])
+                if grade.student_id in {student.pk for student in table_students}
+            ]
+            dates = sorted({grade.date for grade in subject_grades})
+            row_map = {student.pk: {lesson_date: '' for lesson_date in dates} for student in table_students}
+
+            for grade in subject_grades:
+                if grade.student_id in row_map:
+                    row_map[grade.student_id][grade.date] = str(grade.value)
+
+            rows = []
+            for student in table_students:
+                grades_by_date = {}
+                grade_values = []
+                for lesson_date in dates:
+                    value = row_map[student.pk][lesson_date]
+                    grades_by_date[lesson_date] = value
+                    if value:
+                        grade_values.append(value)
+
+                result_year = _result_year_for_student(student, selected_academic_year)
+                subject_result = None
+                if result_year is not None:
+                    subject_result = result_map.get((student.pk, subject.pk, result_year.pk))
+
+                rows.append(
+                    {
+                        'student': student,
+                        'grades_by_date': grades_by_date,
+                        'average_grade': _calculate_average(grade_values),
+                        'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
+                        'final_grade': '' if subject_result is None or subject_result.final_grade is None else subject_result.final_grade,
+                    }
+                )
+
+            journal_tables.append(
+                {
+                    'group': group,
+                    'subject': subject,
+                    'dates': dates,
+                    'rows': rows,
+                    'final_grade_options': sorted(subject.get_final_grade_allowed_values()),
+                    'academic_year': selected_academic_year or group.academic_year,
+                }
+            )
+
+    return journal_tables
+
+
+def _save_inline_grades(
+    request,
+    *,
+    role_mode: str,
+    students: QuerySet[Student],
+    subjects: QuerySet[Subject],
+    teacher: Teacher | None = None,
+    selected_academic_year: AcademicYear | None = None,
+) -> bool:
+    changed = 0
+    student_ids = set(students.values_list('pk', flat=True))
+    subject_ids = set(subjects.values_list('pk', flat=True))
+
+    for field_name, raw_value in request.POST.items():
+        if not (
+            field_name.startswith('grade__')
+            or field_name.startswith('exam__')
+            or field_name.startswith('final__')
+        ):
+            continue
+
+        value = str(raw_value or '').strip()
+
+        if field_name.startswith('exam__') or field_name.startswith('final__'):
+            field_mode = 'exam' if field_name.startswith('exam__') else 'final'
+            parts = field_name.split('__')
+            if len(parts) != 3:
+                continue
+
+            _, subject_id_raw, student_id_raw = parts
+            try:
+                subject_id = int(subject_id_raw)
+                student_id = int(student_id_raw)
+            except (TypeError, ValueError):
+                continue
+
+            if student_id not in student_ids or subject_id not in subject_ids:
+                continue
+
+            student = students.filter(pk=student_id).select_related('group', 'group__academic_year').first()
+            subject = subjects.filter(pk=subject_id).first()
+            if student is None or subject is None:
+                continue
+
+            if role_mode == 'teacher' and not _student_subject_allowed_for_teacher(student, subject, teacher):
+                continue
+
+            try:
+                normalized_value = _normalize_final_grade_value(subject, value)
+            except ValidationError as exc:
+                messages.error(request, '; '.join(exc.messages))
+                return False
+
+            academic_year = _result_year_for_student(student, selected_academic_year)
+            if academic_year is None:
+                messages.error(request, 'Не удалось определить учебный год для итоговой оценки.')
+                return False
+
+            result, _ = SubjectResult.objects.get_or_create(
+                student=student,
+                subject=subject,
+                academic_year=academic_year,
+            )
+
+            if field_mode == 'exam':
+                if result.exam_grade == normalized_value:
+                    continue
+                result.exam_grade = normalized_value
+            else:
+                if result.final_grade == normalized_value:
+                    continue
+                result.final_grade = normalized_value
+
+            try:
+                result.save()
+            except ValidationError as exc:
+                messages.error(request, '; '.join(exc.messages))
+                return False
+            changed += 1
+            continue
+
+        normalized_grade_value = _normalize_grade_value(value)
+        if normalized_grade_value and normalized_grade_value not in Grade.ALLOWED_VALUES:
+            messages.error(request, 'Оценка должна быть 1-5 или Н.')
+            return False
+
+        parts = field_name.split('__')
+        if len(parts) != 4:
+            continue
+
+        _, subject_id_raw, student_id_raw, grade_date_raw = parts
+        try:
+            subject_id = int(subject_id_raw)
+            student_id = int(student_id_raw)
+            grade_date = date.fromisoformat(grade_date_raw)
+        except (TypeError, ValueError):
+            continue
+
+        if student_id not in student_ids or subject_id not in subject_ids:
+            continue
+
+        grade = (
+            Grade.objects
+            .filter(
+                student_id=student_id,
+                subject_id=subject_id,
+                date=grade_date,
+                student_id__in=student_ids,
+                subject_id__in=subject_ids,
+            )
+            .select_related('teacher', 'student', 'subject')
+            .first()
+        )
+        if grade is None:
+            continue
+
+        if role_mode == 'teacher' and (teacher is None or grade.teacher_id != teacher.pk):
+            continue
+
+        if normalized_grade_value == '':
+            grade.delete()
+            changed += 1
+            continue
+
+        if grade.value == normalized_grade_value:
+            continue
+
+        grade.value = normalized_grade_value
+        try:
+            grade.save()
+        except ValidationError as exc:
+            messages.error(request, '; '.join(exc.messages))
+            return False
+        changed += 1
+
+    if changed:
+        messages.success(request, f'Изменения сохранены: {changed}.')
+    else:
+        messages.info(request, 'Изменений для сохранения нет.')
+    return True
+
+
+# -----------------------------------------------------------------------------
+# Основной журнал
+# -----------------------------------------------------------------------------
+
+
+@login_required
+def journal_view(request):
+    selected_group_id = request.GET.get('group')
+    selected_subject_id = request.GET.get('subject')
+    selected_year_id = request.GET.get('academic_year') or request.GET.get('year')
+
+    academic_years = AcademicYear.objects.all().order_by('-starts_on')
+    selected_academic_year = _get_selected_object(academic_years, selected_year_id) if selected_year_id else _current_academic_year()
+
+    if request.user.is_superuser:
+        return _journal_for_admin(
+            request,
+            selected_group_id=selected_group_id,
+            selected_subject_id=selected_subject_id,
+            academic_years=academic_years,
+            selected_academic_year=selected_academic_year,
+        )
+
+    teacher = getattr(request.user, 'teacher_profile', None)
+    student_profile = getattr(request.user, 'student_profile', None)
+
+    if teacher is None and student_profile is None:
+        return render(
+            request,
+            'journal.html',
+            {
+                'access_error': 'У вашей учетной записи нет профиля преподавателя или ученика. Обратитесь к администратору.',
+                'groups': [],
+                'subjects': [],
+                'students': [],
+                'journal_tables': [],
+                'selected_group': None,
+                'selected_group_id': '',
+                'selected_subject_id': '',
+                'selected_academic_year': selected_academic_year,
+                'academic_years': academic_years,
+                'grade_form': None,
+                'role_mode': '',
+            },
+        )
+
+    if teacher is not None:
+        return _journal_for_teacher(
+            request,
+            teacher=teacher,
+            selected_group_id=selected_group_id,
+            selected_subject_id=selected_subject_id,
+            academic_years=academic_years,
+            selected_academic_year=selected_academic_year,
+        )
+
+    return _journal_for_student(
+        request,
+        student=student_profile,
+        selected_subject_id=selected_subject_id,
+        academic_years=academic_years,
+        selected_academic_year=selected_academic_year,
+    )
+
+
+def _journal_for_admin(
+    request,
+    *,
+    selected_group_id: str | None,
+    selected_subject_id: str | None,
+    academic_years,
+    selected_academic_year: AcademicYear | None,
+):
+    role_mode = 'superuser'
+
+    groups = (
+        StudyGroup.objects
+        .filter(is_active=True)
+        .select_related('academic_year')
+        .order_by('academic_year__name', 'name')
+    )
+    subjects = Subject.objects.filter(is_active=True).order_by('name')
+
+    selected_group = _get_selected_object(groups, selected_group_id)
+    selected_subject = _get_selected_object(subjects, selected_subject_id)
+
+    groups_to_show = [selected_group] if selected_group else list(groups)
+
+    if selected_subject:
+        subjects_to_show = [selected_subject]
+    elif selected_group:
+        subjects_to_show = list(_subjects_for_groups(groups_to_show))
+    else:
+        subjects_to_show = list(subjects)
+
+    students_qs = (
+        Student.objects
+        .filter(is_active=True, group__in=groups_to_show)
+        .select_related('group', 'group__academic_year', 'instrument', 'user')
+        .order_by('full_name')
+    )
+    students = list(students_qs)
+
+    grade_qs = (
+        Grade.objects
+        .filter(student__in=students_qs, subject__in=subjects_to_show)
+        .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
+    )
+    if selected_academic_year is not None:
+        grade_qs = grade_qs.filter(Q(academic_year=selected_academic_year) | Q(academic_year__isnull=True))
+
+    result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
+    results_qs = (
+        SubjectResult.objects
+        .filter(student__in=students_qs, subject__in=subjects_to_show, academic_year_id__in=result_year_ids)
+        .select_related('student', 'student__group', 'subject', 'academic_year')
+    )
+
+    journal_tables = _build_journal_tables(
+        groups=groups_to_show,
+        subjects=subjects_to_show,
+        students=students,
+        grade_qs=grade_qs,
+        results_qs=results_qs,
+        selected_academic_year=selected_academic_year,
+    )
+
+    grade_form = _handle_grade_form(
+        request,
+        role_mode=role_mode,
+        groups=groups,
+        subjects=subjects,
+        selected_group=selected_group,
+        selected_subject=selected_subject,
+        selected_academic_year=selected_academic_year,
+    )
+
+    if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
+        if _save_inline_grades(
+            request,
+            role_mode=role_mode,
+            students=students_qs,
+            subjects=Subject.objects.filter(pk__in=[subject.pk for subject in subjects_to_show]),
+            selected_academic_year=selected_academic_year,
+        ):
+            return _redirect_journal(
+                group=selected_group,
+                subject=selected_subject,
+                academic_year=selected_academic_year,
+            )
+
+    if isinstance(grade_form, HttpResponse):
+        return grade_form
+
+    return render(
+        request,
+        'journal.html',
+        _journal_context(
+            role_mode=role_mode,
+            groups=groups,
+            subjects=subjects,
+            students=students,
+            journal_tables=journal_tables,
+            selected_group=selected_group,
+            selected_group_id=selected_group_id,
+            selected_subject_id=selected_subject_id,
+            academic_years=academic_years,
+            selected_academic_year=selected_academic_year,
+            grade_form=grade_form,
+        ),
+    )
+
+
+def _journal_for_teacher(
+    request,
+    *,
+    teacher: Teacher,
+    selected_group_id: str | None,
+    selected_subject_id: str | None,
+    academic_years,
+    selected_academic_year: AcademicYear | None,
+):
+    role_mode = 'teacher'
+
+    groups = get_teacher_groups(teacher).filter(is_active=True).select_related('academic_year')
+    selected_group = _get_selected_object(groups, selected_group_id)
+    groups_to_show = [selected_group] if selected_group else list(groups)
+
+    subjects = get_teacher_subjects(teacher, selected_group) if selected_group else get_teacher_subjects(teacher)
+    selected_subject = _get_selected_object(subjects, selected_subject_id)
+    subjects_to_show = [selected_subject] if selected_subject else list(subjects)
+
+    students_qs = (
+        Student.objects
+        .filter(is_active=True, group__in=groups_to_show)
+        .filter(
+            Q(group__group_subjects__teacher=teacher, group__group_subjects__is_active=True)
+            | Q(individual_subjects__teacher=teacher, individual_subjects__is_active=True)
+        )
+        .select_related('group', 'group__academic_year', 'instrument', 'user')
+        .distinct()
+        .order_by('full_name')
+    )
+    students = list(students_qs)
+
+    grade_qs = (
+        Grade.objects
+        .filter(teacher=teacher, student__in=students_qs, subject__in=subjects_to_show)
+        .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
+    )
+    if selected_academic_year is not None:
+        grade_qs = grade_qs.filter(Q(academic_year=selected_academic_year) | Q(academic_year__isnull=True))
+
+    result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
+    results_qs = (
+        SubjectResult.objects
+        .filter(student__in=students_qs, subject__in=subjects_to_show, academic_year_id__in=result_year_ids)
+        .select_related('student', 'student__group', 'subject', 'academic_year')
+    )
+
+    journal_tables = _build_journal_tables(
+        groups=groups_to_show,
+        subjects=subjects_to_show,
+        students=students,
+        grade_qs=grade_qs,
+        results_qs=results_qs,
+        selected_academic_year=selected_academic_year,
+        teacher=teacher,
+    )
+
+    grade_form = _handle_grade_form(
+        request,
+        role_mode=role_mode,
+        groups=groups,
+        subjects=subjects,
+        selected_group=selected_group,
+        selected_subject=selected_subject,
+        selected_academic_year=selected_academic_year,
+        teacher=teacher,
+    )
+
+    if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
+        if _save_inline_grades(
+            request,
+            role_mode=role_mode,
+            students=students_qs,
+            subjects=Subject.objects.filter(pk__in=[subject.pk for subject in subjects_to_show]),
+            teacher=teacher,
+            selected_academic_year=selected_academic_year,
+        ):
+            return _redirect_journal(
+                group=selected_group,
+                subject=selected_subject,
+                academic_year=selected_academic_year,
+            )
+
+    if isinstance(grade_form, HttpResponse):
+        return grade_form
+
+    return render(
+        request,
+        'journal.html',
+        _journal_context(
+            role_mode=role_mode,
+            groups=groups,
+            subjects=subjects,
+            students=students,
+            journal_tables=journal_tables,
+            selected_group=selected_group,
+            selected_group_id=selected_group_id,
+            selected_subject_id=selected_subject_id,
+            academic_years=academic_years,
+            selected_academic_year=selected_academic_year,
+            grade_form=grade_form,
+        ),
+    )
+
+
+def _journal_for_student(
+    request,
+    *,
+    student: Student,
+    selected_subject_id: str | None,
+    academic_years,
+    selected_academic_year: AcademicYear | None,
+):
+    role_mode = 'student'
+    selected_group = student.group
+    groups = [selected_group]
+    students = [student]
+
+    subjects = get_student_allowed_subjects(student)
+    selected_subject = _get_selected_object(subjects, selected_subject_id)
+    subjects_to_show = [selected_subject] if selected_subject else list(subjects)
+
+    if request.method == 'POST':
+        messages.error(request, 'Ученику недоступно редактирование оценок.')
+        return _redirect_journal(subject=selected_subject, academic_year=selected_academic_year)
+
+    grade_qs = (
+        Grade.objects
+        .filter(student=student, subject__in=subjects_to_show)
+        .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
+    )
+    if selected_academic_year is not None:
+        grade_qs = grade_qs.filter(Q(academic_year=selected_academic_year) | Q(academic_year__isnull=True))
+
+    result_year_ids = _result_year_ids(groups, selected_academic_year)
+    results_qs = (
+        SubjectResult.objects
+        .filter(student=student, subject__in=subjects_to_show, academic_year_id__in=result_year_ids)
+        .select_related('student', 'student__group', 'subject', 'academic_year')
+    )
+
+    journal_tables = _build_journal_tables(
+        groups=groups,
+        subjects=subjects_to_show,
+        students=students,
+        grade_qs=grade_qs,
+        results_qs=results_qs,
+        selected_academic_year=selected_academic_year,
+    )
+
+    return render(
+        request,
+        'journal.html',
+        _journal_context(
+            role_mode=role_mode,
+            groups=groups,
+            subjects=subjects,
+            students=students,
+            journal_tables=journal_tables,
+            selected_group=selected_group,
+            selected_group_id=str(selected_group.pk),
+            selected_subject_id=selected_subject_id,
+            academic_years=academic_years,
+            selected_academic_year=selected_academic_year,
+            grade_form=None,
+        ),
+    )
+
+
+def _result_year_ids(groups, selected_academic_year: AcademicYear | None) -> list[int]:
+    if selected_academic_year is not None:
+        return [selected_academic_year.pk]
+
+    ids = [group.academic_year_id for group in groups if group is not None and group.academic_year_id]
+    if ids:
+        return list(set(ids))
+
+    current_year = _current_academic_year()
+    return [current_year.pk] if current_year is not None else []
+
+
+def _handle_grade_form(
+    request,
+    *,
+    role_mode: str,
+    groups,
+    subjects,
+    selected_group: StudyGroup | None,
+    selected_subject: Subject | None,
+    selected_academic_year: AcademicYear | None,
+    teacher: Teacher | None = None,
+):
+    if request.method == 'POST' and request.POST.get('action') == 'add_grade':
+        posted_group = selected_group or _get_selected_object(groups, request.POST.get('group'))
+        posted_subject = selected_subject or _get_selected_object(subjects, request.POST.get('subject'))
+
+        if posted_group is None:
+            messages.error(request, 'Выберите группу перед сохранением оценки.')
+            return GradeCreateForm(
+                request.POST,
+                teacher=teacher,
+                academic_year=selected_academic_year,
+            )
+
+        students_queryset = None
+        if posted_subject is not None:
+            students_queryset = get_students_for_group_subject(
+                group=posted_group,
+                subject=posted_subject,
+                teacher=teacher,
+            )
+
+        grade_form = GradeCreateForm(
+            request.POST,
+            teacher=teacher,
+            group=posted_group,
+            students_queryset=students_queryset,
+            academic_year=selected_academic_year,
+        )
+        if grade_form.is_valid():
+            grade_form.save()
+            messages.success(request, 'Оценка успешно добавлена.')
+            return _redirect_journal(
+                group=posted_group,
+                subject=grade_form.cleaned_data.get('subject') or posted_subject,
+                academic_year=selected_academic_year,
+            )
+
+        messages.error(request, ' '.join(_form_error_messages(grade_form)))
+        return grade_form
+
+    if selected_group is None:
+        return None
+
+    students_queryset = None
+    if selected_subject is not None:
+        students_queryset = get_students_for_group_subject(
+            group=selected_group,
+            subject=selected_subject,
+            teacher=teacher,
+        )
+
+    return GradeCreateForm(
+        None,
+        teacher=teacher,
+        group=selected_group,
+        students_queryset=students_queryset,
+        academic_year=selected_academic_year,
+    )
+
+
+def _journal_context(
+    *,
+    role_mode: str,
+    groups,
+    subjects,
+    students,
+    journal_tables,
+    selected_group,
+    selected_group_id,
+    selected_subject_id,
+    academic_years,
+    selected_academic_year,
+    grade_form,
+):
+    return {
+        'role_mode': role_mode,
+        'groups': groups,
+        'subjects': subjects,
+        'students': students,
+        'journal_tables': journal_tables,
+        'selected_group': selected_group,
+        'selected_group_id': str(selected_group_id or ''),
+        'selected_subject_id': str(selected_subject_id or ''),
+        'academic_years': academic_years,
+        'selected_academic_year': selected_academic_year,
+        'selected_academic_year_id': str(selected_academic_year.pk) if selected_academic_year else '',
+        'grade_form': grade_form,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Регистрация на курсы
+# -----------------------------------------------------------------------------
+
+
+def _load_registration_payload(request):
+    if 'application/json' in request.headers.get('Content-Type', ''):
+        try:
+            return json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return None
+    return request.POST
+
+
+def _get_telegram_redirect_url() -> str:
+    settings_obj = CourseRegistrationSettings.objects.first()
+    if settings_obj is None:
+        settings_obj = CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='')
+    return settings_obj.telegram_group_url.strip()
+
+
+def _get_application_credential(application: CourseApplication):
+    if application is None or not application.pk:
+        return None
+
+    credential = getattr(application, 'temporary_credential', None)
+    if credential is not None:
+        return credential
+
+    if application.generated_login:
+        credential = TemporaryCredential.objects.filter(login=application.generated_login).first()
+        if credential is not None:
+            return credential
+
+    return TemporaryCredential.objects.filter(course_application=application).first()
+
+
+def course_registration_view(request):
+    if request.method not in {'GET', 'POST'}:
+        return HttpResponseNotAllowed(['GET', 'POST'])
+
+    form = CourseApplicationPublicForm(request.POST or None)
+    redirect_url = _get_telegram_redirect_url()
+
+    if request.method == 'POST' and form.is_valid():
+        application = form.save()
+        credential = _get_application_credential(application)
+        return render(
+            request,
+            'journal/course_registration.html',
+            {
+                'submitted': True,
+                'application': application,
+                'credential': credential,
+                'redirect_url': redirect_url,
+            },
+        )
+
+    return render(
+        request,
+        'journal/course_registration.html',
+        {
+            'form': form,
+            'submitted': False,
+            'redirect_url': redirect_url,
+        },
+    )
+
+
+def course_registration_api(request):
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    payload = _load_registration_payload(request)
+    if payload is None:
+        return JsonResponse({'success': False, 'message': 'Неверный формат запроса.'}, status=400)
+
+    form = CourseApplicationPublicForm(payload)
+    redirect_url = _get_telegram_redirect_url()
+
+    if form.is_valid():
+        application = form.save()
+        credential = _get_application_credential(application)
+        return JsonResponse(
+            {
+                'success': True,
+                'message': 'Заявка успешно отправлена.',
+                'redirect_url': redirect_url,
+                'application_id': application.pk,
+                'status': application.status,
+                'status_display': application.get_status_display(),
+                'login': credential.login if credential else '',
+                'temporary_password': credential.temporary_password if credential else '',
+            },
+            status=201,
+        )
+
+    return JsonResponse(
+        {
+            'success': False,
+            'message': ' '.join(_form_error_messages(form)) or 'Форма не содержит данных для проверки.',
+            'errors': form.errors,
+        },
+        status=400,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Экспорт временных учетных данных
+# -----------------------------------------------------------------------------
 
 
 def _xlsx_cell(value):
@@ -53,7 +1020,7 @@ def _xlsx_row(values, row_number):
 
 def _build_student_credentials_xlsx(rows):
     sheet_rows = [
-        _xlsx_row(['Логин', 'Временный пароль', 'Телефон ученика'], 1),
+        _xlsx_row(['Логин', 'Временный пароль', 'Телефон ученика', 'Заявка'], 1),
     ]
     for index, row in enumerate(rows, start=2):
         sheet_rows.append(_xlsx_row(row, index))
@@ -64,7 +1031,8 @@ def _build_student_credentials_xlsx(rows):
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         '<cols><col min="1" max="1" width="28" customWidth="1"/>'
         '<col min="2" max="2" width="24" customWidth="1"/>'
-        '<col min="3" max="3" width="22" customWidth="1"/></cols>'
+        '<col min="3" max="3" width="22" customWidth="1"/>'
+        '<col min="4" max="4" width="34" customWidth="1"/></cols>'
         f'<sheetData>{"".join(sheet_rows)}</sheetData>'
         '</worksheet>'
     )
@@ -108,530 +1076,27 @@ def _build_student_credentials_xlsx(rows):
     return output.getvalue()
 
 
-def _students_for_group_subject(group, subject, *, base_students=None):
-    students = Student.objects.filter(group=group).filter(
-        Q(group__subjects=subject) | Q(individual_subjects=subject)
-    ).distinct()
-    if base_students is not None:
-        students = students.filter(pk__in=base_students.values('pk'))
-    return students.order_by('full_name')
-
-
-def _form_error_messages(form):
-    messages_by_field = []
-    for field_name, errors in form.errors.items():
-        label = form.fields[field_name].label if field_name in form.fields else ''
-        for error in errors:
-            messages_by_field.append(f'{label}: {error}' if label else str(error))
-    return messages_by_field
-
-
-def _build_journal_tables(groups, subjects, students, grade_qs, results_qs):
-    journal_tables = []
-    result_map = {(result.student_id, result.subject_id): result for result in results_qs}
-    grades_map = defaultdict(list)
-    students_by_group = defaultdict(list)
-    group_subject_ids = {group.id: set(group.subjects.values_list('id', flat=True)) for group in groups}
-    subject_student_ids = {subject.id: set(subject.students.values_list('id', flat=True)) for subject in subjects}
-
-    for grade in grade_qs:
-        grades_map[(grade.student.group_id, grade.subject_id)].append(grade)
-
-    for student in students:
-        students_by_group[student.group_id].append(student)
-
-    for group in groups:
-        group_students = students_by_group.get(group.id, [])
-        allowed_subject_ids = group_subject_ids.get(group.id, set())
-
-        for subject in subjects:
-            if subject.id in allowed_subject_ids:
-                table_students = group_students
-            else:
-                allowed_student_ids = subject_student_ids.get(subject.id, set())
-                table_students = [student for student in group_students if student.id in allowed_student_ids]
-
-            subject_grades = grades_map.get((group.id, subject.id), [])
-            dates = sorted({grade.date for grade in subject_grades})
-            row_map = {student.id: {lesson_date: '' for lesson_date in dates} for student in table_students}
-            for grade in subject_grades:
-                row_map[grade.student_id][grade.date] = str(grade.value)
-
-            rows = []
-            for student in table_students:
-                grades_by_date = {}
-                grade_values = []
-                for lesson_date in dates:
-                    grades_by_date[lesson_date] = row_map[student.id][lesson_date]
-                    if row_map[student.id][lesson_date]:
-                        grade_values.append(row_map[student.id][lesson_date])
-
-                subject_result = result_map.get((student.id, subject.id))
-                rows.append(
-                    {
-                        'student': student,
-                        'grades_by_date': grades_by_date,
-                        'average_grade': _calculate_average(grade_values),
-                        'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
-                        'final_grade': '' if subject_result is None or subject_result.final_grade is None else subject_result.final_grade,
-                    }
-                )
-
-            journal_tables.append(
-                {
-                    'group': group,
-                    'subject': subject,
-                    'dates': dates,
-                    'rows': rows,
-                    'final_grade_options': sorted(subject.get_final_grade_allowed_values()),
-                }
-            )
-
-    return journal_tables
-
-
-def _save_inline_grades(request, *, role_mode, students, subjects, teacher=None):
-    changed = 0
-
-    for field_name, raw_value in request.POST.items():
-        if not field_name.startswith('grade__') and not field_name.startswith('exam__') and not field_name.startswith('final__'):
-            continue
-
-        if field_name.startswith('grade__'):
-            field_mode = 'grade'
-        elif field_name.startswith('exam__'):
-            field_mode = 'exam'
-        else:
-            field_mode = 'final'
-
-        value = raw_value.strip()
-
-        if field_mode in {'exam', 'final'}:
-            parts = field_name.split('__')
-            if len(parts) != 3:
-                continue
-
-            _, subject_id_raw, student_id_raw = parts
-            try:
-                subject_id = int(subject_id_raw)
-                student_id = int(student_id_raw)
-            except (TypeError, ValueError):
-                continue
-
-            student = students.filter(pk=student_id).first()
-            subject = subjects.filter(pk=subject_id).first()
-            if student is None or subject is None:
-                continue
-
-            if role_mode == 'teacher' and (teacher is None or not teacher.subjects.filter(pk=subject.id).exists()):
-                continue
-
-            normalized_value = value
-            if normalized_value.lower() == 'зачет':
-                normalized_value = 'Зачет'
-            elif normalized_value.lower() == 'незачет':
-                normalized_value = 'Незачет'
-
-            allowed_values = subject.get_final_grade_allowed_values()
-            if normalized_value and normalized_value not in allowed_values:
-                messages.error(request, 'Недопустимое значение для итоговой оценки по выбранному предмету.')
-                return False
-
-            result, _ = SubjectResult.objects.get_or_create(student=student, subject=subject)
-            new_value = normalized_value if normalized_value else None
-
-            if field_mode == 'exam':
-                if result.exam_grade == new_value:
-                    continue
-                result.exam_grade = new_value
-            else:
-                if result.final_grade == new_value:
-                    continue
-                result.final_grade = new_value
-
-            result.save()
-            changed += 1
-            continue
-
-        normalized_grade_value = value.upper()
-        if normalized_grade_value and normalized_grade_value not in {'1', '2', '3', '4', '5', 'Н'}:
-            messages.error(request, 'Оценка должна быть 1-5 или Н.')
-            return False
-
-        parts = field_name.split('__')
-        if len(parts) != 4:
-            continue
-
-        _, subject_id_raw, student_id_raw, grade_date_raw = parts
-        try:
-            subject_id = int(subject_id_raw)
-            student_id = int(student_id_raw)
-            grade_date = date.fromisoformat(grade_date_raw)
-        except (TypeError, ValueError):
-            continue
-
-        grade = Grade.objects.filter(
-            student_id=student_id,
-            subject_id=subject_id,
-            date=grade_date,
-            student__in=students,
-            subject__in=subjects,
-        ).select_related('teacher').first()
-        if not grade:
-            continue
-
-        if role_mode == 'teacher' and (teacher is None or grade.teacher_id != teacher.id):
-            continue
-
-        if normalized_grade_value == '':
-            grade.delete()
-            changed += 1
-            continue
-
-        if grade.value == normalized_grade_value:
-            continue
-
-        grade.value = normalized_grade_value
-        try:
-            grade.save()
-        except ValidationError as exc:
-            messages.error(request, '; '.join(exc.messages))
-            return False
-        changed += 1
-
-    if changed:
-        messages.success(request, f'Изменения сохранены: {changed}.')
-    else:
-        messages.info(request, 'Изменений для сохранения нет.')
-    return True
-
-
-@login_required
-def journal_view(request):
-    selected_group_id = request.GET.get('group')
-    selected_subject_id = request.GET.get('subject')
-
-    if request.user.is_superuser:
-        role_mode = 'superuser'
-        groups = Group.objects.all().order_by('name')
-        subjects = Subject.objects.all().order_by('name')
-        selected_group = groups.filter(pk=selected_group_id).first() if selected_group_id else None
-        selected_subject = subjects.filter(pk=selected_subject_id).first() if selected_subject_id else None
-
-        groups_to_show = [selected_group] if selected_group else list(groups)
-        subjects_to_show = [selected_subject] if selected_subject else list(subjects)
-        students_qs = Student.objects.filter(
-            Q(group__in=groups_to_show) | Q(individual_subjects__in=subjects_to_show)
-        ).distinct()
-
-        students = list(students_qs.order_by('full_name'))
-        grade_qs = Grade.objects.filter(student__in=students_qs, subject__in=subjects_to_show).select_related(
-            'student',
-            'subject',
-            'teacher',
-        )
-        results_qs = SubjectResult.objects.filter(student__in=students_qs, subject__in=subjects_to_show).select_related(
-            'student',
-            'subject',
-        )
-        journal_tables = _build_journal_tables(groups_to_show, subjects_to_show, students, grade_qs, results_qs)
-
-        grade_form = None
-        if request.method == 'POST' and request.POST.get('action') == 'add_grade':
-            posted_group_id = request.POST.get('group') or selected_group_id
-            posted_subject_id = request.POST.get('subject') or selected_subject_id
-            posted_group = groups.filter(pk=posted_group_id).first() if posted_group_id else None
-            posted_subject = subjects.filter(pk=posted_subject_id).first() if posted_subject_id else None
-            if posted_group and posted_subject:
-                grade_form = GradeCreateForm(
-                    request.POST,
-                    group=posted_group,
-                    students_queryset=_students_for_group_subject(posted_group, posted_subject),
-                )
-                if grade_form.is_valid():
-                    grade_form.save()
-                    messages.success(request, 'Оценка успешно добавлена.')
-                    query = {'subject': posted_subject.id, 'group': posted_group.id}
-                    return redirect(f"/?{urlencode(query)}")
-                messages.error(request, ' '.join(_form_error_messages(grade_form)))
-            else:
-                messages.error(request, 'Выберите группу и предмет перед сохранением оценки.')
-
-        if selected_group and selected_subject and grade_form is None:
-            grade_form = GradeCreateForm(
-                request.POST or None,
-                group=selected_group,
-                students_queryset=_students_for_group_subject(selected_group, selected_subject),
-            )
-
-        if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
-            if _save_inline_grades(
-                request,
-                role_mode=role_mode,
-                students=students_qs,
-                subjects=subjects,
-            ):
-                query = {}
-                if selected_group:
-                    query['group'] = selected_group.id
-                if selected_subject:
-                    query['subject'] = selected_subject.id
-                return redirect(f"/?{urlencode(query)}")
-
-        context = {
-            'role_mode': role_mode,
-            'groups': groups,
-            'subjects': subjects,
-            'students': students,
-            'journal_tables': journal_tables,
-            'selected_group': selected_group,
-            'selected_group_id': str(selected_group_id or ''),
-            'selected_subject_id': str(selected_subject_id or ''),
-            'grade_form': grade_form,
-        }
-        return render(request, 'journal.html', context)
-
-    try:
-        teacher = request.user.teacher_profile
-    except Teacher.DoesNotExist:
-        teacher = None
-
-    try:
-        student_profile = request.user.student_profile
-    except Student.DoesNotExist:
-        student_profile = None
-
-    if teacher is None and student_profile is None:
-        return render(
-            request,
-            'journal.html',
-            {
-                'access_error': 'У вашей учетной записи нет профиля преподавателя или ученика. Обратитесь к администратору.',
-                'groups': [],
-                'subjects': [],
-                'students': [],
-                'journal_tables': [],
-                'selected_group_id': '',
-                'selected_subject_id': '',
-                'grade_form': None,
-                'role_mode': '',
-            },
-        )
-
-    if teacher is not None:
-        role_mode = 'teacher'
-
-        groups = Group.objects.filter(
-            Q(subjects__in=teacher.subjects.all()) | Q(students__individual_subjects__in=teacher.subjects.all())
-        ).distinct().order_by('name')
-        subjects = teacher.subjects.all().order_by('name')
-        selected_group = groups.filter(pk=selected_group_id).first() if selected_group_id else None
-        selected_subject = subjects.filter(pk=selected_subject_id).first() if selected_subject_id else None
-
-        groups_to_show = [selected_group] if selected_group else list(groups)
-        subjects_to_show = [selected_subject] if selected_subject else list(subjects)
-        students_qs = Student.objects.filter(
-            Q(group__in=groups_to_show) | Q(individual_subjects__in=subjects_to_show)
-        ).distinct()
-
-        students = list(students_qs.order_by('full_name'))
-        grade_qs = Grade.objects.filter(
-            teacher=teacher,
-            student__in=students_qs,
-            subject__in=subjects_to_show,
-        ).select_related('student', 'subject', 'teacher')
-        results_qs = SubjectResult.objects.filter(
-            student__in=students_qs,
-            subject__in=subjects_to_show,
-        ).select_related('student', 'subject')
-
-        journal_tables = _build_journal_tables(groups_to_show, subjects_to_show, students, grade_qs, results_qs)
-
-        grade_form = None
-        if selected_group and selected_subject:
-            grade_form = GradeCreateForm(
-                request.POST or None,
-                teacher=teacher,
-                group=selected_group,
-                students_queryset=_students_for_group_subject(selected_group, selected_subject),
-            )
-            if request.method == 'POST' and request.POST.get('action') == 'add_grade':
-                if grade_form.is_valid():
-                    grade_form.save()
-                    messages.success(request, 'Оценка успешно добавлена.')
-                    query = {'subject': selected_subject.id}
-                    if selected_group:
-                        query['group'] = selected_group.id
-                    return redirect(f"/?{urlencode(query)}")
-                messages.error(request, ' '.join(_form_error_messages(grade_form)))
-
-        if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
-            if _save_inline_grades(
-                request,
-                role_mode=role_mode,
-                students=students_qs,
-                subjects=subjects,
-                teacher=teacher,
-            ):
-                query = {}
-                if selected_group:
-                    query['group'] = selected_group.id
-                if selected_subject:
-                    query['subject'] = selected_subject.id
-                return redirect(f"/?{urlencode(query)}")
-
-        context = {
-            'role_mode': role_mode,
-            'groups': groups,
-            'subjects': subjects,
-            'students': students,
-            'journal_tables': journal_tables,
-            'selected_group': selected_group,
-            'selected_group_id': str(selected_group_id or ''),
-            'selected_subject_id': str(selected_subject_id or ''),
-            'grade_form': grade_form,
-        }
-        return render(request, 'journal.html', context)
-
-    role_mode = 'student'
-
-    selected_group = student_profile.group
-    students = [student_profile]
-    groups = [selected_group]
-
-    subjects = Subject.objects.filter(
-        Q(groups=selected_group) | Q(students=student_profile)
-    ).distinct().order_by('name')
-    selected_subject = subjects.filter(pk=selected_subject_id).first() if selected_subject_id else None
-
-    if selected_subject:
-        table_subjects = [selected_subject]
-    else:
-        table_subjects = list(subjects)
-
-    grade_qs = Grade.objects.filter(student=student_profile, subject__in=table_subjects).select_related(
-        'student',
-        'subject',
-        'teacher',
-    )
-    results_qs = SubjectResult.objects.filter(
-        student=student_profile,
-        subject__in=table_subjects,
-    ).select_related('student', 'subject')
-
-    journal_tables = _build_journal_tables(groups, table_subjects, students, grade_qs, results_qs)
-
-    if request.method == 'POST':
-        messages.error(request, 'Ученику недоступно редактирование оценок.')
-        return redirect(f"/?{urlencode({'subject': selected_subject_id} if selected_subject_id else {})}")
-
-    context = {
-        'role_mode': role_mode,
-        'groups': groups,
-        'subjects': subjects,
-        'students': students,
-        'journal_tables': journal_tables,
-        'selected_group': selected_group,
-        'selected_group_id': str(selected_group.id),
-        'selected_subject_id': str(selected_subject_id or ''),
-        'grade_form': None,
-    }
-    return render(request, 'journal.html', context)
-
-
-def _load_registration_payload(request):
-    if 'application/json' in request.headers.get('Content-Type', ''):
-        try:
-            return json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            return None
-    return request.POST
-
-
-def _get_telegram_redirect_url() -> str:
-    settings_obj = CourseRegistrationSettings.objects.first()
-    if settings_obj is None:
-        settings_obj = CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='')
-    return settings_obj.telegram_group_url.strip()
-
-
-def course_registration_view(request):
-    if request.method not in {'GET', 'POST'}:
-        return HttpResponseNotAllowed(['GET', 'POST'])
-
-    form = CourseApplicationPublicForm(request.POST or None)
-    redirect_url = _get_telegram_redirect_url()
-
-    if request.method == 'POST' and form.is_valid():
-        application = form.save()
-        credential = TemporaryCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
-        return render(
-            request,
-            'journal/course_registration.html',
-            {
-                'submitted': True,
-                'application': application,
-                'credential': credential,
-                'redirect_url': redirect_url,
-            },
-        )
-
-    return render(
-        request,
-        'journal/course_registration.html',
-        {
-            'form': form,
-            'submitted': False,
-            'redirect_url': redirect_url,
-        },
-    )
-
-
-def course_registration_api(request):
-    if request.method != 'POST':
-        return HttpResponseNotAllowed(['POST'])
-
-    payload = _load_registration_payload(request)
-    if payload is None:
-        return JsonResponse({'success': False, 'message': 'Неверный формат запроса.'}, status=400)
-
-    form = CourseApplicationPublicForm(payload)
-    redirect_url = _get_telegram_redirect_url()
-
-    if form.is_valid():
-        application = form.save()
-        credential = TemporaryCredential.objects.filter(student_phone=application.student_phone).order_by('-id').first()
-        return JsonResponse(
-            {
-                'success': True,
-                'message': 'Заявка успешно отправлена.',
-                'redirect_url': redirect_url,
-                'application_id': application.id,
-                'status': application.status,
-                'login': credential.login if credential else '',
-                'temporary_password': credential.temporary_password if credential else '',
-            },
-            status=201,
-        )
-
-    return JsonResponse(
-        {
-            'success': False,
-            'message': ' '.join(_form_error_messages(form)) or 'Форма не содержит данных для проверки.',
-            'errors': form.errors,
-        },
-        status=400,
-    )
-
-
 @user_passes_test(lambda user: user.is_active and user.is_superuser)
 def export_student_credentials_xlsx(request):
-    rows = TemporaryCredential.objects.exclude(student_phone='').order_by('id').values_list(
-        'login',
-        'temporary_password',
-        'student_phone',
+    rows = (
+        TemporaryCredential.objects
+        .select_related('course_application')
+        .order_by('id')
     )
-    content = _build_student_credentials_xlsx(rows)
+
+    data_rows = []
+    for credential in rows:
+        application_name = credential.course_application.full_name if credential.course_application_id else ''
+        data_rows.append(
+            [
+                credential.login,
+                credential.temporary_password,
+                credential.student_phone,
+                application_name,
+            ]
+        )
+
+    content = _build_student_credentials_xlsx(data_rows)
     response = HttpResponse(
         content,
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
