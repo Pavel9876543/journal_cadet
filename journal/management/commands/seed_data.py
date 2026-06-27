@@ -56,7 +56,12 @@ class Command(BaseCommand):
         self._clear_database()
         self.used_usernames = set(self.UserModel.objects.values_list('username', flat=True))
 
-        CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='')
+        CourseRegistrationSettings.objects.update_or_create(
+            pk=1,
+            defaults={
+                'telegram_group_url': '',
+            },
+        )
 
         academic_year = self._create_current_academic_year()
         instruments = self._create_instruments()
