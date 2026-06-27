@@ -7,6 +7,7 @@ from pathlib import Path
 from random import Random
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
@@ -35,6 +36,11 @@ from journal.models import (
 
 
 class Command(BaseCommand):
+
+    ADMIN_GROUP_NAME = 'Администратор'
+    TEACHER_GROUP_NAME = 'Преподаватель'
+    STUDENT_GROUP_NAME = 'Ученик'
+
     help = (
         'Полностью заполняет БД тестовыми данными для электронного журнала музыкальной школы: '
         'пользователи, преподаватели, ученики, группы, предметы, назначения, оценки, итоги и заявки.'
@@ -55,6 +61,9 @@ class Command(BaseCommand):
 
         self._clear_database()
         self.used_usernames = set(self.UserModel.objects.values_list('username', flat=True))
+
+        self.role_groups = self._create_role_groups()
+        self._assign_role_to_existing_admins()
 
         CourseRegistrationSettings.objects.update_or_create(
             pk=1,
@@ -167,6 +176,51 @@ class Command(BaseCommand):
         Instrument.objects.all().delete()
         AcademicYear.objects.all().delete()
 
+    def _create_role_groups(self) -> dict[str, Group]:
+        """
+        Создает группы ролей для пользователей.
+
+        Эти группы видны в стандартной админке Django:
+        Пользователи -> конкретный пользователь -> Группы.
+        """
+        group_names = [
+            self.ADMIN_GROUP_NAME,
+            self.TEACHER_GROUP_NAME,
+            self.STUDENT_GROUP_NAME,
+        ]
+
+        return {
+            group_name: Group.objects.get_or_create(name=group_name)[0]
+            for group_name in group_names
+        }
+
+    def _assign_role_to_existing_admins(self) -> None:
+        """
+        Назначает роль администратора уже существующим админам.
+
+        Важно:
+        - пароль не меняется;
+        - пользователь не пересоздается;
+        - вручную созданный админ сохраняется;
+        - админ из GitHub Secrets сохраняется.
+        """
+        admin_group = self.role_groups[self.ADMIN_GROUP_NAME]
+
+        admin_username = os.getenv('DJANGO_SUPERUSER_USERNAME')
+
+        admin_users = self.UserModel.objects.filter(
+            is_staff=True,
+            is_superuser=True,
+        )
+
+        if admin_username:
+            admin_users = admin_users | self.UserModel.objects.filter(
+                username=admin_username,
+            )
+
+        for user in admin_users.distinct():
+            user.groups.add(admin_group)
+
     def _create_current_academic_year(self) -> AcademicYear:
         today = timezone.localdate()
         start_year = today.year if today.month >= 9 else today.year - 1
@@ -247,6 +301,8 @@ class Command(BaseCommand):
         teachers: dict[str, Teacher] = {}
         for full_name, subject_names in teacher_specs:
             user, password = self._create_user_for_full_name(full_name)
+            self._assign_user_role(user, self.TEACHER_GROUP_NAME)
+
             teacher = Teacher.objects.create(
                 full_name=full_name,
                 user=user,
@@ -332,6 +388,8 @@ class Command(BaseCommand):
 
         for full_name, group_name, instrument_name, specialty_teacher_name in student_specs:
             user, password = self._create_user_for_full_name(full_name)
+            self._assign_user_role(user, self.STUDENT_GROUP_NAME)
+
             student = Student.objects.create(
                 full_name=full_name,
                 group=groups[group_name],
@@ -518,3 +576,10 @@ class Command(BaseCommand):
                 ])
 
         return credentials_path
+
+    def _assign_user_role(self, user, group_name: str) -> None:
+        """
+        Назначает пользователю роль через группу Django.
+        """
+        group = self.role_groups[group_name]
+        user.groups.add(group)
