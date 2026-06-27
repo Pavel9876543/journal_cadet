@@ -140,9 +140,14 @@ jobs:
             cd "$APP_DIR"
 
             git config --global --add safe.directory "$APP_DIR"
+            
+            echo "=== Сброс локальных изменений на сервере ==="
             git fetch origin
             git checkout main
-            git pull --ff-only origin main
+            git reset --hard origin/main
+            git clean -fd
+            
+            echo "=== Код проекта обновлён ==="
 
             echo "=== Создание .env.prod ==="
 
