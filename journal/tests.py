@@ -8,6 +8,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase, override_settings
@@ -69,18 +70,36 @@ class JournalTestDataMixin:
     def create_instrument(self, *, name='Баян'):
         return Instrument.objects.create(name=name)
 
-    def create_subject(self, *, name='Сольфеджио', is_specialty=False, final_grade_type=None):
+    def create_subject(
+        self,
+        *,
+        name='Сольфеджио',
+        is_specialty=False,
+        final_grade_type=None,
+    ):
         return Subject.objects.create(
             name=name,
             is_specialty=is_specialty,
             final_grade_type=final_grade_type or Subject.FINAL_GRADE_TYPE_NUMERIC,
         )
 
-    def create_teacher(self, *, full_name='Иванов Иван Иванович', username='teacher'):
+    def create_teacher(
+        self,
+        *,
+        full_name='Иванов Иван Иванович',
+        username='teacher',
+    ):
         user = User.objects.create_user(username=username, password='Pass12345!')
         return Teacher.objects.create(full_name=full_name, user=user)
 
-    def create_student(self, *, full_name='Петров Пётр Петрович', group=None, instrument=None, username='student'):
+    def create_student(
+        self,
+        *,
+        full_name='Петров Пётр Петрович',
+        group=None,
+        instrument=None,
+        username='student',
+    ):
         group = group or self.create_group()
         instrument = instrument or self.create_instrument()
         user = User.objects.create_user(username=username, password='Pass12345!')
@@ -95,11 +114,25 @@ class JournalTestDataMixin:
         group = group or self.create_group()
         subject = subject or self.create_subject()
         teacher = teacher or self.create_teacher()
-        return GroupSubject.objects.create(group=group, subject=subject, teacher=teacher)
+        return GroupSubject.objects.create(
+            group=group,
+            subject=subject,
+            teacher=teacher,
+        )
 
-    def create_individual_assignment(self, *, student=None, subject=None, teacher=None, is_specialty=True):
+    def create_individual_assignment(
+        self,
+        *,
+        student=None,
+        subject=None,
+        teacher=None,
+        is_specialty=True,
+    ):
         student = student or self.create_student()
-        subject = subject or self.create_subject(name='Специальность', is_specialty=True)
+        subject = subject or self.create_subject(
+            name='Специальность',
+            is_specialty=True,
+        )
         teacher = teacher or self.create_teacher(username='specialty_teacher')
         return StudentSubject.objects.create(
             student=student,
@@ -115,17 +148,39 @@ class JournalTestDataMixin:
         solfeggio = self.create_subject(name='Сольфеджио')
         literature = self.create_subject(name='Музыкальная литература')
         specialty = self.create_subject(name='Специальность', is_specialty=True)
-        teacher = self.create_teacher(full_name='Иванов Иван Иванович', username='teacher_ivanov')
-        other_teacher = self.create_teacher(full_name='Петров Пётр Петрович', username='teacher_petrov')
+
+        teacher = self.create_teacher(
+            full_name='Иванов Иван Иванович',
+            username='teacher_ivanov',
+        )
+        other_teacher = self.create_teacher(
+            full_name='Петров Пётр Петрович',
+            username='teacher_petrov',
+        )
         student = self.create_student(
             full_name='Сидоров Семён Семёнович',
             group=group,
             instrument=instrument,
             username='student_sidorov',
         )
-        GroupSubject.objects.create(group=group, subject=solfeggio, teacher=teacher)
-        GroupSubject.objects.create(group=group, subject=literature, teacher=other_teacher)
-        StudentSubject.objects.create(student=student, subject=specialty, teacher=other_teacher, is_specialty=True)
+
+        GroupSubject.objects.create(
+            group=group,
+            subject=solfeggio,
+            teacher=teacher,
+        )
+        GroupSubject.objects.create(
+            group=group,
+            subject=literature,
+            teacher=other_teacher,
+        )
+        StudentSubject.objects.create(
+            student=student,
+            subject=specialty,
+            teacher=other_teacher,
+            is_specialty=True,
+        )
+
         return {
             'year': year,
             'group': group,
@@ -157,7 +212,11 @@ class JournalTestDataMixin:
 
     def application_form_payload(self, **overrides):
         payload = self.application_payload(**overrides)
-        payload['birth_date'] = payload['birth_date'].isoformat() if hasattr(payload['birth_date'], 'isoformat') else payload['birth_date']
+        birth_date = payload['birth_date']
+
+        if hasattr(birth_date, 'isoformat'):
+            payload['birth_date'] = birth_date.isoformat()
+
         return payload
 
 
@@ -173,13 +232,18 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
 
         first.refresh_from_db()
         second.refresh_from_db()
+
         self.assertFalse(first.is_active)
         self.assertTrue(second.is_active)
 
     def test_group_subject_links_group_subject_and_teacher(self):
         data = self.create_base_journal()
 
-        assignment = GroupSubject.objects.get(group=data['group'], subject=data['solfeggio'])
+        assignment = GroupSubject.objects.get(
+            group=data['group'],
+            subject=data['solfeggio'],
+        )
+
         self.assertEqual(assignment.teacher, data['teacher'])
         self.assertIn(data['solfeggio'], data['group'].subjects.all())
         self.assertEqual(data['teacher'].group_subjects.count(), 1)
@@ -190,7 +254,11 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         teacher = self.create_teacher()
 
         with self.assertRaises(ValidationError):
-            GroupSubject.objects.create(group=group, subject=specialty, teacher=teacher)
+            GroupSubject.objects.create(
+                group=group,
+                subject=specialty,
+                teacher=teacher,
+            )
 
     def test_student_subject_accepts_specialty_subject(self):
         data = self.create_base_journal()
@@ -213,7 +281,10 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
 
     def test_student_can_have_only_one_active_specialty(self):
         data = self.create_base_journal()
-        another_specialty = self.create_subject(name='Специальность 2', is_specialty=True)
+        another_specialty = self.create_subject(
+            name='Специальность 2',
+            is_specialty=True,
+        )
 
         with self.assertRaises(ValidationError):
             StudentSubject.objects.create(
@@ -291,6 +362,7 @@ class GradeModelTests(JournalTestDataMixin, TestCase):
 
     def test_duplicate_grade_for_same_student_subject_and_date_is_rejected(self):
         data = self.create_base_journal()
+
         Grade.objects.create(
             student=data['student'],
             subject=data['solfeggio'],
@@ -318,6 +390,7 @@ class GradeModelTests(JournalTestDataMixin, TestCase):
             date=date(2025, 10, 6),
             value='н',
         )
+
         self.assertEqual(grade.value, 'Н')
 
         with self.assertRaises(ValidationError):
@@ -369,7 +442,12 @@ class SubjectResultModelTests(JournalTestDataMixin, TestCase):
             name='Зачетный предмет',
             final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
         )
-        GroupSubject.objects.create(group=data['group'], subject=pass_fail_subject, teacher=data['teacher'])
+
+        GroupSubject.objects.create(
+            group=data['group'],
+            subject=pass_fail_subject,
+            teacher=data['teacher'],
+        )
 
         result = SubjectResult.objects.create(
             student=data['student'],
@@ -378,6 +456,7 @@ class SubjectResultModelTests(JournalTestDataMixin, TestCase):
             exam_grade='зачет',
             final_grade='незачет',
         )
+
         self.assertEqual(result.exam_grade, 'Зачет')
         self.assertEqual(result.final_grade, 'Незачет')
 
@@ -393,11 +472,18 @@ class SubjectResultModelTests(JournalTestDataMixin, TestCase):
 
 class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
     def test_default_status_is_confirmed_and_creates_journal_records(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            application = CourseApplication.objects.create(**self.application_payload())
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
 
         application.refresh_from_db()
-        credential = TemporaryCredential.objects.get(course_application=application)
+        credential = TemporaryCredential.objects.get(
+            course_application=application,
+        )
         student = Student.objects.get(pk=application.student_id)
         user = User.objects.get(pk=application.user_id)
 
@@ -415,38 +501,59 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertIsNone(application.journal_removed_at)
 
     def test_confirmed_applications_add_suffix_for_duplicate_login(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            first = CourseApplication.objects.create(**self.application_payload())
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            first = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
             second = CourseApplication.objects.create(
-                **self.application_payload(student_phone='+7 (999) 123-45-68')
+                **self.application_payload(
+                    student_phone='+7 (999) 123-45-68',
+                ),
             )
 
         self.assertEqual(first.generated_login, 'Иванов Иван')
         self.assertEqual(second.generated_login, 'Иванов Иван 2')
         self.assertEqual(
-            list(TemporaryCredential.objects.order_by('id').values_list('login', flat=True)),
+            list(
+                TemporaryCredential.objects.order_by('id').values_list(
+                    'login',
+                    flat=True,
+                ),
+            ),
             ['Иванов Иван', 'Иванов Иван 2'],
         )
 
     def test_rejected_application_does_not_create_journal_records(self):
         application = CourseApplication.objects.create(
-            **self.application_payload(status=CourseApplication.STATUS_REJECTED)
+            **self.application_payload(status=CourseApplication.STATUS_REJECTED),
         )
 
         application.refresh_from_db()
+
         self.assertEqual(application.status, CourseApplication.STATUS_REJECTED)
         self.assertIsNone(application.student)
         self.assertIsNone(application.user)
         self.assertEqual(Student.objects.count(), 0)
         self.assertEqual(TemporaryCredential.objects.count(), 0)
 
-    def test_changing_status_to_rejected_removes_student_user_and_temporary_credentials(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            application = CourseApplication.objects.create(**self.application_payload())
+    def test_changing_status_to_rejected_removes_student_user_and_temporary_credentials(
+        self,
+    ):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
 
         login = application.generated_login
         student_id = application.student_id
         user_id = application.user_id
+
         self.assertTrue(Student.objects.filter(pk=student_id).exists())
         self.assertTrue(User.objects.filter(pk=user_id).exists())
         self.assertTrue(TemporaryCredential.objects.filter(login=login).exists())
@@ -466,19 +573,30 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertFalse(TemporaryCredential.objects.filter(login=login).exists())
 
     def test_changing_rejected_application_back_to_confirmed_recreates_records(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            application = CourseApplication.objects.create(**self.application_payload())
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
 
         application.status = CourseApplication.STATUS_REJECTED
         application.save()
         application.refresh_from_db()
 
-        with patch('journal.account_utils.generate_temporary_password', return_value='NewTemp12345!'):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='NewTemp12345!',
+        ):
             application.status = CourseApplication.STATUS_CONFIRMED
             application.save()
 
         application.refresh_from_db()
-        credential = TemporaryCredential.objects.get(course_application=application)
+        credential = TemporaryCredential.objects.get(
+            course_application=application,
+        )
+
         self.assertEqual(application.status, CourseApplication.STATUS_CONFIRMED)
         self.assertIsNotNone(application.student)
         self.assertIsNotNone(application.user)
@@ -489,11 +607,17 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertIsNone(application.journal_removed_at)
 
     def test_deleting_application_removes_created_journal_records(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            application = CourseApplication.objects.create(**self.application_payload())
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
 
         user_id = application.user_id
         student_id = application.student_id
+
         application.delete()
 
         self.assertEqual(CourseApplication.objects.count(), 0)
@@ -511,34 +635,50 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
                     first_name='Пётр',
                     middle_name='Петрович',
                     student_phone='8 999 123 45 67',
-                )
+                ),
             )
 
 
 class FormTests(JournalTestDataMixin, TestCase):
     def test_public_course_application_form_hides_status_and_normalizes_phone(self):
-        form = CourseApplicationPublicForm(data=self.application_form_payload(student_phone='8 999 123 45 67'))
+        form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                student_phone='8 999 123 45 67',
+            ),
+        )
 
         self.assertNotIn('status', form.fields)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data['student_phone'], '+7 (999) 123-45-67')
 
     def test_admin_course_application_form_includes_status(self):
-        form = CourseApplicationAdminForm(data=self.application_form_payload(status=CourseApplication.STATUS_REJECTED))
+        form = CourseApplicationAdminForm(
+            data=self.application_form_payload(
+                status=CourseApplication.STATUS_REJECTED,
+            ),
+        )
 
         self.assertIn('status', form.fields)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data['status'], CourseApplication.STATUS_REJECTED)
 
     def test_public_course_application_form_enforces_age_limit(self):
-        too_young_birth_date = date.today().replace(year=date.today().year - 10).isoformat()
-        form = CourseApplicationPublicForm(data=self.application_form_payload(birth_date=too_young_birth_date))
+        too_young_birth_date = date.today().replace(
+            year=date.today().year - 10,
+        ).isoformat()
+
+        form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                birth_date=too_young_birth_date,
+            ),
+        )
 
         self.assertFalse(form.is_valid())
         self.assertIn('birth_date', form.errors)
 
     def test_grade_form_accepts_only_assigned_teacher_for_student_subject(self):
         data = self.create_base_journal()
+
         form = GradeCreateForm(
             data={
                 'student': data['student'].pk,
@@ -548,8 +688,9 @@ class FormTests(JournalTestDataMixin, TestCase):
                 'date': '2025-10-10',
                 'value': '5',
                 'comment': '',
-            }
+            },
         )
+
         self.assertTrue(form.is_valid(), form.errors)
 
         invalid_form = GradeCreateForm(
@@ -561,13 +702,18 @@ class FormTests(JournalTestDataMixin, TestCase):
                 'date': '2025-10-10',
                 'value': '5',
                 'comment': '',
-            }
+            },
         )
+
         self.assertFalse(invalid_form.is_valid())
-        self.assertIn('Этот преподаватель не назначен выбранному ученику', str(invalid_form.errors))
+        self.assertIn(
+            'Этот преподаватель не назначен выбранному ученику',
+            str(invalid_form.errors),
+        )
 
     def test_grade_form_with_fixed_teacher_removes_teacher_field(self):
         data = self.create_base_journal()
+
         form = GradeCreateForm(
             teacher=data['teacher'],
             group=data['group'],
@@ -581,6 +727,7 @@ class FormTests(JournalTestDataMixin, TestCase):
 
     def test_subject_result_form_validates_allowed_subject_and_grade_type(self):
         data = self.create_base_journal()
+
         form = SubjectResultForm(
             data={
                 'student': data['student'].pk,
@@ -588,15 +735,22 @@ class FormTests(JournalTestDataMixin, TestCase):
                 'academic_year': data['year'].pk,
                 'exam_grade': '5',
                 'final_grade': '4',
-            }
+            },
         )
+
         self.assertTrue(form.is_valid(), form.errors)
 
         pass_fail_subject = self.create_subject(
             name='Зачетный предмет',
             final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
         )
-        GroupSubject.objects.create(group=data['group'], subject=pass_fail_subject, teacher=data['teacher'])
+
+        GroupSubject.objects.create(
+            group=data['group'],
+            subject=pass_fail_subject,
+            teacher=data['teacher'],
+        )
+
         invalid_form = SubjectResultForm(
             data={
                 'student': data['student'].pk,
@@ -604,14 +758,21 @@ class FormTests(JournalTestDataMixin, TestCase):
                 'academic_year': data['year'].pk,
                 'exam_grade': '5',
                 'final_grade': '5',
-            }
+            },
         )
+
         self.assertFalse(invalid_form.is_valid())
         self.assertIn('Недопустимое значение', str(invalid_form.errors))
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
-    def test_detailed_password_change_form_has_no_old_password_field_and_saves_new_password(self):
-        user = User.objects.create_user(username='password_user', password='OldPass12345!')
+    def test_detailed_password_change_form_has_no_old_password_field_and_saves_new_password(
+        self,
+    ):
+        user = User.objects.create_user(
+            username='password_user',
+            password='OldPass12345!',
+        )
+
         form = DetailedPasswordChangeForm(
             user,
             data={
@@ -622,13 +783,19 @@ class FormTests(JournalTestDataMixin, TestCase):
 
         self.assertNotIn('old_password', form.fields)
         self.assertTrue(form.is_valid(), form.errors)
+
         form.save()
         user.refresh_from_db()
+
         self.assertTrue(user.check_password('NewPass12345!'))
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
     def test_detailed_password_change_form_rejects_unchanged_password(self):
-        user = User.objects.create_user(username='password_user', password='SamePass12345!')
+        user = User.objects.create_user(
+            username='password_user',
+            password='SamePass12345!',
+        )
+
         form = DetailedPasswordChangeForm(
             user,
             data={
@@ -638,7 +805,10 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertFalse(form.is_valid())
-        self.assertIn('Новый пароль не должен совпадать со старым.', str(form.errors))
+        self.assertIn(
+            'Новый пароль не должен совпадать со старым.',
+            str(form.errors),
+        )
 
 
 class SelectorHelperTests(JournalTestDataMixin, TestCase):
@@ -646,12 +816,20 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
         data = self.create_base_journal()
 
         allowed_subjects = get_student_allowed_subjects(data['student'])
+
         self.assertIn(data['solfeggio'], allowed_subjects)
         self.assertIn(data['literature'], allowed_subjects)
         self.assertIn(data['specialty'], allowed_subjects)
 
-        solfeggio_teachers = get_student_subject_teachers(data['student'], data['solfeggio'])
-        specialty_teachers = get_student_subject_teachers(data['student'], data['specialty'])
+        solfeggio_teachers = get_student_subject_teachers(
+            data['student'],
+            data['solfeggio'],
+        )
+        specialty_teachers = get_student_subject_teachers(
+            data['student'],
+            data['specialty'],
+        )
+
         self.assertEqual(list(solfeggio_teachers), [data['teacher']])
         self.assertEqual(list(specialty_teachers), [data['other_teacher']])
 
@@ -672,7 +850,10 @@ class ViewTests(JournalTestDataMixin, TestCase):
     def test_teacher_can_open_journal_only_with_assigned_data(self):
         self.client.login(username='teacher_ivanov', password='Pass12345!')
 
-        response = self.client.get(reverse('journal'), {'group': self.data['group'].pk})
+        response = self.client.get(
+            reverse('journal'),
+            {'group': self.data['group'].pk},
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Сольфеджио')
@@ -683,7 +864,13 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
         response = self.client.post(
             reverse('journal'),
-            data={'action': 'inline_edit', f'grade__{self.data["solfeggio"].pk}__{self.data["student"].pk}__2025-10-15': '5'},
+            data={
+                'action': 'inline_edit',
+                (
+                    f'grade__{self.data["solfeggio"].pk}__'
+                    f'{self.data["student"].pk}__2025-10-15'
+                ): '5',
+            },
         )
 
         self.assertEqual(response.status_code, 302)
@@ -714,14 +901,17 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 teacher=self.data['teacher'],
                 date=date(2025, 10, 16),
                 value='5',
-            ).exists()
+            ).exists(),
         )
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
-    def test_password_change_view_uses_set_password_form_without_old_password(self):
+    def test_password_change_view_uses_set_password_form_without_old_password(
+        self,
+    ):
         self.client.login(username='teacher_ivanov', password='Pass12345!')
 
         get_response = self.client.get(reverse('password_change'))
+
         self.assertEqual(get_response.status_code, 200)
         self.assertNotContains(get_response, 'name="old_password"')
         self.assertContains(get_response, 'name="new_password1"')
@@ -734,18 +924,37 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 'new_password2': 'NewPass12345!',
             },
         )
+
         self.assertEqual(post_response.status_code, 302)
+
         self.client.logout()
-        self.assertTrue(self.client.login(username='teacher_ivanov', password='NewPass12345!'))
+
+        self.assertTrue(
+            self.client.login(
+                username='teacher_ivanov',
+                password='NewPass12345!',
+            ),
+        )
 
 
 class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
     def setUp(self):
-        CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='https://t.me/test_group')
+        CourseRegistrationSettings.objects.create(
+            pk=1,
+            telegram_group_url='https://t.me/test_group',
+        )
 
-    def test_registration_page_creates_confirmed_application_and_shows_credentials(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            response = self.client.post(reverse('course_registration'), data=self.application_form_payload())
+    def test_registration_page_creates_confirmed_application_and_shows_credentials(
+        self,
+    ):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            response = self.client.post(
+                reverse('course_registration'),
+                data=self.application_form_payload(),
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(CourseApplication.objects.count(), 1)
@@ -754,24 +963,41 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Иванов Иван')
         self.assertContains(response, 'Temp12345!')
 
-    def test_registration_page_rejects_duplicate_phone_without_second_application(self):
+    def test_registration_page_rejects_duplicate_phone_without_second_application(
+        self,
+    ):
         CourseApplication.objects.create(**self.application_payload())
 
         response = self.client.post(
             reverse('course_registration'),
-            data=self.application_form_payload(last_name='Петров', first_name='Пётр', student_phone='8 999 123 45 67'),
+            data=self.application_form_payload(
+                last_name='Петров',
+                first_name='Пётр',
+                student_phone='8 999 123 45 67',
+            ),
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(CourseApplication.objects.count(), 1)
-        self.assertIn('Ученик с таким номером телефона уже зарегистрирован.', response.content.decode('utf-8'))
+        self.assertIn(
+            'Ученик с таким номером телефона уже зарегистрирован.',
+            response.content.decode('utf-8'),
+        )
 
     def test_registration_api_returns_generated_credentials(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            response = self.client.post(reverse('course_registration_api'), data=self.application_form_payload())
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            response = self.client.post(
+                reverse('course_registration_api'),
+                data=self.application_form_payload(),
+            )
 
         self.assertEqual(response.status_code, 201)
+
         payload = response.json()
+
         self.assertTrue(payload['success'])
         self.assertEqual(payload['status'], CourseApplication.STATUS_CONFIRMED)
         self.assertEqual(payload['status_display'], 'Подтверждена')
@@ -783,7 +1009,11 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
 
         response = self.client.post(
             reverse('course_registration_api'),
-            data=self.application_form_payload(last_name='Петров', first_name='Пётр', student_phone='8 999 123 45 67'),
+            data=self.application_form_payload(
+                last_name='Петров',
+                first_name='Пётр',
+                student_phone='8 999 123 45 67',
+            ),
         )
 
         self.assertEqual(response.status_code, 400)
@@ -792,43 +1022,75 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertEqual(CourseApplication.objects.count(), 1)
 
 
-class ExportStudentCredentialsXlsxTests(JournalTestDataMixin, TestCase):
+class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
     def setUp(self):
         self.admin_user = User.objects.create_superuser(
             username='admin_xlsx',
             password='Pass12345!',
             email='admin-xlsx@example.com',
         )
-        self.regular_user = User.objects.create_user(username='regular_xlsx', password='Pass12345!')
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
-            self.application = CourseApplication.objects.create(**self.application_payload())
+        self.regular_user = User.objects.create_user(
+            username='regular_xlsx',
+            password='Pass12345!',
+        )
 
-    def test_superuser_can_download_xlsx(self):
+        self.teacher_group = Group.objects.create(name='Преподаватель')
+        self.student_group = Group.objects.create(name='Ученик')
+
+        self.teacher_user = User.objects.create_user(
+            username='teacher_export',
+            password='Pass12345!',
+        )
+        self.teacher_user.groups.add(self.teacher_group)
+
+        self.student_user = User.objects.create_user(
+            username='student_export',
+            password='Pass12345!',
+        )
+        self.student_user.groups.add(self.student_group)
+
+        TemporaryCredential.objects.create(
+            login='teacher_export',
+            temporary_password='TeacherTemp123!',
+        )
+        TemporaryCredential.objects.create(
+            login='student_export',
+            temporary_password='StudentTemp123!',
+        )
+
+    def test_superuser_can_download_temporary_credentials_xlsx(self):
         self.client.login(username='admin_xlsx', password='Pass12345!')
 
-        response = self.client.get(reverse('export_student_credentials_xlsx'))
+        response = self.client.get(reverse('admin_export_test_credentials_excel'))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response['Content-Type'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
+
         with ZipFile(BytesIO(response.content)) as archive:
-            sheet = archive.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            shared_strings = archive.read('xl/sharedStrings.xml').decode('utf-8')
 
-        self.assertIn('Логин', sheet)
-        self.assertIn('Временный пароль', sheet)
-        self.assertIn('Телефон ученика', sheet)
-        self.assertIn('Заявка', sheet)
-        self.assertIn('Иванов Иван', sheet)
-        self.assertIn('Temp12345!', sheet)
-        self.assertIn('+7 (999) 123-45-67', sheet)
-        self.assertIn('Иванов Иван Иванович', sheet)
+        self.assertIn('Логин', shared_strings)
+        self.assertIn('Пароль', shared_strings)
+        self.assertIn('Роль', shared_strings)
 
-    def test_regular_user_cannot_download_xlsx(self):
+        self.assertIn('teacher_export', shared_strings)
+        self.assertIn('TeacherTemp123!', shared_strings)
+        self.assertIn('Преподаватель', shared_strings)
+
+        self.assertIn('student_export', shared_strings)
+        self.assertIn('StudentTemp123!', shared_strings)
+        self.assertIn('Ученик', shared_strings)
+
+        self.assertNotIn('Телефон ученика', shared_strings)
+        self.assertNotIn('Заявка', shared_strings)
+
+    def test_regular_user_cannot_download_temporary_credentials_xlsx(self):
         self.client.login(username='regular_xlsx', password='Pass12345!')
 
-        response = self.client.get(reverse('export_student_credentials_xlsx'))
+        response = self.client.get(reverse('admin_export_test_credentials_excel'))
 
         self.assertEqual(response.status_code, 302)
 
@@ -842,13 +1104,30 @@ class AccountUtilityTests(JournalTestDataMixin, TestCase):
     def test_display_name_for_user_prefers_student_profile(self):
         group = self.create_group()
         instrument = self.create_instrument()
-        user = User.objects.create_user(username='tempuser', password='Pass12345!', first_name='Иван', last_name='Иванов')
-        Student.objects.create(full_name='Иван Иванов', group=group, instrument=instrument, user=user)
+        user = User.objects.create_user(
+            username='tempuser',
+            password='Pass12345!',
+            first_name='Иван',
+            last_name='Иванов',
+        )
+
+        Student.objects.create(
+            full_name='Иван Иванов',
+            group=group,
+            instrument=instrument,
+            user=user,
+        )
 
         self.assertEqual(display_name_for_user(user), 'Иванов Иван')
 
     def test_display_name_for_user_prefers_teacher_profile(self):
-        user = User.objects.create_user(username='teacher_user', password='Pass12345!', first_name='Иван', last_name='Иванов')
+        user = User.objects.create_user(
+            username='teacher_user',
+            password='Pass12345!',
+            first_name='Иван',
+            last_name='Иванов',
+        )
+
         Teacher.objects.create(full_name='Пётр Петров', user=user)
 
         self.assertEqual(display_name_for_user(user), 'Петров Пётр')
@@ -871,43 +1150,115 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(SubjectResult.objects.exists())
         self.assertTrue(CourseApplication.objects.exists())
 
+    def test_seed_data_assigns_user_roles(self):
+        call_command('seed_data', stdout=StringIO())
+
+        self.assertTrue(Group.objects.filter(name='Администратор').exists())
+        self.assertTrue(Group.objects.filter(name='Преподаватель').exists())
+        self.assertTrue(Group.objects.filter(name='Ученик').exists())
+
+        teacher = Teacher.objects.select_related('user').first()
+        student = Student.objects.select_related('user').first()
+
+        self.assertIsNotNone(teacher)
+        self.assertIsNotNone(student)
+
+        self.assertTrue(
+            teacher.user.groups.filter(name='Преподаватель').exists(),
+        )
+        self.assertTrue(
+            student.user.groups.filter(name='Ученик').exists(),
+        )
+
+    def test_seed_data_preserves_existing_admin_credentials(self):
+        admin_user = User.objects.create_superuser(
+            username='existing_admin',
+            password='OriginalPass123!',
+            email='existing-admin@example.com',
+        )
+
+        call_command('seed_data', stdout=StringIO())
+
+        admin_user.refresh_from_db()
+
+        self.assertTrue(User.objects.filter(username='existing_admin').exists())
+        self.assertTrue(admin_user.check_password('OriginalPass123!'))
+        self.assertTrue(admin_user.is_staff)
+        self.assertTrue(admin_user.is_superuser)
+        self.assertTrue(
+            admin_user.groups.filter(name='Администратор').exists(),
+        )
+
+    def test_seed_data_can_be_run_twice_without_duplicate_settings_error(self):
+        call_command('seed_data', stdout=StringIO())
+        call_command('seed_data', stdout=StringIO())
+
+        self.assertEqual(
+            CourseRegistrationSettings.objects.filter(pk=1).count(),
+            1,
+        )
+        self.assertTrue(Student.objects.exists())
+        self.assertTrue(Teacher.objects.exists())
+
 
 class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
     """
     Эти тесты можно оставить, если в проекте сохранены management-команды
     export_temporary_credentials и export_student_credentials_with_phone.
+
     Если команды удалены, удалите этот класс из tests.py.
     """
 
-    def test_export_temporary_credentials_command_outputs_csv_if_command_exists(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
+    def test_export_temporary_credentials_command_outputs_csv_if_command_exists(
+        self,
+    ):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
             CourseApplication.objects.create(**self.application_payload())
 
         output = StringIO()
+
         try:
             call_command('export_temporary_credentials', stdout=output)
-        except Exception as exc:  # pragma: no cover - защитный режим для проектов без этой команды
+        except Exception as exc:  # pragma: no cover
             if exc.__class__.__name__ == 'CommandError':
-                self.skipTest('Команда export_temporary_credentials не найдена в проекте.')
+                self.skipTest(
+                    'Команда export_temporary_credentials не найдена в проекте.',
+                )
             raise
 
         csv_output = output.getvalue()
+
         self.assertIn('login', csv_output)
         self.assertIn('temporary_password', csv_output)
         self.assertIn('Иванов Иван', csv_output)
         self.assertIn('Temp12345!', csv_output)
 
-    def test_export_student_credentials_with_phone_command_outputs_csv_if_command_exists(self):
-        with patch('journal.account_utils.generate_temporary_password', return_value='Temp12345!'):
+    def test_export_student_credentials_with_phone_command_outputs_csv_if_command_exists(
+        self,
+    ):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
             CourseApplication.objects.create(**self.application_payload())
 
         with TemporaryDirectory() as tmp_dir:
             output_path = Path(tmp_dir) / 'export.csv'
+
             try:
-                call_command('export_student_credentials_with_phone', output=str(output_path))
-            except Exception as exc:  # pragma: no cover - защитный режим для проектов без этой команды
+                call_command(
+                    'export_student_credentials_with_phone',
+                    output=str(output_path),
+                )
+            except Exception as exc:  # pragma: no cover
                 if exc.__class__.__name__ == 'CommandError':
-                    self.skipTest('Команда export_student_credentials_with_phone не найдена в проекте.')
+                    self.skipTest(
+                        'Команда export_student_credentials_with_phone '
+                        'не найдена в проекте.',
+                    )
                 raise
 
             csv_output = output_path.read_text(encoding='utf-8')

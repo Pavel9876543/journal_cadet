@@ -140,11 +140,7 @@ def build_temporary_credentials_workbook() -> Workbook:
         'Роль',
     ])
 
-    queryset = (
-        TemporaryCredential.objects
-        .select_related('user')
-        .order_by('id')
-    )
+    queryset = TemporaryCredential.objects.order_by('id')
 
     for credential in queryset:
         worksheet.append([
@@ -188,22 +184,22 @@ def get_credential_role(credential: TemporaryCredential) -> str:
     Возвращает роль пользователя.
 
     Роль берется:
-    1. из групп Django, если TemporaryCredential связан с user;
-    2. из признаков is_superuser/is_staff;
-    3. пустой строкой, если роль определить нельзя.
+    1. по логину из связанного User;
+    2. из групп Django;
+    3. из признаков is_superuser/is_staff;
+    4. если роль определить нельзя — возвращается пустая строка.
     """
-    user = getattr(credential, 'user', None)
+    login = get_credential_login(credential)
 
-    if user is None:
-        login = get_credential_login(credential)
+    if not login:
+        return ''
 
-        if login:
-            user = (
-                get_user_model()
-                .objects
-                .filter(username=login)
-                .first()
-            )
+    user = (
+        get_user_model()
+        .objects
+        .filter(username=login)
+        .first()
+    )
 
     if user is None:
         return ''
