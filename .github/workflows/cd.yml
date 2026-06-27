@@ -15,7 +15,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: production
 
     steps:
@@ -29,27 +29,136 @@ jobs:
           script_stop: true
           script: |
             set -e
+
             APP_DIR="${{ vars.APP_DIR || '/opt/cadet_journal' }}"
             REPO_CLONE_URL="${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}"
 
-            sudo mkdir -p "$APP_DIR"
-            if [ ! -w "$APP_DIR" ]; then
-              sudo chown -R "$USER":"$USER" "$APP_DIR"
+            echo "=== Проверка прав пользователя ==="
+
+            if [ "$(id -u)" -eq 0 ]; then
+              SUDO=""
+            else
+              if ! command -v sudo >/dev/null 2>&1; then
+                echo "Ошибка: пользователь не root и sudo не установлен."
+                echo "Зайдите на сервер под root или установите sudo."
+                exit 1
+              fi
+
+              if ! sudo -n true >/dev/null 2>&1; then
+                echo "Ошибка: пользователю нужен sudo без интерактивного ввода пароля."
+                echo "Решение: используйте SSH_USER=root или настройте NOPASSWD для deploy-пользователя."
+                exit 1
+              fi
+
+              SUDO="sudo -n"
             fi
+
+            echo "=== Установка базовых зависимостей ==="
+
+            if command -v apt-get >/dev/null 2>&1; then
+              export DEBIAN_FRONTEND=noninteractive
+
+              $SUDO apt-get update -y
+              $SUDO apt-get install -y \
+                ca-certificates \
+                curl \
+                gnupg \
+                git \
+                lsb-release
+            else
+              echo "Ошибка: этот workflow сейчас поддерживает только Debian/Ubuntu серверы с apt-get."
+              exit 1
+            fi
+
+            echo "=== Проверка Docker ==="
+
+            if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+              echo "Docker или Docker Compose plugin не найдены. Устанавливаю..."
+
+              $SUDO install -m 0755 -d /etc/apt/keyrings
+
+              if [ -f /etc/apt/keyrings/docker.gpg ]; then
+                $SUDO rm -f /etc/apt/keyrings/docker.gpg
+              fi
+
+              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+                $SUDO gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+              $SUDO chmod a+r /etc/apt/keyrings/docker.gpg
+
+              . /etc/os-release
+
+              DOCKER_DISTRO="ubuntu"
+              DOCKER_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+
+              if [ -z "$DOCKER_CODENAME" ]; then
+                echo "Ошибка: не удалось определить codename системы."
+                exit 1
+              fi
+
+              echo \
+                "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${DOCKER_DISTRO} ${DOCKER_CODENAME} stable" | \
+                $SUDO tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+              $SUDO apt-get update -y
+              $SUDO apt-get install -y \
+                docker-ce \
+                docker-ce-cli \
+                containerd.io \
+                docker-buildx-plugin \
+                docker-compose-plugin
+
+              $SUDO systemctl enable docker
+              $SUDO systemctl start docker
+
+              if [ "$(id -u)" -ne 0 ]; then
+                $SUDO usermod -aG docker "$USER" || true
+              fi
+            else
+              echo "Docker уже установлен."
+            fi
+
+            echo "=== Версии Docker ==="
+
+            if docker --version >/dev/null 2>&1; then
+              docker --version
+            else
+              $SUDO docker --version
+            fi
+
+            if docker compose version >/dev/null 2>&1; then
+              docker compose version
+            else
+              $SUDO docker compose version
+            fi
+
+            echo "=== Подготовка директории приложения ==="
+
+            $SUDO mkdir -p "$APP_DIR"
+
+            if [ ! -w "$APP_DIR" ]; then
+              $SUDO chown -R "$USER":"$USER" "$APP_DIR"
+            fi
+
+            echo "=== Получение кода проекта ==="
 
             if [ ! -d "$APP_DIR/.git" ]; then
               git clone "$REPO_CLONE_URL" "$APP_DIR"
             elif [ ! -w "$APP_DIR/.git" ]; then
-              sudo chown -R "$USER":"$USER" "$APP_DIR"
+              $SUDO chown -R "$USER":"$USER" "$APP_DIR"
             fi
 
             cd "$APP_DIR"
+
             git config --global --add safe.directory "$APP_DIR"
             git fetch origin
             git checkout main
             git pull --ff-only origin main
 
+            echo "=== Создание .env.prod ==="
+
             : > .env.prod
+
             printf '%s\n' \
               "DEBUG=0" \
               "SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" \
@@ -72,5 +181,18 @@ jobs:
               "APP_IMAGE=cadet-journal:web" >> .env.prod
 
             chmod 600 .env.prod
+
+            echo "=== Запуск production-стека ==="
+
+            chmod +x ./scripts/run-prod.sh
             ./scripts/run-prod.sh
-            docker image prune -f
+
+            echo "=== Очистка старых Docker-образов ==="
+
+            if docker image prune -f >/dev/null 2>&1; then
+              echo "Docker image prune выполнен."
+            else
+              $SUDO docker image prune -f
+            fi
+
+            echo "=== Деплой завершён успешно ==="

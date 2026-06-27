@@ -3,13 +3,18 @@ from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
 from journal.forms import DetailedPasswordChangeForm, SiteAuthenticationForm
-from journal.views import export_student_credentials_xlsx
+from journal.views import export_student_credentials_xlsx, export_all_data_excel
 
 urlpatterns = [
     path(
         'admin/student-credentials/export.xlsx',
         export_student_credentials_xlsx,
         name='export_student_credentials_xlsx',
+    ),
+    path(
+        'admin/export-all-data.xlsx',
+        export_all_data_excel,
+        name='admin_export_all_data_excel',
     ),
     path('admin/', admin.site.urls),
     path(

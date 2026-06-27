@@ -18,6 +18,14 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from urllib.parse import quote
+
+from django.contrib.admin.views.decorators import staff_member_required
+from django.http import HttpResponse
+from django.utils import timezone
+
+from .services.excel_export import build_full_export_workbook
+
 from .forms import (
     CourseApplicationPublicForm,
     GradeCreateForm,
@@ -1103,4 +1111,24 @@ def export_student_credentials_xlsx(request):
     )
     filename = f'student_credentials_{timezone.localdate():%Y_%m_%d}.xlsx'
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+@staff_member_required
+def export_all_data_excel(request):
+    workbook = build_full_export_workbook()
+
+    now = timezone.localtime()
+    filename = f'journal_export_{now:%Y-%m-%d_%H-%M}.xlsx'
+    encoded_filename = quote(filename)
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+    response['Content-Disposition'] = (
+        f"attachment; filename={filename}; filename*=UTF-8''{encoded_filename}"
+    )
+
+    workbook.save(response)
+
     return response

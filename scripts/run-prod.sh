@@ -5,6 +5,20 @@ cd "$(dirname "$0")/.."
 
 ./scripts/ensure-env-files.sh .env.prod
 
-docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans
+if docker info >/dev/null 2>&1; then
+  DOCKER_CMD=(docker)
+elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+  DOCKER_CMD=(sudo -n docker)
+else
+  echo "Ошибка: Docker недоступен для текущего пользователя."
+  echo "Проверьте установку Docker или права пользователя."
+  exit 1
+fi
+
+"${DOCKER_CMD[@]}" compose \
+  --env-file .env.prod \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  up -d --build --remove-orphans
 
 echo "Продакшен-стек собран и запущен."

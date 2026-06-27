@@ -49,6 +49,19 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+JAZZMIN_SETTINGS = {
+    'custom_links': {
+        'journal': [
+            {
+                'name': 'Выгрузить все данные в Excel',
+                'url': 'admin_export_all_data_excel',
+                'icon': 'fas fa-file-excel',
+                'permissions': ['auth.view_user'],
+            },
+        ],
+    },
+}
+
 HAS_WHITENOISE = find_spec('whitenoise') is not None
 if HAS_WHITENOISE:
     MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
