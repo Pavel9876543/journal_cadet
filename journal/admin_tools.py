@@ -5,6 +5,7 @@ from io import BytesIO
 from urllib.parse import quote
 
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.admin.views.decorators import staff_member_required
 from django.core.management import call_command
 from django.core.exceptions import PermissionDenied
@@ -123,60 +124,106 @@ def build_temporary_credentials_workbook() -> Workbook:
     """
     Создает Excel-файл с временными учетными данными.
 
-    Используется универсальный обход полей модели, чтобы экспорт не ломался,
-    если в TemporaryCredential появятся новые поля.
+    В выгрузку попадают только данные, которые нужны для выдачи пользователям:
+    - логин;
+    - временный пароль;
+    - роль пользователя.
     """
     workbook = Workbook()
 
     worksheet = workbook.active
     worksheet.title = 'Временные доступы'
 
-    fields = get_export_fields(TemporaryCredential)
+    worksheet.append([
+        'Логин',
+        'Пароль',
+        'Роль',
+    ])
 
-    headers = [
-        field.verbose_name or field.name
-        for field in fields
-    ]
-
-    worksheet.append(headers)
-
-    queryset = TemporaryCredential.objects.all().order_by('id')
-
-    related_field_names = [
-        field.name
-        for field in fields
-        if getattr(field, 'is_relation', False)
-        and (
-            getattr(field, 'many_to_one', False)
-            or getattr(field, 'one_to_one', False)
-        )
-    ]
-
-    if related_field_names:
-        queryset = queryset.select_related(*related_field_names)
+    queryset = (
+        TemporaryCredential.objects
+        .select_related('user')
+        .order_by('id')
+    )
 
     for credential in queryset:
         worksheet.append([
-            field_value(credential, field)
-            for field in fields
+            get_credential_login(credential),
+            get_credential_password(credential),
+            get_credential_role(credential),
         ])
 
     format_sheet(worksheet)
 
-    description_sheet = workbook.create_sheet('Описание', 0)
-    now = timezone.localtime()
-
-    description_sheet.append(['Файл', 'Временные учетные данные учеников'])
-    description_sheet.append(['Дата выгрузки', now.strftime('%d.%m.%Y %H:%M:%S')])
-    description_sheet.append(['Количество записей', TemporaryCredential.objects.count()])
-    description_sheet.append([
-        'Важно',
-        'Файл может содержать временные пароли. Хранить осторожно.',
-    ])
-
-    format_sheet(description_sheet)
-
     return workbook
+
+def get_credential_login(credential: TemporaryCredential) -> str:
+    """
+    Возвращает логин из временных учетных данных.
+
+    Поддерживает разные варианты названия поля,
+    чтобы экспорт не ломался при изменениях модели.
+    """
+    return (
+        getattr(credential, 'login', None)
+        or getattr(credential, 'username', None)
+        or getattr(getattr(credential, 'user', None), 'username', None)
+        or ''
+    )
+
+
+def get_credential_password(credential: TemporaryCredential) -> str:
+    """
+    Возвращает временный пароль из временных учетных данных.
+    """
+    return (
+        getattr(credential, 'temporary_password', None)
+        or getattr(credential, 'password', None)
+        or ''
+    )
+
+
+def get_credential_role(credential: TemporaryCredential) -> str:
+    """
+    Возвращает роль пользователя.
+
+    Роль берется:
+    1. из групп Django, если TemporaryCredential связан с user;
+    2. из признаков is_superuser/is_staff;
+    3. пустой строкой, если роль определить нельзя.
+    """
+    user = getattr(credential, 'user', None)
+
+    if user is None:
+        login = get_credential_login(credential)
+
+        if login:
+            user = (
+                get_user_model()
+                .objects
+                .filter(username=login)
+                .first()
+            )
+
+    if user is None:
+        return ''
+
+    group_names = list(
+        user.groups
+        .order_by('name')
+        .values_list('name', flat=True)
+    )
+
+    if group_names:
+        return ', '.join(group_names)
+
+    if user.is_superuser:
+        return 'Администратор'
+
+    if user.is_staff:
+        return 'Преподаватель'
+
+    return 'Ученик'
 
 
 def get_export_fields(model):
