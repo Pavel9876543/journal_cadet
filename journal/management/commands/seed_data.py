@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from csv import writer
 from datetime import date, timedelta
 from pathlib import Path
@@ -62,7 +63,6 @@ class Command(BaseCommand):
         subjects = self._create_subjects()
         groups = self._create_groups(academic_year)
 
-        self._create_admin_user()
         teachers = self._create_teachers(subjects)
         self._create_group_subjects(groups, subjects, teachers)
         students = self._create_students(groups, instruments, subjects, teachers)
@@ -88,26 +88,79 @@ class Command(BaseCommand):
             f'временных учетных данных: {TemporaryCredential.objects.count()}'
         )
 
-    def _clear_database(self) -> None:
+    def _clear_database(self):
         """
-        Очищает учебные данные в порядке, безопасном для PROTECT-связей.
-        QuerySet.delete() не вызывает кастомный CourseApplication.delete(), поэтому удаляем всё явно.
+        Очищает только тестовые данные журнала.
+
+        Важно:
+        - суперпользователи не удаляются;
+        - staff-пользователи не удаляются;
+        - пользователь из DJANGO_SUPERUSER_USERNAME не удаляется;
+        - вручную созданные админы сохраняются;
+        - временные учетные данные учеников удаляются;
+        - тестовые ученики и преподаватели удаляются вместе с их User-аккаунтами,
+          но только если эти аккаунты не являются staff/superuser.
         """
+        User = get_user_model()
+
+        admin_username = os.getenv('DJANGO_SUPERUSER_USERNAME')
+
+        protected_users = User.objects.filter(
+            is_superuser=True,
+        )
+
+        protected_user_ids = set(
+            protected_users.values_list('id', flat=True),
+        )
+
+        protected_user_ids.update(
+            User.objects.filter(is_staff=True).values_list('id', flat=True),
+        )
+
+        if admin_username:
+            protected_user_ids.update(
+                User.objects.filter(username=admin_username).values_list('id', flat=True),
+            )
+
+        # Сначала удаляем зависимые учебные данные.
         TemporaryCredential.objects.all().delete()
-        Grade.objects.all().delete()
+        CourseApplication.objects.all().delete()
         SubjectResult.objects.all().delete()
+        Grade.objects.all().delete()
         StudentSubject.objects.all().delete()
         GroupSubject.objects.all().delete()
         TeacherSubject.objects.all().delete()
-        CourseApplication.objects.all().delete()
+
+        # Запоминаем пользователей учеников и преподавателей,
+        # чтобы удалить только неадминские аккаунты.
+        student_user_ids = set(
+            Student.objects.exclude(user_id__in=protected_user_ids)
+            .exclude(user__isnull=True)
+            .values_list('user_id', flat=True)
+        )
+
+        teacher_user_ids = set(
+            Teacher.objects.exclude(user_id__in=protected_user_ids)
+            .exclude(user__isnull=True)
+            .values_list('user_id', flat=True)
+        )
+
+        users_to_delete_ids = student_user_ids | teacher_user_ids
+
+        # Удаляем учебные профили.
         Student.objects.all().delete()
         Teacher.objects.all().delete()
+
+        # Удаляем только обычных пользователей, созданных для тестовых учеников/преподавателей.
+        User.objects.filter(id__in=users_to_delete_ids).exclude(
+            id__in=protected_user_ids,
+        ).delete()
+
+        # Очищаем справочники.
         StudyGroup.objects.all().delete()
         Subject.objects.all().delete()
         Instrument.objects.all().delete()
         AcademicYear.objects.all().delete()
-        CourseRegistrationSettings.objects.all().delete()
-        self.UserModel.objects.all().delete()
 
     def _create_current_academic_year(self) -> AcademicYear:
         today = timezone.localdate()
@@ -175,20 +228,6 @@ class Command(BaseCommand):
             )
             for name in group_names
         }
-
-    def _create_admin_user(self) -> None:
-        password = generate_temporary_password()
-        admin_user = self.UserModel.objects.create_user(
-            username='admin',
-            email='admin@example.com',
-            password=password,
-        )
-        admin_user.is_staff = True
-        admin_user.is_superuser = True
-        admin_user.save(update_fields=['is_staff', 'is_superuser'])
-
-        self.used_usernames.add(admin_user.username)
-        self._add_credentials('admin', 'Администратор', admin_user.username, password)
 
     def _create_teachers(self, subjects: dict[str, Subject]) -> dict[str, Teacher]:
         teacher_specs = [

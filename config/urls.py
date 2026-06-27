@@ -5,7 +5,28 @@ from django.urls import include, path
 from journal.forms import DetailedPasswordChangeForm, SiteAuthenticationForm
 from journal.views import export_student_credentials_xlsx, export_all_data_excel
 
+from journal.admin_tools import (
+    admin_data_tools_view,
+    admin_export_test_credentials_excel_view,
+    admin_seed_test_data_view,
+)
+
 urlpatterns = [
+    path(
+        'admin/journal/data-tools/',
+        admin_data_tools_view,
+        name='admin_data_tools',
+    ),
+    path(
+        'admin/journal/data-tools/seed/',
+        admin_seed_test_data_view,
+        name='admin_seed_test_data',
+    ),
+    path(
+        'admin/journal/data-tools/export-credentials.xlsx',
+        admin_export_test_credentials_excel_view,
+        name='admin_export_test_credentials_excel',
+    ),
     path(
         'admin/student-credentials/export.xlsx',
         export_student_credentials_xlsx,

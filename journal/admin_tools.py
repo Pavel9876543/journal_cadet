@@ -1,0 +1,324 @@
+from __future__ import annotations
+
+import datetime
+from io import BytesIO
+from urllib.parse import quote
+
+from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
+from django.core.management import call_command
+from django.core.exceptions import PermissionDenied
+from django.http import HttpRequest, HttpResponse
+from django.shortcuts import redirect, render
+from django.urls import reverse
+from django.utils import timezone
+
+from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+from .models import TemporaryCredential
+
+
+HEADER_FILL = PatternFill('solid', fgColor='D9EAF7')
+HEADER_FONT = Font(bold=True)
+DEFAULT_COLUMN_WIDTH = 18
+MAX_COLUMN_WIDTH = 60
+
+
+@staff_member_required
+def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
+    """
+    Страница инструментов данных в Django Admin.
+
+    Здесь администратор может:
+    - создать тестовые данные;
+    - скачать временные учетные данные;
+    - перейти к просмотру временных доступов;
+    - скачать полную Excel-выгрузку, если соответствующий URL подключен.
+    """
+    temporary_credentials_count = TemporaryCredential.objects.count()
+
+    context = {
+        'title': 'Инструменты данных',
+        'temporary_credentials_count': temporary_credentials_count,
+        'temporary_credentials_admin_url': get_admin_url(
+            'admin:journal_temporarycredential_changelist',
+            fallback='/admin/',
+        ),
+        'export_credentials_url': reverse('admin_export_test_credentials_excel'),
+        'seed_url': reverse('admin_seed_test_data'),
+        'export_all_data_url': safe_reverse('admin_export_all_data_excel'),
+    }
+
+    return render(request, 'admin/journal/data_tools.html', context)
+
+
+@staff_member_required
+def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
+    """
+    Запускает management-команду seed_data из админки.
+
+    Важно:
+    - запуск разрешен только суперпользователю;
+    - команда вызывается через call_command, то есть без shell-скриптов;
+    - для защиты от случайного запуска требуется POST и confirm=yes.
+    """
+    if not request.user.is_superuser:
+        raise PermissionDenied('Создание тестовых данных доступно только суперпользователю.')
+
+    if request.method != 'POST':
+        messages.error(request, 'Создание тестовых данных можно запускать только через форму.')
+        return redirect('admin_data_tools')
+
+    if request.POST.get('confirm') != 'yes':
+        messages.error(request, 'Подтвердите создание тестовых данных.')
+        return redirect('admin_data_tools')
+
+    try:
+        call_command('seed_data')
+    except Exception as exc:
+        messages.error(request, f'Ошибка при создании тестовых данных: {exc}')
+        return redirect('admin_data_tools')
+
+    messages.success(
+        request,
+        'Тестовые данные успешно созданы. '
+        'Временные учетные данные доступны для просмотра в админке.',
+    )
+
+    return redirect('admin:journal_temporarycredential_changelist')
+
+
+@staff_member_required
+def admin_export_test_credentials_excel_view(request: HttpRequest) -> HttpResponse:
+    """
+    Экспорт временных учетных данных в Excel.
+
+    Файл формируется прямо в памяти и сразу отдается администратору.
+    """
+    workbook = build_temporary_credentials_workbook()
+
+    now = timezone.localtime()
+    filename = f'temporary_credentials_{now:%Y-%m-%d_%H-%M}.xlsx'
+    encoded_filename = quote(filename)
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    response = HttpResponse(
+        output.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = (
+        f"attachment; filename={filename}; filename*=UTF-8''{encoded_filename}"
+    )
+
+    return response
+
+
+def build_temporary_credentials_workbook() -> Workbook:
+    """
+    Создает Excel-файл с временными учетными данными.
+
+    Используется универсальный обход полей модели, чтобы экспорт не ломался,
+    если в TemporaryCredential появятся новые поля.
+    """
+    workbook = Workbook()
+
+    worksheet = workbook.active
+    worksheet.title = 'Временные доступы'
+
+    fields = get_export_fields(TemporaryCredential)
+
+    headers = [
+        field.verbose_name or field.name
+        for field in fields
+    ]
+
+    worksheet.append(headers)
+
+    queryset = TemporaryCredential.objects.all().order_by('id')
+
+    related_field_names = [
+        field.name
+        for field in fields
+        if getattr(field, 'is_relation', False)
+        and (
+            getattr(field, 'many_to_one', False)
+            or getattr(field, 'one_to_one', False)
+        )
+    ]
+
+    if related_field_names:
+        queryset = queryset.select_related(*related_field_names)
+
+    for credential in queryset:
+        worksheet.append([
+            field_value(credential, field)
+            for field in fields
+        ])
+
+    format_sheet(worksheet)
+
+    description_sheet = workbook.create_sheet('Описание', 0)
+    now = timezone.localtime()
+
+    description_sheet.append(['Файл', 'Временные учетные данные учеников'])
+    description_sheet.append(['Дата выгрузки', now.strftime('%d.%m.%Y %H:%M:%S')])
+    description_sheet.append(['Количество записей', TemporaryCredential.objects.count()])
+    description_sheet.append([
+        'Важно',
+        'Файл может содержать временные пароли. Хранить осторожно.',
+    ])
+
+    format_sheet(description_sheet)
+
+    return workbook
+
+
+def get_export_fields(model):
+    """
+    Возвращает обычные поля модели для Excel-выгрузки.
+
+    ManyToMany и обратные связи не экспортируются, потому что они плохо
+    ложатся в одну плоскую таблицу.
+    """
+    fields = []
+
+    for field in model._meta.get_fields():
+        if getattr(field, 'many_to_many', False):
+            continue
+
+        if getattr(field, 'one_to_many', False):
+            continue
+
+        if getattr(field, 'auto_created', False) and not getattr(field, 'concrete', False):
+            continue
+
+        if not getattr(field, 'concrete', False):
+            continue
+
+        fields.append(field)
+
+    return fields
+
+
+def field_value(obj, field):
+    """
+    Возвращает значение поля для Excel.
+
+    Для ForeignKey и OneToOne показывает строковое представление связанного объекта.
+    """
+    if getattr(field, 'is_relation', False):
+        related_obj = getattr(obj, field.name, None)
+        return format_value(related_obj)
+
+    return format_value(getattr(obj, field.name, None))
+
+
+def format_value(value):
+    """
+    Приводит значение к формату, который корректно сохраняется в Excel.
+    """
+    if value is None:
+        return ''
+
+    if isinstance(value, bool):
+        return 'Да' if value else 'Нет'
+
+    if isinstance(value, datetime.datetime):
+        if timezone.is_aware(value):
+            value = timezone.localtime(value)
+
+        return value.replace(tzinfo=None)
+
+    if isinstance(value, datetime.date):
+        return value
+
+    if isinstance(value, (int, float)):
+        return value
+
+    return clean_excel_text(str(value))
+
+
+def clean_excel_text(value: str) -> str:
+    """
+    Удаляет символы, которые Excel не принимает.
+    """
+    return ILLEGAL_CHARACTERS_RE.sub('', value)
+
+
+def format_sheet(worksheet) -> None:
+    """
+    Делает лист Excel удобным для чтения:
+    - закрепляет верхнюю строку;
+    - включает фильтр;
+    - выделяет заголовки;
+    - подбирает ширину колонок.
+    """
+    worksheet.freeze_panes = 'A2'
+
+    if worksheet.max_row >= 1 and worksheet.max_column >= 1:
+        worksheet.auto_filter.ref = worksheet.dimensions
+
+    for cell in worksheet[1]:
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(
+            horizontal='center',
+            vertical='center',
+            wrap_text=True,
+        )
+
+    for row in worksheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(
+                vertical='top',
+                wrap_text=True,
+            )
+
+    for column_cells in worksheet.columns:
+        column_letter = get_column_letter(column_cells[0].column)
+        max_length = 0
+
+        for cell in column_cells:
+            value = cell.value
+
+            if value is None:
+                continue
+
+            value_length = len(str(value))
+
+            if value_length > max_length:
+                max_length = value_length
+
+        width = min(
+            max(max_length + 2, DEFAULT_COLUMN_WIDTH),
+            MAX_COLUMN_WIDTH,
+        )
+        worksheet.column_dimensions[column_letter].width = width
+
+
+def safe_reverse(url_name: str) -> str | None:
+    """
+    Безопасный reverse для необязательных ссылок.
+
+    Например, полная Excel-выгрузка может быть подключена не сразу.
+    """
+    try:
+        return reverse(url_name)
+    except Exception:
+        return None
+
+
+def get_admin_url(url_name: str, fallback: str = '/admin/') -> str:
+    """
+    Возвращает ссылку на страницу Django Admin.
+    """
+    try:
+        return reverse(url_name)
+    except Exception:
+        return fallback

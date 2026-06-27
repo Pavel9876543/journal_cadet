@@ -58,6 +58,12 @@ JAZZMIN_SETTINGS = {
                 'icon': 'fas fa-file-excel',
                 'permissions': ['auth.view_user'],
             },
+            {
+                'name': 'Инструменты данных',
+                'url': 'admin_data_tools',
+                'icon': 'fas fa-database',
+                'permissions': ['journal.view_temporarycredential'],
+            }
         ],
     },
 }

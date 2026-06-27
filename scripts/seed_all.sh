@@ -3,5 +3,32 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-python manage.py migrate
-python manage.py seed_data
+if [ ! -f ".env.prod" ]; then
+  echo "Ошибка: файл .env.prod не найден в корне проекта."
+  exit 1
+fi
+
+if docker info >/dev/null 2>&1; then
+  DOCKER_CMD=(docker)
+elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+  DOCKER_CMD=(sudo -n docker)
+else
+  echo "Ошибка: Docker недоступен."
+  exit 1
+fi
+
+COMPOSE_CMD=(
+  "${DOCKER_CMD[@]}"
+  compose
+  --env-file .env.prod
+  -f docker-compose.yml
+  -f docker-compose.prod.yml
+)
+
+echo "=== Проверка контейнеров ==="
+"${COMPOSE_CMD[@]}" ps
+
+echo "=== Заполнение тестовыми данными ==="
+"${COMPOSE_CMD[@]}" exec -T web python manage.py seed_data
+
+echo "=== Готово ==="

@@ -1,0 +1,67 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Инструменты данных</h1>
+
+    <p>
+        На этой странице можно создать тестовые данные, скачать временные доступы
+        и перейти к просмотру данных в Django Admin.
+    </p>
+
+    <div style="margin-top: 24px; padding: 16px; border: 1px solid #ddd; border-radius: 8px;">
+        <h2>Тестовые данные</h2>
+
+        <p>
+            Количество временных учетных данных:
+            <strong>{{ temporary_credentials_count }}</strong>
+        </p>
+
+        <p style="color: #8a6d3b;">
+            Внимание: команда создания тестовых данных может очищать и заново
+            заполнять тестовые таблицы, если это предусмотрено seed_data.
+        </p>
+
+        <form method="post" action="{{ seed_url }}" style="margin-top: 12px;">
+            {% csrf_token %}
+
+            <label style="display: block; margin-bottom: 12px;">
+                <input type="checkbox" name="confirm" value="yes">
+                Я понимаю, что будут созданы или перезаписаны тестовые данные
+            </label>
+
+            <button type="submit" class="button default">
+                Создать тестовые данные
+            </button>
+        </form>
+    </div>
+
+    <div style="margin-top: 24px; padding: 16px; border: 1px solid #ddd; border-radius: 8px;">
+        <h2>Экспорт</h2>
+
+        <p>
+            <a href="{{ export_credentials_url }}" class="button">
+                Скачать временные доступы в Excel
+            </a>
+        </p>
+
+        {% if export_all_data_url %}
+            <p>
+                <a href="{{ export_all_data_url }}" class="button">
+                    Скачать все данные журнала в Excel
+                </a>
+            </p>
+        {% endif %}
+    </div>
+
+    <div style="margin-top: 24px; padding: 16px; border: 1px solid #ddd; border-radius: 8px;">
+        <h2>Просмотр в админке</h2>
+
+        <p>
+            <a href="{{ temporary_credentials_admin_url }}" class="button">
+                Открыть временные учетные данные
+            </a>
+        </p>
+    </div>
+</div>
+{% endblock %}
