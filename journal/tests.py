@@ -1347,9 +1347,21 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
 
 
 class SeedDataCommandTests(TestCase):
-    def test_seed_data_creates_new_architecture_records(self):
-        call_command('seed_data', stdout=StringIO())
+    @staticmethod
+    def run_seed_data():
+        with TemporaryDirectory() as tmp_dir:
+            credentials_path = Path(tmp_dir) / 'secrets.csv'
+            call_command(
+                'seed_data',
+                credentials_output=str(credentials_path),
+                stdout=StringIO(),
+            )
 
+    @classmethod
+    def setUpTestData(cls):
+        cls.run_seed_data()
+
+    def test_seed_data_creates_new_architecture_records(self):
         self.assertTrue(CourseRegistrationSettings.objects.filter(pk=1).exists())
         self.assertTrue(AcademicYear.objects.exists())
         self.assertTrue(Instrument.objects.exists())
@@ -1364,8 +1376,6 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(CourseApplication.objects.exists())
 
     def test_seed_data_assigns_user_roles(self):
-        call_command('seed_data', stdout=StringIO())
-
         self.assertTrue(Group.objects.filter(name='Администратор').exists())
         self.assertTrue(Group.objects.filter(name='Преподаватель').exists())
         self.assertTrue(Group.objects.filter(name='Ученик').exists())
@@ -1390,7 +1400,7 @@ class SeedDataCommandTests(TestCase):
             email='existing-admin@example.com',
         )
 
-        call_command('seed_data', stdout=StringIO())
+        self.run_seed_data()
 
         admin_user.refresh_from_db()
 
@@ -1403,8 +1413,7 @@ class SeedDataCommandTests(TestCase):
         )
 
     def test_seed_data_can_be_run_twice_without_duplicate_settings_error(self):
-        call_command('seed_data', stdout=StringIO())
-        call_command('seed_data', stdout=StringIO())
+        self.run_seed_data()
 
         self.assertEqual(
             CourseRegistrationSettings.objects.filter(pk=1).count(),
@@ -1412,6 +1421,63 @@ class SeedDataCommandTests(TestCase):
         )
         self.assertTrue(Student.objects.exists())
         self.assertTrue(Teacher.objects.exists())
+
+    def test_seed_data_populates_maximum_demo_profiles(self):
+        self.assertGreaterEqual(Instrument.objects.count(), 14)
+        self.assertGreaterEqual(Subject.objects.count(), 15)
+        self.assertGreaterEqual(StudyGroup.objects.count(), 7)
+        self.assertGreaterEqual(Teacher.objects.count(), 9)
+        self.assertGreaterEqual(Student.objects.count(), 35)
+        self.assertGreaterEqual(GroupSubject.objects.count(), 28)
+        self.assertGreaterEqual(StudentSubject.objects.filter(is_specialty=False).count(), 30)
+        self.assertGreaterEqual(Grade.objects.count(), 900)
+
+        registration_settings = CourseRegistrationSettings.objects.get(pk=1)
+        self.assertEqual(
+            registration_settings.telegram_group_url,
+            'https://t.me/cadet_journal_demo',
+        )
+
+        self.assertFalse(Teacher.objects.filter(birth_date__isnull=True).exists())
+        for field_name in ('phone', 'email', 'comments'):
+            self.assertFalse(Teacher.objects.filter(**{field_name: ''}).exists())
+
+        self.assertFalse(Student.objects.filter(birth_date__isnull=True).exists())
+        for field_name in (
+            'gender',
+            'city_church',
+            'music_education',
+            'student_phone',
+            'parent_contacts',
+            'comments',
+        ):
+            self.assertFalse(Student.objects.filter(**{field_name: ''}).exists())
+
+        self.assertTrue(StudyGroup.objects.filter(is_active=False).exists())
+        self.assertTrue(GroupSubject.objects.filter(is_active=False).exists())
+        self.assertTrue(StudentSubject.objects.filter(is_active=False).exists())
+        self.assertFalse(Grade.objects.filter(comment='').exists())
+
+        self.assertGreaterEqual(
+            CourseApplication.objects.filter(
+                status=CourseApplication.STATUS_CONFIRMED,
+                student__isnull=False,
+                user__isnull=False,
+            ).count(),
+            5,
+        )
+        self.assertGreaterEqual(
+            CourseApplication.objects.filter(
+                status=CourseApplication.STATUS_REJECTED,
+                student__isnull=True,
+                user__isnull=True,
+            ).count(),
+            2,
+        )
+
+        for student in Student.objects.select_related('user'):
+            credential = TemporaryCredential.objects.get(login=student.user.username)
+            self.assertEqual(credential.student_phone, student.student_phone)
 
 
 class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
