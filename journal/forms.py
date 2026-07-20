@@ -28,6 +28,16 @@ from .registration_utils import (
 )
 
 
+HTML_DATE_INPUT_FORMAT = '%Y-%m-%d'
+
+
+def html_date_input(attrs=None):
+    widget_attrs = {'type': 'date'}
+    if attrs:
+        widget_attrs.update(attrs)
+    return forms.DateInput(format=HTML_DATE_INPUT_FORMAT, attrs=widget_attrs)
+
+
 # -----------------------------------------------------------------------------
 # Общие queryset/helper-функции для форм журнала
 # -----------------------------------------------------------------------------
@@ -252,7 +262,7 @@ class GradeCreateForm(forms.ModelForm):
         model = Grade
         fields = ['student', 'subject', 'teacher', 'academic_year', 'date', 'value', 'comment']
         widgets = {
-            'date': forms.DateInput(attrs={'type': 'date'}),
+            'date': html_date_input(),
             'comment': forms.TextInput(attrs={'placeholder': 'Комментарий, если нужен'}),
             'value': forms.Select(choices=Grade.GRADE_CHOICES),
         }
@@ -488,7 +498,7 @@ class BaseCourseApplicationForm(forms.ModelForm):
             'placeholder': 'Отчество, если есть',
         })
         self.fields['gender'].widget = forms.RadioSelect(choices=CourseApplication.GENDER_CHOICES)
-        self.fields['birth_date'].widget = forms.DateInput(attrs={'type': 'date'})
+        self.fields['birth_date'].widget = html_date_input()
         self.fields['city_church'].widget.attrs.update({
             'placeholder': 'Например: Тамбов или Воронеж, Отрожка',
         })

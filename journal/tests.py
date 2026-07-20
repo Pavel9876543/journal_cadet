@@ -21,6 +21,7 @@ from journal.account_utils import (
     build_username_from_full_name,
     display_name_for_user,
 )
+from journal.admin import GradeAdminForm
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -663,6 +664,26 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data['status'], CourseApplication.STATUS_REJECTED)
 
+    def test_course_application_edit_form_keeps_existing_field_values(self):
+        application = CourseApplication(
+            **self.application_payload(
+                birth_date=date(2000, 1, 2),
+                city_church='Воронеж, Отрожка',
+                instrument='Фортепиано',
+                music_education=CourseApplication.MUSIC_EDUCATION_BASIC,
+                comments='Нужен вечерний поток',
+            ),
+        )
+
+        form = CourseApplicationAdminForm(instance=application)
+
+        self.assertIn('value="Иванов"', str(form['last_name']))
+        self.assertIn('value="2000-01-02"', str(form['birth_date']))
+        self.assertIn('Воронеж, Отрожка', str(form['city_church']))
+        self.assertIn('Фортепиано', str(form['instrument']))
+        self.assertIn('value="basic" selected', str(form['music_education']))
+        self.assertIn('Нужен вечерний поток', str(form['comments']))
+
     def test_public_course_application_form_enforces_age_limit(self):
         too_young_birth_date = date.today().replace(
             year=date.today().year - 10,
@@ -725,6 +746,11 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('teacher', form.fields)
         self.assertNotIn('subject', form.fields)
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
+
+    def test_grade_edit_form_keeps_existing_date_value(self):
+        form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
+
+        self.assertIn('value="2025-10-10"', str(form['date']))
 
     def test_subject_result_form_validates_allowed_subject_and_grade_type(self):
         data = self.create_base_journal()

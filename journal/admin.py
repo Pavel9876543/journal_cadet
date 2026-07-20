@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
-from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm
+from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
 from .models import (
     AcademicYear,
     CourseApplication,
@@ -111,7 +111,7 @@ class GradeAdminForm(forms.ModelForm):
         model = Grade
         fields = '__all__'
         widgets = {
-            'date': forms.DateInput(attrs={'type': 'date'}),
+            'date': html_date_input(),
             'comment': forms.TextInput(attrs={'size': 80}),
         }
 
