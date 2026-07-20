@@ -50,6 +50,77 @@ MIDDLEWARE = [
 ]
 
 JAZZMIN_SETTINGS = {
+    'site_title': 'Электронный журнал',
+    'site_header': 'Электронный журнал',
+    'site_brand': 'Журнал',
+    'welcome_sign': 'Вход в админ-панель журнала',
+    'copyright': 'Электронный журнал музыкальной школы',
+    'search_model': ['journal.Student', 'journal.Teacher', 'journal.CourseApplication'],
+    'custom_css': 'journal/admin_dashboard.css',
+    'navigation_expanded': True,
+    'show_ui_builder': False,
+    'related_modal_active': True,
+    'topmenu_links': [
+        {
+            'name': 'Панель',
+            'url': 'admin:index',
+            'icon': 'fas fa-th-large',
+            'permissions': ['auth.view_user'],
+        },
+        {
+            'name': 'Журнал',
+            'url': 'journal',
+            'icon': 'fas fa-table',
+            'permissions': ['journal.view_grade'],
+        },
+        {
+            'name': 'Инструменты',
+            'url': 'admin_data_tools',
+            'icon': 'fas fa-database',
+            'permissions': ['journal.view_temporarycredential'],
+        },
+    ],
+    'order_with_respect_to': [
+        'journal',
+        'journal.StudyGroup',
+        'journal.Student',
+        'journal.Teacher',
+        'journal.Grade',
+        'journal.SubjectResult',
+        'journal.CourseApplication',
+        'journal.TemporaryCredential',
+        'journal.CourseRegistrationSettings',
+        'journal.AcademicYear',
+        'journal.Subject',
+        'journal.Instrument',
+        'Выгрузить все данные в Excel',
+        'Инструменты данных',
+        'auth',
+        'auth.User',
+        'auth.Group',
+    ],
+    'hide_models': [
+        'journal.GroupSubject',
+        'journal.StudentSubject',
+        'journal.TeacherSubject',
+    ],
+    'icons': {
+        'auth': 'fas fa-users-cog',
+        'auth.user': 'fas fa-user-shield',
+        'auth.group': 'fas fa-user-lock',
+        'journal': 'fas fa-book-open',
+        'journal.academicyear': 'fas fa-calendar-alt',
+        'journal.instrument': 'fas fa-guitar',
+        'journal.subject': 'fas fa-book',
+        'journal.studygroup': 'fas fa-layer-group',
+        'journal.teacher': 'fas fa-chalkboard-teacher',
+        'journal.student': 'fas fa-user-graduate',
+        'journal.grade': 'fas fa-pen',
+        'journal.subjectresult': 'fas fa-clipboard-check',
+        'journal.courseapplication': 'fas fa-file-signature',
+        'journal.courseregistrationsettings': 'fas fa-cog',
+        'journal.temporarycredential': 'fas fa-key',
+    },
     'custom_links': {
         'journal': [
             {
@@ -63,7 +134,7 @@ JAZZMIN_SETTINGS = {
                 'url': 'admin_data_tools',
                 'icon': 'fas fa-database',
                 'permissions': ['journal.view_temporarycredential'],
-            }
+            },
         ],
     },
 }

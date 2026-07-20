@@ -13,6 +13,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from openpyxl import load_workbook
 
 from journal.account_utils import (
     build_course_application_login,
@@ -1069,23 +1070,15 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
 
-        with ZipFile(BytesIO(response.content)) as archive:
-            shared_strings = archive.read('xl/sharedStrings.xml').decode('utf-8')
+        workbook = load_workbook(BytesIO(response.content))
+        worksheet = workbook.active
+        rows = list(worksheet.iter_rows(values_only=True))
 
-        self.assertIn('Логин', shared_strings)
-        self.assertIn('Пароль', shared_strings)
-        self.assertIn('Роль', shared_strings)
-
-        self.assertIn('teacher_export', shared_strings)
-        self.assertIn('TeacherTemp123!', shared_strings)
-        self.assertIn('Преподаватель', shared_strings)
-
-        self.assertIn('student_export', shared_strings)
-        self.assertIn('StudentTemp123!', shared_strings)
-        self.assertIn('Ученик', shared_strings)
-
-        self.assertNotIn('Телефон ученика', shared_strings)
-        self.assertNotIn('Заявка', shared_strings)
+        self.assertEqual(rows[0], ('Логин', 'Пароль', 'Роль'))
+        self.assertIn(('teacher_export', 'TeacherTemp123!', 'Преподаватель'), rows)
+        self.assertIn(('student_export', 'StudentTemp123!', 'Ученик'), rows)
+        self.assertNotIn('Телефон ученика', rows[0])
+        self.assertNotIn('Заявка', rows[0])
 
     def test_regular_user_cannot_download_temporary_credentials_xlsx(self):
         self.client.login(username='regular_xlsx', password='Pass12345!')

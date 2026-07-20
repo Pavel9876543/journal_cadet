@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
@@ -7,7 +9,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
-from .forms import CourseRegistrationSettingsForm
+from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm
 from .models import (
     AcademicYear,
     CourseApplication,
@@ -28,7 +30,7 @@ from .models import (
 
 admin.site.site_header = 'Электронный журнал музыкальной школы'
 admin.site.site_title = 'Электронный журнал'
-admin.site.index_title = 'Администрирование журнала'
+admin.site.index_title = 'Панель администратора'
 admin.site.empty_value_display = '—'
 
 
@@ -48,11 +50,13 @@ class UserAdmin(BaseUserAdmin):
     list_display = ('username', 'last_name', 'first_name', 'email', 'is_staff', 'is_active')
     list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups')
     search_fields = ('username', 'first_name', 'last_name', 'email')
+    list_per_page = 40
 
 
 @admin.register(AuthGroup)
 class AuthGroupAdmin(BaseGroupAdmin):
     search_fields = ('name',)
+    list_per_page = 40
 
 
 # -----------------------------------------------------------------------------
@@ -76,27 +80,30 @@ def truncate_text(value, length=80):
     return f'{value[:length]}…'
 
 
+def admin_changelist_url(model_name, params=None):
+    url = reverse(f'admin:journal_{model_name}_changelist')
+    if params:
+        return f'{url}?{urlencode(params)}'
+    return url
+
+
+def journal_url(params=None):
+    url = reverse('journal')
+    if params:
+        return f'{url}?{urlencode(params)}'
+    return url
+
+
+class HiddenFromAdminIndexMixin:
+    """Оставляет прямые admin URL, но убирает техническую модель из списков меню."""
+
+    def get_model_perms(self, request):
+        return {}
+
+
 # -----------------------------------------------------------------------------
 # Forms для админки
 # -----------------------------------------------------------------------------
-
-
-class CourseApplicationAdminForm(forms.ModelForm):
-    """
-    Отдельная форма для админки.
-
-    Важно: публичная форма заявки не должна показывать поле status, а в админке
-    status нужен, чтобы администратор мог подтверждать/отклонять заявку.
-    """
-
-    class Meta:
-        model = CourseApplication
-        fields = '__all__'
-        widgets = {
-            'birth_date': forms.DateInput(attrs={'type': 'date'}),
-            'parent_contacts': forms.Textarea(attrs={'rows': 4}),
-            'comments': forms.Textarea(attrs={'rows': 4}),
-        }
 
 
 class GradeAdminForm(forms.ModelForm):
@@ -197,26 +204,32 @@ class SubjectResultAdminForm(forms.ModelForm):
 
 class TeacherSubjectInline(admin.TabularInline):
     model = TeacherSubject
-    extra = 1
+    extra = 0
     autocomplete_fields = ('subject',)
     fields = ('subject',)
     show_change_link = True
+    verbose_name = 'Предмет преподавателя'
+    verbose_name_plural = 'Предметы, которые может вести преподаватель'
 
 
 class TeacherSubjectForSubjectInline(admin.TabularInline):
     model = TeacherSubject
-    extra = 1
+    extra = 0
     autocomplete_fields = ('teacher',)
     fields = ('teacher',)
     show_change_link = True
+    verbose_name = 'Преподаватель'
+    verbose_name_plural = 'Преподаватели, которые могут вести предмет'
 
 
 class GroupSubjectInline(admin.TabularInline):
     model = GroupSubject
-    extra = 1
+    extra = 0
     autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
+    verbose_name = 'Предмет группы'
+    verbose_name_plural = 'Предметы группы'
 
 
 class GroupSubjectForTeacherInline(admin.TabularInline):
@@ -225,6 +238,9 @@ class GroupSubjectForTeacherInline(admin.TabularInline):
     autocomplete_fields = ('group', 'subject')
     fields = ('group', 'subject', 'sort_order', 'is_active')
     show_change_link = True
+    classes = ('collapse',)
+    verbose_name = 'Групповой предмет'
+    verbose_name_plural = 'Групповые предметы преподавателя'
 
 
 class GroupSubjectForSubjectInline(admin.TabularInline):
@@ -233,14 +249,17 @@ class GroupSubjectForSubjectInline(admin.TabularInline):
     autocomplete_fields = ('group', 'teacher')
     fields = ('group', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
+    classes = ('collapse',)
 
 
 class StudentSubjectInline(admin.TabularInline):
     model = StudentSubject
-    extra = 1
+    extra = 0
     autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'is_specialty', 'is_active')
     show_change_link = True
+    verbose_name = 'Индивидуальный предмет'
+    verbose_name_plural = 'Индивидуальные предметы ученика'
 
 
 class StudentSubjectForTeacherInline(admin.TabularInline):
@@ -249,6 +268,9 @@ class StudentSubjectForTeacherInline(admin.TabularInline):
     autocomplete_fields = ('student', 'subject')
     fields = ('student', 'subject', 'is_specialty', 'is_active')
     show_change_link = True
+    classes = ('collapse',)
+    verbose_name = 'Индивидуальный ученик'
+    verbose_name_plural = 'Индивидуальные ученики преподавателя'
 
 
 class StudentSubjectForSubjectInline(admin.TabularInline):
@@ -257,6 +279,7 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
     autocomplete_fields = ('student', 'teacher')
     fields = ('student', 'teacher', 'is_specialty', 'is_active')
     show_change_link = True
+    classes = ('collapse',)
 
 
 class StudentInline(admin.TabularInline):
@@ -272,6 +295,7 @@ class StudentInline(admin.TabularInline):
     )
     readonly_fields = ('specialty_teacher_inline',)
     show_change_link = True
+    classes = ('collapse',)
 
     @admin.display(description='Преподаватель по специальности')
     def specialty_teacher_inline(self, obj):
@@ -289,6 +313,7 @@ class GradeInline(admin.TabularInline):
     fields = ('date', 'subject', 'teacher', 'value', 'academic_year', 'comment')
     ordering = ('-date',)
     show_change_link = True
+    classes = ('collapse',)
 
 
 class SubjectResultInline(admin.TabularInline):
@@ -298,6 +323,8 @@ class SubjectResultInline(admin.TabularInline):
     autocomplete_fields = ('subject', 'academic_year')
     fields = ('academic_year', 'subject', 'exam_grade', 'final_grade')
     show_change_link = True
+    verbose_name = 'Итог'
+    verbose_name_plural = 'Итоги по предметам'
 
 
 # -----------------------------------------------------------------------------
@@ -311,6 +338,13 @@ class AcademicYearAdmin(admin.ModelAdmin):
     list_filter = ('is_active',)
     search_fields = ('name',)
     ordering = ('-starts_on',)
+    list_per_page = 30
+    fieldsets = (
+        ('Учебный год', {
+            'fields': ('name', 'starts_on', 'ends_on', 'is_active'),
+            'description': 'Активным может быть только один учебный год.',
+        }),
+    )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -326,6 +360,7 @@ class InstrumentAdmin(admin.ModelAdmin):
     list_display = ('name', 'students_count')
     search_fields = ('name',)
     ordering = ('name',)
+    list_per_page = 50
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -355,12 +390,18 @@ class SubjectAdmin(admin.ModelAdmin):
         'individual_students__student__full_name',
         'individual_students__teacher__full_name',
     )
-    inlines = (
-        TeacherSubjectForSubjectInline,
-        GroupSubjectForSubjectInline,
-        StudentSubjectForSubjectInline,
-    )
+    inlines = (TeacherSubjectForSubjectInline,)
     ordering = ('name',)
+    list_per_page = 50
+    fieldsets = (
+        ('Предмет', {
+            'fields': ('name', 'final_grade_type', 'is_specialty', 'is_active'),
+            'description': (
+                'Обычные предметы назначаются группе. Предметы специальности '
+                'назначаются конкретному ученику.'
+            ),
+        }),
+    )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -409,6 +450,7 @@ class StudyGroupAdmin(admin.ModelAdmin):
         'students_count_display',
         'subjects_display_short',
         'teachers_display_short',
+        'journal_link',
     )
     list_filter = ('academic_year', 'is_active')
     search_fields = (
@@ -419,9 +461,19 @@ class StudyGroupAdmin(admin.ModelAdmin):
         'group_subjects__teacher__full_name',
     )
     autocomplete_fields = ('academic_year',)
-    inlines = (GroupSubjectInline, StudentInline)
+    inlines = (GroupSubjectInline,)
     ordering = ('academic_year__name', 'name')
     list_select_related = ('academic_year',)
+    list_per_page = 30
+    fieldsets = (
+        ('Группа', {
+            'fields': ('name', 'academic_year', 'is_active'),
+            'description': (
+                'Здесь настраивается состав предметов группы. Учеников удобнее '
+                'добавлять и искать в отдельном разделе «Ученики».'
+            ),
+        }),
+    )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -434,7 +486,11 @@ class StudyGroupAdmin(admin.ModelAdmin):
 
     @admin.display(description='Учеников')
     def students_count_display(self, obj):
-        return obj._students_count
+        return format_html(
+            '<a href="{}">{}</a>',
+            admin_changelist_url('student', {'group__id__exact': obj.pk}),
+            obj._students_count,
+        )
 
     @admin.display(description='Предметы')
     def subjects_display_short(self, obj):
@@ -453,6 +509,10 @@ class StudyGroupAdmin(admin.ModelAdmin):
             if item.is_active and item.subject_id and item.teacher_id
         ]
         return truncate_text(', '.join(pairs), length=120)
+
+    @admin.display(description='Журнал')
+    def journal_link(self, obj):
+        return format_html('<a href="{}">Открыть</a>', journal_url({'group': obj.pk}))
 
 
 @admin.register(Teacher)
@@ -484,6 +544,16 @@ class TeacherAdmin(admin.ModelAdmin):
     inlines = (TeacherSubjectInline, GroupSubjectForTeacherInline, StudentSubjectForTeacherInline)
     ordering = ('full_name',)
     list_select_related = ('user',)
+    list_per_page = 30
+    fieldsets = (
+        ('Преподаватель', {
+            'fields': ('full_name', 'user', 'is_active'),
+            'description': (
+                'Групповые предметы назначаются в карточке группы. '
+                'Индивидуальные предметы назначаются в карточке ученика.'
+            ),
+        }),
+    )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -552,9 +622,23 @@ class StudentAdmin(admin.ModelAdmin):
         'individual_subjects__subject__name',
     )
     autocomplete_fields = ('user', 'group', 'instrument')
-    inlines = (StudentSubjectInline, SubjectResultInline, GradeInline)
+    inlines = (StudentSubjectInline, SubjectResultInline)
     ordering = ('full_name',)
     list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
+    list_per_page = 40
+    fieldsets = (
+        ('Ученик', {
+            'fields': ('full_name', 'group', 'instrument', 'is_active'),
+            'description': (
+                'В этой карточке хранится состав обучения ученика. '
+                'Оценки редактируются в журнале или в отдельном разделе «Оценки».'
+            ),
+        }),
+        ('Аккаунт', {
+            'fields': ('user',),
+            'classes': ('collapse',),
+        }),
+    )
 
     @admin.display(description='Пользователь')
     def user_link(self, obj):
@@ -572,23 +656,25 @@ class StudentAdmin(admin.ModelAdmin):
 
 
 @admin.register(GroupSubject)
-class GroupSubjectAdmin(admin.ModelAdmin):
+class GroupSubjectAdmin(HiddenFromAdminIndexMixin, admin.ModelAdmin):
     list_display = ('group', 'subject', 'teacher', 'sort_order', 'is_active')
     list_filter = ('is_active', 'group__academic_year', 'group', 'subject', 'teacher')
     search_fields = ('group__name', 'subject__name', 'teacher__full_name')
     autocomplete_fields = ('group', 'subject', 'teacher')
     list_select_related = ('group', 'group__academic_year', 'subject', 'teacher')
     ordering = ('group__academic_year__name', 'group__name', 'sort_order', 'subject__name')
+    list_per_page = 50
 
 
 @admin.register(StudentSubject)
-class StudentSubjectAdmin(admin.ModelAdmin):
+class StudentSubjectAdmin(HiddenFromAdminIndexMixin, admin.ModelAdmin):
     list_display = ('student', 'student_group_display', 'subject', 'teacher', 'is_specialty', 'is_active')
     list_filter = ('is_active', 'is_specialty', 'subject', 'teacher', 'student__group')
     search_fields = ('student__full_name', 'student__group__name', 'subject__name', 'teacher__full_name')
     autocomplete_fields = ('student', 'subject', 'teacher')
     list_select_related = ('student', 'student__group', 'subject', 'teacher')
     ordering = ('student__full_name', 'subject__name')
+    list_per_page = 50
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
@@ -628,10 +714,24 @@ class GradeAdmin(admin.ModelAdmin):
     date_hierarchy = 'date'
     list_select_related = ('student', 'student__group', 'subject', 'teacher', 'academic_year')
     ordering = ('-date', 'student__full_name')
+    list_per_page = 50
 
     fieldsets = (
         ('Оценка', {
-            'fields': ('date', 'student', 'student_group_display', 'subject', 'teacher', 'value', 'academic_year', 'comment')
+            'fields': (
+                'date',
+                'student',
+                'student_group_display',
+                'subject',
+                'teacher',
+                'value',
+                'academic_year',
+                'comment',
+            ),
+            'description': (
+                'Для массовой работы с оценками удобнее использовать страницу журнала. '
+                'Эта форма нужна для точечной правки.'
+            ),
         }),
         ('Проверка назначения', {
             'fields': ('source_type_display',),
@@ -672,6 +772,24 @@ class SubjectResultAdmin(admin.ModelAdmin):
     autocomplete_fields = ('student', 'subject', 'academic_year')
     list_select_related = ('student', 'student__group', 'subject', 'academic_year')
     ordering = ('academic_year__name', 'student__full_name', 'subject__name')
+    list_per_page = 50
+    fieldsets = (
+        ('Итоговая аттестация', {
+            'fields': (
+                'student',
+                'student_group_display',
+                'subject',
+                'academic_year',
+                'exam_grade',
+                'final_grade',
+            ),
+            'description': (
+                'Для предметов с типом «Зачет/незачет» допустимы только значения '
+                '«Зачет» и «Незачет».'
+            ),
+        }),
+    )
+    readonly_fields = ('student_group_display',)
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
@@ -748,6 +866,7 @@ class CourseApplicationAdmin(admin.ModelAdmin):
     date_hierarchy = 'registration_date'
     list_select_related = ('student', 'user')
     actions = ('confirm_applications', 'reject_applications')
+    list_per_page = 40
 
     fieldsets = (
         ('Статус заявки', {
@@ -756,12 +875,21 @@ class CourseApplicationAdmin(admin.ModelAdmin):
                 'status',
                 'has_journal_student_display',
                 'generated_login',
+            ),
+            'description': (
+                'Подтвержденная заявка автоматически создает ученика, пользователя '
+                'и временный пароль. При отклонении связанные записи удаляются из журнала.'
+            ),
+        }),
+        ('Связанные записи', {
+            'fields': (
                 'student_link',
                 'user_link',
                 'temporary_credential_link',
                 'journal_created_at',
                 'journal_removed_at',
-            )
+            ),
+            'classes': ('collapse',),
         }),
         ('Основные данные ученика', {
             'fields': (
@@ -846,6 +974,19 @@ class TemporaryCredentialAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at',)
     autocomplete_fields = ('course_application',)
     date_hierarchy = 'created_at'
+    list_per_page = 50
+    fieldsets = (
+        ('Временный доступ', {
+            'fields': (
+                'course_application',
+                'login',
+                'temporary_password',
+                'student_phone',
+                'created_at',
+            ),
+            'description': 'Эти данные нужны только для выдачи первичного доступа пользователю.',
+        }),
+    )
 
     @admin.display(description='Заявка')
     def course_application_link(self, obj):
@@ -857,6 +998,12 @@ class CourseRegistrationSettingsAdmin(admin.ModelAdmin):
     form = CourseRegistrationSettingsForm
     list_display = ('telegram_group_url', 'updated_at')
     readonly_fields = ('updated_at',)
+    fieldsets = (
+        ('Регистрация на курсы', {
+            'fields': ('telegram_group_url', 'updated_at'),
+            'description': 'Ссылка показывается ученику после успешной регистрации на курсы.',
+        }),
+    )
 
     def has_add_permission(self, request):
         return not CourseRegistrationSettings.objects.exists()

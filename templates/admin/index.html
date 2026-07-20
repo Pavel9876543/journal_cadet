@@ -1,0 +1,134 @@
+{% extends "admin/base_site.html" %}
+{% load i18n log admin_dashboard %}
+
+{% block bodyclass %}{{ block.super }} dashboard journal-admin-page{% endblock %}
+
+{% block content_title %}Панель администратора{% endblock %}
+
+{% block breadcrumbs %}
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{% url 'admin:index' %}">{% trans 'Home' %}</a></li>
+        <li class="breadcrumb-item">Панель</li>
+    </ol>
+{% endblock %}
+
+{% block content %}
+    {% journal_admin_dashboard as dashboard %}
+
+    <div class="col-12">
+        <div class="journal-dashboard">
+            <section class="journal-dashboard-hero">
+                <div>
+                    <p class="journal-dashboard-kicker">Администрирование журнала</p>
+                    <h1>Рабочая панель</h1>
+                    <p class="journal-dashboard-lead">
+                        Основные действия собраны по сценариям: учебный процесс, справочники,
+                        курсы и сервис.
+                    </p>
+                </div>
+
+                {% if dashboard.quick_actions %}
+                    <div class="journal-dashboard-actions" aria-label="Быстрые действия">
+                        {% for action in dashboard.quick_actions %}
+                            <a href="{{ action.url }}" class="journal-action-button">
+                                <i class="{{ action.icon }}" aria-hidden="true"></i>
+                                <span>{{ action.title }}</span>
+                            </a>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </section>
+
+            {% if dashboard.stats %}
+                <section class="journal-stat-grid" aria-label="Краткая сводка">
+                    {% for stat in dashboard.stats %}
+                        <a href="{{ stat.url }}" class="journal-stat">
+                            <i class="{{ stat.icon }}" aria-hidden="true"></i>
+                            <span class="journal-stat-value">{{ stat.value }}</span>
+                            <span class="journal-stat-label">{{ stat.label }}</span>
+                        </a>
+                    {% endfor %}
+                </section>
+            {% endif %}
+
+            <div class="journal-dashboard-layout">
+                <div class="journal-dashboard-main">
+                    {% for section in dashboard.sections %}
+                        <section class="journal-section">
+                            <div class="journal-section-heading">
+                                <h2>{{ section.title }}</h2>
+                                <p>{{ section.description }}</p>
+                            </div>
+
+                            <div class="journal-link-grid">
+                                {% for item in section.items %}
+                                    <a href="{{ item.url }}" class="journal-link-tile">
+                                        <i class="{{ item.icon }}" aria-hidden="true"></i>
+                                        <span>
+                                            <strong>{{ item.title }}</strong>
+                                            <small>{{ item.note }}</small>
+                                        </span>
+                                    </a>
+                                {% endfor %}
+                            </div>
+                        </section>
+                    {% endfor %}
+                </div>
+
+                <aside class="journal-dashboard-side">
+                    <section class="journal-note-panel">
+                        <h2>Текущий контекст</h2>
+                        <dl>
+                            <div>
+                                <dt>Дата</dt>
+                                <dd>{{ dashboard.today|date:"d.m.Y" }}</dd>
+                            </div>
+                            <div>
+                                <dt>Учебный год</dt>
+                                <dd>
+                                    {% if dashboard.active_year %}
+                                        {{ dashboard.active_year.name }}
+                                    {% else %}
+                                        Не выбран
+                                    {% endif %}
+                                </dd>
+                            </div>
+                        </dl>
+                    </section>
+
+                    <section class="journal-recent-panel">
+                        <h2>{% trans 'Recent actions' %}</h2>
+                        {% get_admin_log 6 as admin_log for_user user %}
+                        {% if not admin_log %}
+                            <p class="journal-muted">{% trans 'None available' %}</p>
+                        {% else %}
+                            <ol class="journal-recent-list">
+                                {% for entry in admin_log %}
+                                    <li>
+                                        <span class="journal-recent-icon">
+                                            {% if entry.is_change %}
+                                                <i class="fas fa-edit" aria-hidden="true"></i>
+                                            {% elif entry.is_deletion %}
+                                                <i class="fas fa-trash" aria-hidden="true"></i>
+                                            {% elif entry.is_addition %}
+                                                <i class="fas fa-plus-circle" aria-hidden="true"></i>
+                                            {% endif %}
+                                        </span>
+                                        <span>
+                                            {% if entry.is_deletion or not entry.get_admin_url %}
+                                                <strong>{{ entry.object_repr }}</strong>
+                                            {% else %}
+                                                <a href="{{ entry.get_admin_url }}">{{ entry.object_repr }}</a>
+                                            {% endif %}
+                                            <small>{{ entry.action_time|date:"d.m.Y H:i" }}</small>
+                                        </span>
+                                    </li>
+                                {% endfor %}
+                            </ol>
+                        {% endif %}
+                    </section>
+                </aside>
+            </div>
+        </div>
+    </div>
+{% endblock %}
