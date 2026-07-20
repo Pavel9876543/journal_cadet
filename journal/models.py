@@ -480,8 +480,47 @@ class GroupSubject(models.Model):
             })
 
     def save(self, *args, **kwargs):
+        previous = None
+        if self.pk:
+            previous = (
+                type(self).objects
+                .filter(pk=self.pk)
+                .values('group_id', 'subject_id', 'teacher_id', 'is_active')
+                .first()
+            )
+
         self.full_clean()
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            if self.is_active:
+                ensure_teacher_subject(self.teacher_id, self.subject_id)
+                if (
+                    previous
+                    and previous['is_active']
+                    and previous['group_id'] == self.group_id
+                    and previous['subject_id'] == self.subject_id
+                    and previous['teacher_id'] != self.teacher_id
+                ):
+                    Grade.objects.filter(
+                        student__group_id=self.group_id,
+                        subject_id=self.subject_id,
+                        teacher_id=previous['teacher_id'],
+                    ).update(teacher_id=self.teacher_id)
+
+            if previous:
+                remove_unused_teacher_subject(
+                    previous['teacher_id'],
+                    previous['subject_id'],
+                )
+
+    def delete(self, *args, **kwargs):
+        teacher_id = self.teacher_id
+        subject_id = self.subject_id
+        with transaction.atomic():
+            result = super().delete(*args, **kwargs)
+            remove_unused_teacher_subject(teacher_id, subject_id)
+            return result
 
 
 class StudentSubject(models.Model):
@@ -538,8 +577,87 @@ class StudentSubject(models.Model):
             })
 
     def save(self, *args, **kwargs):
+        previous = None
+        if self.pk:
+            previous = (
+                type(self).objects
+                .filter(pk=self.pk)
+                .values('student_id', 'subject_id', 'teacher_id', 'is_active')
+                .first()
+            )
+
         self.full_clean()
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            if self.is_active:
+                ensure_teacher_subject(self.teacher_id, self.subject_id)
+                if (
+                    previous
+                    and previous['is_active']
+                    and previous['student_id'] == self.student_id
+                    and previous['subject_id'] == self.subject_id
+                    and previous['teacher_id'] != self.teacher_id
+                ):
+                    Grade.objects.filter(
+                        student_id=self.student_id,
+                        subject_id=self.subject_id,
+                        teacher_id=previous['teacher_id'],
+                    ).update(teacher_id=self.teacher_id)
+
+            if previous:
+                remove_unused_teacher_subject(
+                    previous['teacher_id'],
+                    previous['subject_id'],
+                )
+
+    def delete(self, *args, **kwargs):
+        teacher_id = self.teacher_id
+        subject_id = self.subject_id
+        with transaction.atomic():
+            result = super().delete(*args, **kwargs)
+            remove_unused_teacher_subject(teacher_id, subject_id)
+            return result
+
+
+def teacher_subject_is_used(teacher_id: int | None, subject_id: int | None) -> bool:
+    if not teacher_id or not subject_id:
+        return False
+
+    return (
+        GroupSubject.objects.filter(
+            teacher_id=teacher_id,
+            subject_id=subject_id,
+            is_active=True,
+        ).exists()
+        or StudentSubject.objects.filter(
+            teacher_id=teacher_id,
+            subject_id=subject_id,
+            is_active=True,
+        ).exists()
+    )
+
+
+def ensure_teacher_subject(teacher_id: int | None, subject_id: int | None) -> None:
+    if not teacher_id or not subject_id:
+        return
+
+    TeacherSubject.objects.get_or_create(
+        teacher_id=teacher_id,
+        subject_id=subject_id,
+    )
+
+
+def remove_unused_teacher_subject(teacher_id: int | None, subject_id: int | None) -> None:
+    if not teacher_id or not subject_id:
+        return
+    if teacher_subject_is_used(teacher_id, subject_id):
+        return
+
+    TeacherSubject.objects.filter(
+        teacher_id=teacher_id,
+        subject_id=subject_id,
+    ).delete()
 
 
 class Grade(models.Model):
@@ -1045,14 +1163,16 @@ class CourseApplication(models.Model):
             )
 
         today = timezone.localdate()
-        course_year, _ = AcademicYear.objects.get_or_create(
-            name=self.COURSE_ACADEMIC_YEAR_NAME,
-            defaults={
-                'starts_on': today,
-                'ends_on': today + timedelta(days=365),
-                'is_active': False,
-            },
-        )
+        course_year = AcademicYear.get_active()
+        if course_year is None:
+            course_year, _ = AcademicYear.objects.get_or_create(
+                name=self.COURSE_ACADEMIC_YEAR_NAME,
+                defaults={
+                    'starts_on': today,
+                    'ends_on': today + timedelta(days=365),
+                    'is_active': False,
+                },
+            )
         group, _ = StudyGroup.objects.get_or_create(
             name=self.STUDENT_COURSE_GROUP_NAME,
             academic_year=course_year,

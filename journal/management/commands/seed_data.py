@@ -10,7 +10,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.utils import timezone
 
 from journal.account_utils import (
     build_username_from_full_name,
@@ -79,9 +78,17 @@ class Command(BaseCommand):
 
         teachers = self._create_teachers(subjects)
         self._create_group_subjects(groups, subjects, teachers)
-        students = self._create_students(groups, instruments, subjects, teachers)
-        self._create_grades_and_results(students, academic_year)
+        self._create_students(groups, instruments, subjects, teachers)
         self._create_course_applications()
+        self._create_course_group_assignments(academic_year, subjects, teachers)
+
+        students = list(
+            Student.objects
+            .filter(is_active=True)
+            .select_related('group', 'instrument')
+            .order_by('id')
+        )
+        self._create_grades_and_results(students, academic_year)
 
         credentials_path = self._write_credentials(options['credentials_output'])
 
@@ -222,13 +229,10 @@ class Command(BaseCommand):
             user.groups.add(admin_group)
 
     def _create_current_academic_year(self) -> AcademicYear:
-        today = timezone.localdate()
-        start_year = today.year if today.month >= 9 else today.year - 1
-
         return AcademicYear.objects.create(
-            name=f'{start_year}/{start_year + 1}',
-            starts_on=date(start_year, 9, 1),
-            ends_on=date(start_year + 1, 8, 31),
+            name='2025/2026',
+            starts_on=date(2025, 9, 1),
+            ends_on=date(2026, 8, 31),
             is_active=True,
         )
 
@@ -632,10 +636,77 @@ class Command(BaseCommand):
 
         return students
 
+    def _create_course_group_assignments(
+        self,
+        academic_year: AcademicYear,
+        subjects: dict[str, Subject],
+        teachers: dict[str, Teacher],
+    ) -> None:
+        course_group = StudyGroup.objects.filter(
+            name=CourseApplication.STUDENT_COURSE_GROUP_NAME,
+            academic_year=academic_year,
+        ).first()
+        if course_group is None:
+            return
+
+        course_group_subjects = [
+            ('Сольфеджио', 'Анна Морозова', 10),
+            ('Ритмика', 'Алексей Ветров', 20),
+            ('Хор', 'Елена Серова', 30),
+            ('Ансамбль', 'Наталья Лебедева', 40),
+            ('Слушание музыки', 'Анна Морозова', 50),
+        ]
+        for subject_name, teacher_name, sort_order in course_group_subjects:
+            GroupSubject.objects.create(
+                group=course_group,
+                subject=subjects[subject_name],
+                teacher=teachers[teacher_name],
+                sort_order=sort_order,
+                is_active=True,
+            )
+
+        specialty_teachers = [
+            'Дмитрий Ковалёв',
+            'Елена Серова',
+            'Игорь Романов',
+            'Наталья Лебедева',
+            'Сергей Аксёнов',
+        ]
+        extra_subjects = [
+            ('Импровизация', 'Дмитрий Ковалёв'),
+            ('Оркестр', 'Алексей Ветров'),
+            ('История церковной музыки', 'Ольга Захарова'),
+        ]
+        course_students = course_group.students.filter(is_active=True).order_by('id')
+
+        for index, student in enumerate(course_students, start=1):
+            StudentSubject.objects.create(
+                student=student,
+                subject=subjects['Специальность'],
+                teacher=teachers[specialty_teachers[(index - 1) % len(specialty_teachers)]],
+                is_specialty=True,
+                is_active=True,
+            )
+            extra_subject_name, extra_teacher_name = extra_subjects[(index - 1) % len(extra_subjects)]
+            StudentSubject.objects.create(
+                student=student,
+                subject=subjects[extra_subject_name],
+                teacher=teachers[extra_teacher_name],
+                is_specialty=False,
+                is_active=True,
+            )
+
     def _create_grades_and_results(self, students: list[Student], academic_year: AcademicYear) -> None:
         rng = Random(2026)
-        today = timezone.localdate()
-        first_grade_date = max(academic_year.starts_on + timedelta(days=14), today - timedelta(days=45))
+        first_grade_date = academic_year.starts_on + timedelta(days=14)
+        grade_values_source = [
+            Grade.GRADE_1,
+            Grade.GRADE_2,
+            Grade.GRADE_3,
+            Grade.GRADE_4,
+            Grade.GRADE_5,
+            Grade.GRADE_ABSENT,
+        ]
         grades_to_create: list[Grade] = []
         results_to_create: list[SubjectResult] = []
 
@@ -664,16 +735,12 @@ class Command(BaseCommand):
             )
 
             for subject_index, (subject, teacher) in enumerate(assignment_items, start=1):
-                grade_values = [
-                    str(rng.choice([3, 4, 4, 5, 5, 5, 'Н']))
-                    for _ in range(5)
-                ]
+                grade_offset = (student.pk + subject_index) % len(grade_values_source)
+                grade_values = grade_values_source[grade_offset:] + grade_values_source[:grade_offset]
                 for index, grade_value in enumerate(grade_values):
                     grade_date = first_grade_date + timedelta(
-                        days=index * 9 + subject_index + rng.randrange(0, 4),
+                        days=index * 18 + subject_index,
                     )
-                    if grade_date > today:
-                        grade_date = today - timedelta(days=index)
                     grades_to_create.append(
                         Grade(
                             student=student,

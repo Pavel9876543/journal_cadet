@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.db.models import Count
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from openpyxl import load_workbook
@@ -306,6 +307,70 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
 
         self.assertIn(subject, teacher.qualified_subjects.all())
         self.assertEqual(teacher.group_subjects.count(), 0)
+
+    def test_group_subject_teacher_change_syncs_teacher_subjects_and_grades(self):
+        data = self.create_base_journal()
+        assignment = GroupSubject.objects.get(
+            group=data['group'],
+            subject=data['solfeggio'],
+        )
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            date=date(2025, 10, 8),
+            value='5',
+        )
+
+        assignment.teacher = data['other_teacher']
+        assignment.save()
+
+        grade.refresh_from_db()
+        self.assertEqual(grade.teacher, data['other_teacher'])
+        self.assertTrue(
+            TeacherSubject.objects.filter(
+                teacher=data['other_teacher'],
+                subject=data['solfeggio'],
+            ).exists(),
+        )
+        self.assertFalse(
+            TeacherSubject.objects.filter(
+                teacher=data['teacher'],
+                subject=data['solfeggio'],
+            ).exists(),
+        )
+
+    def test_individual_subject_teacher_change_syncs_teacher_subjects_and_grades(self):
+        data = self.create_base_journal()
+        assignment = StudentSubject.objects.get(
+            student=data['student'],
+            subject=data['specialty'],
+        )
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['specialty'],
+            teacher=data['other_teacher'],
+            date=date(2025, 10, 9),
+            value='4',
+        )
+
+        assignment.teacher = data['teacher']
+        assignment.save()
+
+        grade.refresh_from_db()
+        self.assertEqual(grade.teacher, data['teacher'])
+        self.assertTrue(
+            TeacherSubject.objects.filter(
+                teacher=data['teacher'],
+                subject=data['specialty'],
+            ).exists(),
+        )
+        self.assertFalse(
+            TeacherSubject.objects.filter(
+                teacher=data['other_teacher'],
+                subject=data['specialty'],
+            ).exists(),
+        )
 
 
 class GradeModelTests(JournalTestDataMixin, TestCase):
@@ -1394,6 +1459,15 @@ class SeedDataCommandTests(TestCase):
     def test_seed_data_creates_new_architecture_records(self):
         self.assertTrue(CourseRegistrationSettings.objects.filter(pk=1).exists())
         self.assertTrue(AcademicYear.objects.exists())
+        self.assertEqual(AcademicYear.objects.count(), 1)
+        self.assertTrue(
+            AcademicYear.objects.filter(
+                name='2025/2026',
+                starts_on=date(2025, 9, 1),
+                ends_on=date(2026, 8, 31),
+                is_active=True,
+            ).exists(),
+        )
         self.assertTrue(Instrument.objects.exists())
         self.assertTrue(StudyGroup.objects.exists())
         self.assertTrue(Subject.objects.exists())
@@ -1458,9 +1532,23 @@ class SeedDataCommandTests(TestCase):
         self.assertGreaterEqual(StudyGroup.objects.count(), 7)
         self.assertGreaterEqual(Teacher.objects.count(), 9)
         self.assertGreaterEqual(Student.objects.count(), 35)
-        self.assertGreaterEqual(GroupSubject.objects.count(), 28)
-        self.assertGreaterEqual(StudentSubject.objects.filter(is_specialty=False).count(), 30)
-        self.assertGreaterEqual(Grade.objects.count(), 900)
+        self.assertGreaterEqual(GroupSubject.objects.count(), 33)
+        self.assertGreaterEqual(StudentSubject.objects.count(), 70)
+        self.assertGreaterEqual(StudentSubject.objects.filter(is_specialty=False).count(), 35)
+        self.assertEqual(Grade.objects.count(), 1482)
+
+        self.assertEqual(
+            set(Grade.objects.values_list('value', flat=True)),
+            {Grade.GRADE_1, Grade.GRADE_2, Grade.GRADE_3, Grade.GRADE_4, Grade.GRADE_5, Grade.GRADE_ABSENT},
+        )
+        self.assertFalse(
+            Student.objects
+            .filter(is_active=True)
+            .annotate(grades_count=Count('grades'))
+            .filter(grades_count=0)
+            .exists(),
+        )
+        self.assertFalse(Grade.objects.exclude(academic_year__name='2025/2026').exists())
 
         registration_settings = CourseRegistrationSettings.objects.get(pk=1)
         self.assertEqual(
