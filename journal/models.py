@@ -197,6 +197,10 @@ class StudyGroup(models.Model):
 
 class Teacher(models.Model):
     full_name = models.CharField('ФИО преподавателя', max_length=150)
+    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+    phone = models.CharField('Телефон', max_length=32, blank=True)
+    email = models.EmailField('Email', blank=True)
+    comments = models.TextField('Комментарий', blank=True)
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -230,6 +234,12 @@ class Teacher(models.Model):
         super().clean()
         if self.full_name:
             self.full_name = self.full_name.strip()
+        if self.phone:
+            self.phone = normalize_phone_number(self.phone)
+        if self.email:
+            self.email = self.email.strip().lower()
+        if self.comments:
+            self.comments = self.comments.strip()
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -243,6 +253,15 @@ class Teacher(models.Model):
     @property
     def individual_students_count(self) -> int:
         return self.individual_subjects.filter(is_active=True).values('student_id').distinct().count()
+
+    @property
+    def age(self) -> int | None:
+        if not self.birth_date:
+            return None
+
+        from .registration_utils import calculate_age
+
+        return calculate_age(self.birth_date)
 
 
 class TeacherSubject(models.Model):
@@ -279,7 +298,39 @@ class TeacherSubject(models.Model):
 
 
 class Student(models.Model):
+    GENDER_MALE = 'male'
+    GENDER_FEMALE = 'female'
+    GENDER_CHOICES = (
+        (GENDER_MALE, 'Мужской'),
+        (GENDER_FEMALE, 'Женский'),
+    )
+
+    MUSIC_EDUCATION_NONE = 'none'
+    MUSIC_EDUCATION_SELF = 'self_taught'
+    MUSIC_EDUCATION_BASIC = 'basic'
+    MUSIC_EDUCATION_SECONDARY = 'secondary'
+    MUSIC_EDUCATION_HIGHER = 'higher'
+    MUSIC_EDUCATION_CHOICES = (
+        (MUSIC_EDUCATION_NONE, 'Нет'),
+        (MUSIC_EDUCATION_SELF, 'Самоучка'),
+        (MUSIC_EDUCATION_BASIC, 'Начальное'),
+        (MUSIC_EDUCATION_SECONDARY, 'Среднее'),
+        (MUSIC_EDUCATION_HIGHER, 'Высшее'),
+    )
+
     full_name = models.CharField('ФИО ученика', max_length=150)
+    gender = models.CharField('Пол', max_length=10, choices=GENDER_CHOICES, blank=True)
+    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+    city_church = models.CharField('Город / Церковь', max_length=255, blank=True)
+    music_education = models.CharField(
+        'Музыкальное образование',
+        max_length=20,
+        choices=MUSIC_EDUCATION_CHOICES,
+        blank=True,
+    )
+    student_phone = models.CharField('Телефон ученика', max_length=32, blank=True)
+    parent_contacts = models.TextField('Телефон родителей', blank=True)
+    comments = models.TextField('Дополнительные вопросы или комментарии', blank=True)
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -310,6 +361,8 @@ class Student(models.Model):
             models.Index(fields=['group', 'full_name'], name='student_group_name_idx'),
             models.Index(fields=['instrument'], name='student_instrument_idx'),
             models.Index(fields=['is_active'], name='student_active_idx'),
+            models.Index(fields=['student_phone'], name='student_phone_idx'),
+            models.Index(fields=['birth_date'], name='student_birth_date_idx'),
         ]
 
     def __str__(self) -> str:
@@ -319,10 +372,27 @@ class Student(models.Model):
         super().clean()
         if self.full_name:
             self.full_name = self.full_name.strip()
+        if self.city_church:
+            self.city_church = self.city_church.strip()
+        if self.student_phone:
+            self.student_phone = normalize_phone_number(self.student_phone)
+        if self.parent_contacts:
+            self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
+        if self.comments:
+            self.comments = self.comments.strip()
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+    @property
+    def age(self) -> int | None:
+        if not self.birth_date:
+            return None
+
+        from .registration_utils import calculate_age
+
+        return calculate_age(self.birth_date)
 
     @property
     def specialty_assignment(self):
@@ -993,16 +1063,30 @@ class CourseApplication(models.Model):
         if existing_student is None:
             existing_student = Student.objects.create(
                 full_name=self.full_name,
+                gender=self.gender,
+                birth_date=self.birth_date,
+                city_church=self.city_church,
                 group=group,
                 instrument=instrument,
+                music_education=self.music_education,
+                student_phone=self.student_phone,
+                parent_contacts=self.parent_contacts,
+                comments=self.comments,
                 user=existing_user,
                 is_active=True,
             )
             created_student = existing_student
         else:
             existing_student.full_name = self.full_name
+            existing_student.gender = self.gender
+            existing_student.birth_date = self.birth_date
+            existing_student.city_church = self.city_church
             existing_student.group = group
             existing_student.instrument = instrument
+            existing_student.music_education = self.music_education
+            existing_student.student_phone = self.student_phone
+            existing_student.parent_contacts = self.parent_contacts
+            existing_student.comments = self.comments
             existing_student.user = existing_user
             existing_student.is_active = True
             existing_student.save()

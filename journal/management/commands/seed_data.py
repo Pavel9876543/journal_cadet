@@ -299,12 +299,16 @@ class Command(BaseCommand):
         ]
 
         teachers: dict[str, Teacher] = {}
-        for full_name, subject_names in teacher_specs:
+        for index, (full_name, subject_names) in enumerate(teacher_specs, start=1):
             user, password = self._create_user_for_full_name(full_name)
             self._assign_user_role(user, self.TEACHER_GROUP_NAME)
 
             teacher = Teacher.objects.create(
                 full_name=full_name,
+                birth_date=date(1978 + index, (index % 12) + 1, min(20 + index, 28)),
+                phone=f'+7 (900) 100-00-{index:02d}',
+                email=f'teacher{index}@cadet-journal.local',
+                comments='Демо-контакт преподавателя для проверки карточки профиля.',
                 user=user,
                 is_active=True,
             )
@@ -386,14 +390,27 @@ class Command(BaseCommand):
         students: list[Student] = []
         specialty_subject = subjects['Специальность']
 
-        for full_name, group_name, instrument_name, specialty_teacher_name in student_specs:
+        for index, (full_name, group_name, instrument_name, specialty_teacher_name) in enumerate(student_specs, start=1):
             user, password = self._create_user_for_full_name(full_name)
             self._assign_user_role(user, self.STUDENT_GROUP_NAME)
 
             student = Student.objects.create(
                 full_name=full_name,
+                gender=Student.GENDER_FEMALE if index % 3 == 0 else Student.GENDER_MALE,
+                birth_date=date(2011 + index % 4, (index % 12) + 1, min(8 + index, 28)),
+                city_church='Тамбов / Центральная церковь' if index % 2 else 'Воронеж / Отрожка',
                 group=groups[group_name],
                 instrument=instruments[instrument_name],
+                music_education=(
+                    Student.MUSIC_EDUCATION_BASIC
+                    if index % 2
+                    else Student.MUSIC_EDUCATION_SELF
+                ),
+                student_phone=f'+7 (901) 200-00-{index:02d}',
+                parent_contacts=(
+                    f'Родитель {index} - +7 (902) 300-00-{index:02d}'
+                ),
+                comments='Демо-анкета ученика для проверки полной карточки профиля.',
                 user=user,
                 is_active=True,
             )

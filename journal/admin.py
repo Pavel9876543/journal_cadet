@@ -47,10 +47,69 @@ except admin.sites.NotRegistered:
 
 @admin.register(AuthUser)
 class UserAdmin(BaseUserAdmin):
-    list_display = ('username', 'last_name', 'first_name', 'email', 'is_staff', 'is_active')
+    list_display = (
+        'username',
+        'last_name',
+        'first_name',
+        'email',
+        'journal_profile_display',
+        'is_staff',
+        'is_active',
+    )
     list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups')
-    search_fields = ('username', 'first_name', 'last_name', 'email')
+    search_fields = (
+        'username',
+        'first_name',
+        'last_name',
+        'email',
+        'student_profile__full_name',
+        'student_profile__student_phone',
+        'teacher_profile__full_name',
+        'teacher_profile__phone',
+    )
+    readonly_fields = (
+        *BaseUserAdmin.readonly_fields,
+        'student_profile_link',
+        'teacher_profile_link',
+    )
+    fieldsets = BaseUserAdmin.fieldsets + (
+        ('Профиль журнала', {
+            'fields': ('student_profile_link', 'teacher_profile_link'),
+            'classes': ('collapse',),
+        }),
+    )
     list_per_page = 40
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('student_profile', 'teacher_profile')
+
+    @admin.display(description='Профиль журнала')
+    def journal_profile_display(self, obj):
+        if hasattr(obj, 'student_profile') and obj.student_profile:
+            return format_html('Ученик: {}', admin_change_link(obj.student_profile))
+        if hasattr(obj, 'teacher_profile') and obj.teacher_profile:
+            return format_html('Преподаватель: {}', admin_change_link(obj.teacher_profile))
+        return '—'
+
+    @admin.display(description='Карточка ученика')
+    def student_profile_link(self, obj):
+        if not obj:
+            return '—'
+        try:
+            student = obj.student_profile
+        except Student.DoesNotExist:
+            student = None
+        return admin_change_link(student)
+
+    @admin.display(description='Карточка преподавателя')
+    def teacher_profile_link(self, obj):
+        if not obj:
+            return '—'
+        try:
+            teacher = obj.teacher_profile
+        except Teacher.DoesNotExist:
+            teacher = None
+        return admin_change_link(teacher)
 
 
 @admin.register(AuthGroup)
@@ -195,6 +254,27 @@ class SubjectResultAdminForm(forms.ModelForm):
                 self.fields['subject'].queryset = Subject.objects.filter(
                     Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids)
                 ).distinct().order_by('name')
+
+
+class TeacherAdminForm(forms.ModelForm):
+    class Meta:
+        model = Teacher
+        fields = '__all__'
+        widgets = {
+            'birth_date': html_date_input(),
+            'comments': forms.Textarea(attrs={'rows': 4}),
+        }
+
+
+class StudentAdminForm(forms.ModelForm):
+    class Meta:
+        model = Student
+        fields = '__all__'
+        widgets = {
+            'birth_date': html_date_input(),
+            'parent_contacts': forms.Textarea(attrs={'rows': 4}),
+            'comments': forms.Textarea(attrs={'rows': 4}),
+        }
 
 
 # -----------------------------------------------------------------------------
@@ -517,8 +597,12 @@ class StudyGroupAdmin(admin.ModelAdmin):
 
 @admin.register(Teacher)
 class TeacherAdmin(admin.ModelAdmin):
+    form = TeacherAdminForm
     list_display = (
         'full_name',
+        'phone',
+        'email',
+        'age_display',
         'user_link',
         'is_active',
         'group_subjects_count',
@@ -533,9 +617,13 @@ class TeacherAdmin(admin.ModelAdmin):
     )
     search_fields = (
         'full_name',
+        'phone',
+        'email',
+        'comments',
         'user__username',
         'user__first_name',
         'user__last_name',
+        'user__email',
         'group_subjects__group__name',
         'group_subjects__subject__name',
         'individual_subjects__student__full_name',
@@ -545,13 +633,21 @@ class TeacherAdmin(admin.ModelAdmin):
     ordering = ('full_name',)
     list_select_related = ('user',)
     list_per_page = 30
+    readonly_fields = ('age_display',)
     fieldsets = (
         ('Преподаватель', {
-            'fields': ('full_name', 'user', 'is_active'),
+            'fields': ('full_name', 'birth_date', 'age_display', 'is_active'),
             'description': (
                 'Групповые предметы назначаются в карточке группы. '
                 'Индивидуальные предметы назначаются в карточке ученика.'
             ),
+        }),
+        ('Контакты', {
+            'fields': ('phone', 'email', 'comments'),
+        }),
+        ('Аккаунт', {
+            'fields': ('user',),
+            'classes': ('collapse',),
         }),
     )
 
@@ -574,6 +670,10 @@ class TeacherAdmin(admin.ModelAdmin):
     def user_link(self, obj):
         return admin_change_link(obj.user)
 
+    @admin.display(description='Возраст')
+    def age_display(self, obj):
+        return obj.age if obj and obj.age is not None else '—'
+
     @admin.display(description='Групповых предметов')
     def group_subjects_count(self, obj):
         return obj._group_subjects_count
@@ -594,10 +694,14 @@ class TeacherAdmin(admin.ModelAdmin):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
+    form = StudentAdminForm
     list_display = (
         'full_name',
         'group',
         'instrument',
+        'age_display',
+        'student_phone',
+        'city_church',
         'specialty_teacher_display',
         'specialty_subject_display',
         'user_link',
@@ -613,9 +717,14 @@ class StudentAdmin(admin.ModelAdmin):
     )
     search_fields = (
         'full_name',
+        'student_phone',
+        'parent_contacts',
+        'city_church',
+        'comments',
         'user__username',
         'user__first_name',
         'user__last_name',
+        'user__email',
         'group__name',
         'instrument__name',
         'individual_subjects__teacher__full_name',
@@ -626,16 +735,34 @@ class StudentAdmin(admin.ModelAdmin):
     ordering = ('full_name',)
     list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
     list_per_page = 40
+    readonly_fields = ('age_display', 'course_application_link')
     fieldsets = (
         ('Ученик', {
-            'fields': ('full_name', 'group', 'instrument', 'is_active'),
+            'fields': (
+                'full_name',
+                'gender',
+                'birth_date',
+                'age_display',
+                'group',
+                'instrument',
+                'is_active',
+            ),
             'description': (
                 'В этой карточке хранится состав обучения ученика. '
                 'Оценки редактируются в журнале или в отдельном разделе «Оценки».'
             ),
         }),
+        ('Контакты и анкета', {
+            'fields': (
+                'student_phone',
+                'parent_contacts',
+                'city_church',
+                'music_education',
+                'comments',
+            ),
+        }),
         ('Аккаунт', {
-            'fields': ('user',),
+            'fields': ('user', 'course_application_link'),
             'classes': ('collapse',),
         }),
     )
@@ -643,6 +770,20 @@ class StudentAdmin(admin.ModelAdmin):
     @admin.display(description='Пользователь')
     def user_link(self, obj):
         return admin_change_link(obj.user)
+
+    @admin.display(description='Возраст')
+    def age_display(self, obj):
+        return obj.age if obj and obj.age is not None else '—'
+
+    @admin.display(description='Заявка на курсы')
+    def course_application_link(self, obj):
+        if not obj:
+            return '—'
+        try:
+            application = obj.course_application
+        except CourseApplication.DoesNotExist:
+            application = None
+        return admin_change_link(application)
 
     @admin.display(description='Преподаватель по специальности')
     def specialty_teacher_display(self, obj):

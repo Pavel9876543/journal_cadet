@@ -21,7 +21,7 @@ from journal.account_utils import (
     build_username_from_full_name,
     display_name_for_user,
 )
-from journal.admin import GradeAdminForm
+from journal.admin import GradeAdminForm, StudentAdminForm, TeacherAdminForm
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -496,11 +496,49 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credential.student_phone, '+7 (999) 123-45-67')
         self.assertTrue(user.check_password('Temp12345!'))
         self.assertEqual(student.full_name, 'Иванов Иван Иванович')
+        self.assertEqual(student.gender, application.gender)
+        self.assertEqual(student.birth_date, application.birth_date)
+        self.assertEqual(student.city_church, application.city_church)
+        self.assertEqual(student.music_education, application.music_education)
+        self.assertEqual(student.student_phone, application.student_phone)
+        self.assertEqual(student.parent_contacts, application.parent_contacts)
+        self.assertEqual(student.comments, application.comments)
         self.assertEqual(student.user, user)
         self.assertEqual(student.group.name, CourseApplication.STUDENT_COURSE_GROUP_NAME)
         self.assertEqual(student.instrument.name, 'Баян I')
         self.assertIsNotNone(application.journal_created_at)
         self.assertIsNone(application.journal_removed_at)
+
+    def test_confirmed_application_updates_existing_student_profile_details(self):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
+
+        application.birth_date = date(1999, 5, 4)
+        application.city_church = 'Воронеж / Отрожка'
+        application.instrument = 'Фортепиано'
+        application.music_education = CourseApplication.MUSIC_EDUCATION_HIGHER
+        application.student_phone = '+7 (999) 123-45-69'
+        application.parent_contacts = 'Отец - +7 (999) 111-22-33'
+        application.comments = 'Нужен вечерний поток'
+        application.save()
+
+        student = application.student
+        student.refresh_from_db()
+        credential = TemporaryCredential.objects.get(course_application=application)
+
+        self.assertEqual(student.birth_date, date(1999, 5, 4))
+        self.assertEqual(student.city_church, 'Воронеж / Отрожка')
+        self.assertEqual(student.instrument.name, 'Фортепиано')
+        self.assertEqual(student.music_education, CourseApplication.MUSIC_EDUCATION_HIGHER)
+        self.assertEqual(student.student_phone, '+7 (999) 123-45-69')
+        self.assertEqual(student.parent_contacts, 'Отец - +7 (999) 111-22-33')
+        self.assertEqual(student.comments, 'Нужен вечерний поток')
+        self.assertEqual(credential.student_phone, '+7 (999) 123-45-69')
 
     def test_confirmed_applications_add_suffix_for_duplicate_login(self):
         with patch(
@@ -751,6 +789,17 @@ class FormTests(JournalTestDataMixin, TestCase):
         form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
 
         self.assertIn('value="2025-10-10"', str(form['date']))
+
+    def test_student_and_teacher_edit_forms_keep_existing_birth_dates(self):
+        data = self.create_base_journal()
+        data['student'].birth_date = date(2010, 3, 2)
+        data['teacher'].birth_date = date(1980, 4, 3)
+
+        student_form = StudentAdminForm(instance=data['student'])
+        teacher_form = TeacherAdminForm(instance=data['teacher'])
+
+        self.assertIn('value="2010-03-02"', str(student_form['birth_date']))
+        self.assertIn('value="1980-04-03"', str(teacher_form['birth_date']))
 
     def test_subject_result_form_validates_allowed_subject_and_grade_type(self):
         data = self.create_base_journal()
