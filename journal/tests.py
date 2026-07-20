@@ -1245,6 +1245,36 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 302)
 
+    def test_staff_user_cannot_open_seed_test_data_tool(self):
+        self.client.login(username='staff_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_seed_test_data'))
+
+        self.assertEqual(response.status_code, 302)
+
+    @patch('journal.admin_tools.call_command')
+    def test_superuser_can_open_seed_test_data_tool_without_running_it(self, mocked_call_command):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_seed_test_data'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Запуск тестовых данных')
+        self.assertContains(response, 'Подтверждаю пересоздание тестовых данных')
+        mocked_call_command.assert_not_called()
+
+    @patch('journal.admin_tools.call_command')
+    def test_superuser_can_run_seed_test_data_tool(self, mocked_call_command):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin_seed_test_data'),
+            data={'confirm': 'yes'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        mocked_call_command.assert_called_once_with('seed_data')
+
     def test_staff_user_cannot_download_full_export(self):
         self.client.login(username='staff_xlsx', password='Pass12345!')
 

@@ -51,6 +51,7 @@ def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
             fallback='/admin/',
         ),
         'export_credentials_url': reverse('admin_export_test_credentials_excel'),
+        'seed_confirm_url': reverse('admin_seed_test_data'),
         'seed_url': reverse('admin_seed_test_data'),
         'export_all_data_url': safe_reverse('admin_export_all_data_excel'),
     }
@@ -72,8 +73,12 @@ def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
         raise PermissionDenied('Создание тестовых данных доступно только суперпользователю.')
 
     if request.method != 'POST':
-        messages.error(request, 'Создание тестовых данных можно запускать только через форму.')
-        return redirect('admin_data_tools')
+        context = {
+            'title': 'Запуск тестовых данных',
+            'seed_url': reverse('admin_seed_test_data'),
+            'data_tools_url': reverse('admin_data_tools'),
+        }
+        return render(request, 'admin/journal/seed_data_confirm.html', context)
 
     if request.POST.get('confirm') != 'yes':
         messages.error(request, 'Подтвердите создание тестовых данных.')

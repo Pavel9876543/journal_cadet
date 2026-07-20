@@ -342,6 +342,11 @@ body:not(.login-page) .app-main {
     padding: 20px;
 }
 
+.journal-danger-section {
+    border-color: rgba(168, 97, 5, 0.34);
+    background: linear-gradient(180deg, rgba(255, 251, 235, 0.84), var(--journal-admin-surface));
+}
+
 .journal-section-heading {
     display: flex;
     align-items: flex-start;

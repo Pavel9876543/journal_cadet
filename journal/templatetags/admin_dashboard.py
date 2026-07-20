@@ -23,6 +23,8 @@ register = template.Library()
 
 
 def _can(user, permission: str | None) -> bool:
+    if permission == 'superuser':
+        return bool(user and user.is_active and user.is_superuser)
     if permission is None:
         return bool(user and user.is_staff)
     return bool(user and user.has_perm(permission))
@@ -313,6 +315,14 @@ def journal_admin_dashboard(context):
                     'Тестовые данные и Excel-выгрузки.',
                     user,
                     'journal.view_temporarycredential',
+                ),
+                _item(
+                    'Запуск тестовых данных',
+                    _reverse('admin_seed_test_data'),
+                    'fas fa-play-circle',
+                    'Пересоздать максимальный демо-набор через страницу подтверждения.',
+                    user,
+                    'superuser',
                 ),
                 _item(
                     'Полная Excel-выгрузка',

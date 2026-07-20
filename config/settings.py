@@ -109,6 +109,12 @@ JAZZMIN_SETTINGS = {
             'icon': 'fas fa-database',
             'permissions': ['journal.view_temporarycredential'],
         },
+        {
+            'name': 'Тестовые данные',
+            'url': 'admin_seed_test_data',
+            'icon': 'fas fa-play-circle',
+            'permissions': ['journal.view_temporarycredential'],
+        },
     ],
     'order_with_respect_to': [
         'journal',
@@ -123,6 +129,7 @@ JAZZMIN_SETTINGS = {
         'journal.AcademicYear',
         'journal.Subject',
         'journal.Instrument',
+        'Запуск тестовых данных',
         'Выгрузить все данные в Excel',
         'Инструменты данных',
         'auth',
@@ -163,6 +170,12 @@ JAZZMIN_SETTINGS = {
                 'name': 'Инструменты данных',
                 'url': 'admin_data_tools',
                 'icon': 'fas fa-database',
+                'permissions': ['journal.view_temporarycredential'],
+            },
+            {
+                'name': 'Запуск тестовых данных',
+                'url': 'admin_seed_test_data',
+                'icon': 'fas fa-play-circle',
                 'permissions': ['journal.view_temporarycredential'],
             },
         ],

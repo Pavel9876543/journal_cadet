@@ -1,0 +1,53 @@
+{% extends "admin/base_site.html" %}
+
+{% block bodyclass %}{{ block.super }} journal-admin-page{% endblock %}
+
+{% block content_title %}Запуск тестовых данных{% endblock %}
+
+{% block content %}
+<div class="col-12">
+    <div class="journal-dashboard journal-tools-page">
+        <section class="journal-dashboard-hero journal-tools-hero">
+            <div>
+                <p class="journal-dashboard-kicker">Инструмент</p>
+                <h1>Запуск тестовых данных</h1>
+                <p class="journal-dashboard-lead">
+                    Полное пересоздание демо-набора для проверки админки, журнала,
+                    заявок, карточек пользователей и временных доступов.
+                </p>
+            </div>
+
+            <div class="journal-dashboard-actions" aria-label="Навигация">
+                <a href="{{ data_tools_url }}" class="journal-action-button">
+                    <i class="fas fa-arrow-left" aria-hidden="true"></i>
+                    <span>Инструменты данных</span>
+                </a>
+            </div>
+        </section>
+
+        <section class="journal-section journal-danger-section">
+            <div class="journal-section-heading">
+                <h2>Подтверждение запуска</h2>
+                <p>
+                    Команда очистит существующие учебные тестовые записи и создаст
+                    максимальный демо-набор заново.
+                </p>
+            </div>
+
+            <form method="post" action="{{ seed_url }}" class="journal-seed-form">
+                {% csrf_token %}
+
+                <label>
+                    <input type="checkbox" name="confirm" value="yes">
+                    <span>Подтверждаю пересоздание тестовых данных</span>
+                </label>
+
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-database" aria-hidden="true"></i>
+                    Создать тестовые данные
+                </button>
+            </form>
+        </section>
+    </div>
+</div>
+{% endblock %}
