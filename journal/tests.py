@@ -33,6 +33,7 @@ from journal.forms import (
     get_teacher_groups,
     get_teacher_subjects,
 )
+from journal.registration_utils import normalize_parent_contacts
 from journal.models import (
     AcademicYear,
     CourseApplication,
@@ -722,6 +723,16 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIn('value="basic" selected', str(form['music_education']))
         self.assertIn('Нужен вечерний поток', str(form['comments']))
 
+    def test_parent_contacts_accepts_dash_from_form_placeholder(self):
+        normalized_contacts = normalize_parent_contacts(
+            'Иванов Иван Иванович — +7 (999) 123-45-67',
+        )
+
+        self.assertEqual(
+            normalized_contacts,
+            'Иванов Иван Иванович - +7 (999) 123-45-67',
+        )
+
     def test_public_course_application_form_enforces_age_limit(self):
         too_young_birth_date = date.today().replace(
             year=date.today().year - 10,
@@ -784,6 +795,29 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('teacher', form.fields)
         self.assertNotIn('subject', form.fields)
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
+
+    def test_grade_form_with_fixed_teacher_reports_invalid_subject_without_crash(self):
+        data = self.create_base_journal()
+
+        form = GradeCreateForm(
+            data={
+                'student': data['student'].pk,
+                'subject': data['literature'].pk,
+                'academic_year': data['year'].pk,
+                'date': '2025-10-10',
+                'value': '5',
+                'comment': '',
+            },
+            teacher=data['teacher'],
+            group=data['group'],
+            academic_year=data['year'],
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn(
+            'Этот преподаватель не назначен выбранному ученику',
+            str(form.errors),
+        )
 
     def test_grade_edit_form_keeps_existing_date_value(self):
         form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
@@ -1097,6 +1131,36 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertIn('student_phone', response.json()['errors'])
         self.assertEqual(CourseApplication.objects.count(), 1)
 
+    @override_settings(
+        CACHES={
+            'default': {
+                'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+                'LOCATION': 'course-registration-throttle-test',
+            },
+        },
+    )
+    def test_registration_api_limits_repeated_requests_from_same_ip(self):
+        url = reverse('course_registration_api')
+
+        for _ in range(10):
+            response = self.client.post(
+                url,
+                data='{}',
+                content_type='application/json',
+                REMOTE_ADDR='203.0.113.10',
+            )
+            self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            url,
+            data='{}',
+            content_type='application/json',
+            REMOTE_ADDR='203.0.113.10',
+        )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertFalse(response.json()['success'])
+
 
 class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
     def setUp(self):
@@ -1108,6 +1172,11 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.regular_user = User.objects.create_user(
             username='regular_xlsx',
             password='Pass12345!',
+        )
+        self.staff_user = User.objects.create_user(
+            username='staff_xlsx',
+            password='Pass12345!',
+            is_staff=True,
         )
 
         self.teacher_group = Group.objects.create(name='Преподаватель')
@@ -1162,6 +1231,38 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 302)
 
+    def test_staff_user_cannot_download_temporary_credentials_xlsx(self):
+        self.client.login(username='staff_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_export_test_credentials_excel'))
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_staff_user_cannot_open_data_tools(self):
+        self.client.login(username='staff_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_data_tools'))
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_staff_user_cannot_download_full_export(self):
+        self.client.login(username='staff_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_export_all_data_excel'))
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_superuser_can_download_full_export(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_export_all_data_excel'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+
 
 class AccountUtilityTests(JournalTestDataMixin, TestCase):
     def test_build_username_helpers_use_name_and_surname(self):
@@ -1199,6 +1300,50 @@ class AccountUtilityTests(JournalTestDataMixin, TestCase):
         Teacher.objects.create(full_name='Пётр Петров', user=user)
 
         self.assertEqual(display_name_for_user(user), 'Петров Пётр')
+
+
+class AccountCommandTests(JournalTestDataMixin, TestCase):
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_create_student_accounts_stores_actual_unique_usernames(self):
+        group = self.create_group()
+        instrument = self.create_instrument()
+        Student.objects.create(
+            full_name='Иван Иванов',
+            group=group,
+            instrument=instrument,
+        )
+        Student.objects.create(
+            full_name='Иван Иванов',
+            group=group,
+            instrument=instrument,
+        )
+
+        call_command('create_student_accounts', stdout=StringIO())
+
+        self.assertEqual(
+            list(User.objects.order_by('username').values_list('username', flat=True)),
+            ['Иванов Иван', 'Иванов Иван 2'],
+        )
+        self.assertEqual(
+            list(TemporaryCredential.objects.order_by('login').values_list('login', flat=True)),
+            ['Иванов Иван', 'Иванов Иван 2'],
+        )
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_create_teacher_accounts_stores_actual_unique_usernames(self):
+        Teacher.objects.create(full_name='Иван Иванов')
+        Teacher.objects.create(full_name='Иван Иванов')
+
+        call_command('create_teacher_accounts', stdout=StringIO())
+
+        self.assertEqual(
+            list(User.objects.order_by('username').values_list('username', flat=True)),
+            ['Иванов Иван', 'Иванов Иван 2'],
+        )
+        self.assertEqual(
+            list(TemporaryCredential.objects.order_by('login').values_list('login', flat=True)),
+            ['Иванов Иван', 'Иванов Иван 2'],
+        )
 
 
 class SeedDataCommandTests(TestCase):

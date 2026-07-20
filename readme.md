@@ -11,7 +11,11 @@ Django-приложение для ведения журнала кадет/уч
 
 ## Файлы окружения
 
-Проект читает переменные окружения из `.env.dev` и `.env.prod`, если файлы существуют. Уже заданные переменные окружения имеют приоритет над значениями из файлов.
+Проект читает переменные окружения из одного env-файла. Уже заданные переменные окружения имеют приоритет над значениями из файла.
+
+- Если задан `DJANGO_ENV_FILE`, загружается указанный файл.
+- Если `DJANGO_ENV=production` или `DJANGO_ENV=prod`, загружается `.env.prod`.
+- В остальных случаях загружается `.env.dev`.
 
 Для создания env-файла из примера:
 
@@ -22,10 +26,15 @@ Django-приложение для ведения журнала кадет/уч
 
 Основные переменные:
 
+- `DJANGO_ENV` - окружение запуска: `development` или `production`.
+- `DJANGO_ENV_FILE` - явный путь к env-файлу, если нужен нестандартный файл.
 - `DEBUG` - `1` для разработки, `0` для production.
 - `SECRET_KEY` - секретный ключ Django.
 - `ALLOWED_HOSTS` - хосты через запятую.
 - `CSRF_TRUSTED_ORIGINS` - доверенные origins через запятую, например `https://example.com`.
+- `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE` - HTTPS-настройки для production.
+- `SECURE_HSTS_SECONDS`, `SECURE_HSTS_INCLUDE_SUBDOMAINS`, `SECURE_HSTS_PRELOAD` - HSTS-настройки для production.
+- `USE_X_FORWARDED_PROTO=1` - учитывать `X-Forwarded-Proto`, если HTTPS завершается на reverse proxy.
 - `DB_ENGINE` - движок БД, например `django.db.backends.postgresql` или `django.db.backends.sqlite3`.
 - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` - настройки подключения Django к БД.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` - настройки контейнера PostgreSQL.
@@ -94,7 +103,7 @@ http://127.0.0.1:8000/admin/
 
 ## Production-запуск вручную
 
-Перед запуском настройте `.env.prod`: поменяйте `SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, пароли БД и данные суперпользователя.
+Перед запуском настройте `.env.prod`: поменяйте `SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, пароли БД и данные суперпользователя. С placeholder-значением `SECRET_KEY` production-запуск будет остановлен.
 
 ```bash
 ./scripts/run-prod.sh

@@ -1,4 +1,4 @@
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -11,6 +11,7 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        User = get_user_model()
         credentials = []
         used_usernames = set(User.objects.values_list('username', flat=True))
 
@@ -19,7 +20,6 @@ class Command(BaseCommand):
             if user.pk and user.username in used_usernames:
                 used_usernames.remove(user.username)
 
-            login = account_utils.build_display_name_from_full_name(teacher.full_name)
             username = account_utils.build_username_from_full_name(
                 teacher.full_name,
                 existing_usernames=used_usernames,
@@ -41,14 +41,14 @@ class Command(BaseCommand):
             used_usernames.add(username)
 
             TemporaryCredential.objects.create(
-                login=login,
+                login=username,
                 temporary_password=password,
             )
 
             credentials.append(
                 {
                     'teacher': teacher.full_name,
-                    'login': login,
+                    'login': username,
                     'password': password,
                 }
             )

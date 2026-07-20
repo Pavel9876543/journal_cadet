@@ -394,10 +394,11 @@ class GradeCreateForm(forms.ModelForm):
             ).exists()
 
             if not group_assignment_exists and not individual_assignment_exists:
-                self.add_error(
-                    'teacher',
-                    'Этот преподаватель не назначен выбранному ученику по выбранному предмету.'
-                )
+                message = 'Этот преподаватель не назначен выбранному ученику по выбранному предмету.'
+                if 'teacher' in self.fields:
+                    self.add_error('teacher', message)
+                else:
+                    raise forms.ValidationError(message)
 
         return cleaned_data
 

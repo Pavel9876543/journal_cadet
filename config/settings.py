@@ -2,14 +2,15 @@ import os
 from pathlib import Path
 from importlib.util import find_spec
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Загружаем переменные из локальных env-файлов, если они есть.
-# Приоритет: уже заданные переменные окружения > значения из файлов.
-for env_filename in ('.env.dev', '.env.prod'):
+
+def _load_env_file(env_filename: str) -> None:
     env_path = BASE_DIR / env_filename
-    if not env_path.exists():
-        continue
+    if not env_filename or not env_path.exists():
+        return
     for raw_line in env_path.read_text(encoding='utf-8').splitlines():
         line = raw_line.strip()
         if not line or line.startswith('#') or '=' not in line:
@@ -17,8 +18,18 @@ for env_filename in ('.env.dev', '.env.prod'):
         key, value = line.split('=', 1)
         os.environ.setdefault(key.strip(), value.strip())
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'unsafe-dev-secret-key')
-DEBUG = os.getenv('DEBUG', '1') == '1'
+
+# Загружаем один локальный env-файл, если он есть.
+# Явные переменные окружения всегда имеют приоритет над значениями из файла.
+env_file = os.getenv('DJANGO_ENV_FILE')
+if env_file:
+    _load_env_file(env_file)
+elif os.getenv('DJANGO_ENV', '').lower() in {'production', 'prod'}:
+    _load_env_file('.env.prod')
+else:
+    _load_env_file('.env.dev')
+
+IS_PRODUCTION_ENV = os.getenv('DJANGO_ENV', '').lower() in {'production', 'prod'}
 
 
 def _env_list(name: str, default: str = '') -> list[str]:
@@ -26,7 +37,26 @@ def _env_list(name: str, default: str = '') -> list[str]:
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
-ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', '*')
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+DEBUG = _env_bool('DEBUG', not IS_PRODUCTION_ENV)
+SECRET_KEY = os.getenv('SECRET_KEY', '')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'unsafe-dev-secret-key-for-local-debug-only'
+    else:
+        raise ImproperlyConfigured('SECRET_KEY must be set when DEBUG=0.')
+if not DEBUG and (SECRET_KEY.startswith('change-this') or SECRET_KEY.startswith('unsafe-')):
+    raise ImproperlyConfigured('SECRET_KEY must be changed for production.')
+
+ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', '127.0.0.1,localhost' if DEBUG else '')
+if not DEBUG and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured('ALLOWED_HOSTS must be set when DEBUG=0.')
 
 INSTALLED_APPS = [
     'jazzmin',
@@ -198,3 +228,12 @@ LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/accounts/login/'
 
 CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS')
+SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', False)
+SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', not DEBUG)
+CSRF_COOKIE_SECURE = _env_bool('CSRF_COOKIE_SECURE', not DEBUG)
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
+SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', False)
+
+if _env_bool('USE_X_FORWARDED_PROTO', False):
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

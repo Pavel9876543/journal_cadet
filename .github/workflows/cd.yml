@@ -154,10 +154,18 @@ jobs:
             : > .env.prod
 
             printf '%s\n' \
+              "DJANGO_ENV=production" \
               "DEBUG=0" \
               "SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" \
               "ALLOWED_HOSTS=${{ secrets.DJANGO_ALLOWED_HOSTS }}" \
               "CSRF_TRUSTED_ORIGINS=${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}" \
+              "SECURE_SSL_REDIRECT=1" \
+              "SESSION_COOKIE_SECURE=1" \
+              "CSRF_COOKIE_SECURE=1" \
+              "SECURE_HSTS_SECONDS=31536000" \
+              "SECURE_HSTS_INCLUDE_SUBDOMAINS=1" \
+              "SECURE_HSTS_PRELOAD=1" \
+              "USE_X_FORWARDED_PROTO=1" \
               "DB_ENGINE=django.db.backends.postgresql" \
               "DB_NAME=${{ secrets.POSTGRES_DB }}" \
               "DB_USER=${{ secrets.POSTGRES_USER }}" \

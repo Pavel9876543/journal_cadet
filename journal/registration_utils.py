@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 
 PHONE_ERROR_MESSAGE = 'Неверный формат телефона.'
 PARENT_CONTACTS_ERROR_MESSAGE = 'Телефон родителей должен быть указан в формате: ФИО - номер телефона.'
+PARENT_CONTACTS_SEPARATOR_RE = re.compile(r'\s+[-—]\s+')
 
 
 def calculate_age(birth_date: date, *, today: date | None = None) -> int:
@@ -47,10 +48,11 @@ def normalize_parent_contacts(value: str) -> str:
         if not stripped_line:
             continue
 
-        if ' - ' not in stripped_line:
+        parts = PARENT_CONTACTS_SEPARATOR_RE.split(stripped_line, maxsplit=1)
+        if len(parts) != 2:
             raise ValidationError(PARENT_CONTACTS_ERROR_MESSAGE)
 
-        name_part, phone_part = stripped_line.split(' - ', 1)
+        name_part, phone_part = parts
         name = name_part.strip()
         phone = phone_part.strip()
 

@@ -5,23 +5,18 @@ from datetime import date
 from io import BytesIO
 import json
 from typing import Iterable
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db.models import Q, QuerySet
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.utils import timezone
-
-from urllib.parse import quote
-
-from django.contrib.admin.views.decorators import staff_member_required
-from django.http import HttpResponse
 from django.utils import timezone
 
 from .services.excel_export import build_full_export_workbook
@@ -909,6 +904,9 @@ def _journal_context(
 # Регистрация на курсы
 # -----------------------------------------------------------------------------
 
+COURSE_REGISTRATION_API_THROTTLE_LIMIT = 10
+COURSE_REGISTRATION_API_THROTTLE_WINDOW = 60
+
 
 def _load_registration_payload(request):
     if 'application/json' in request.headers.get('Content-Type', ''):
@@ -917,6 +915,28 @@ def _load_registration_payload(request):
         except json.JSONDecodeError:
             return None
     return request.POST
+
+
+def _get_client_ip(request) -> str:
+    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded_for:
+        return forwarded_for.split(',', 1)[0].strip()
+    return request.META.get('REMOTE_ADDR', '') or 'unknown'
+
+
+def _registration_api_is_throttled(request) -> bool:
+    cache_key = f'course_registration_api:{_get_client_ip(request)}'
+    added = cache.add(cache_key, 1, COURSE_REGISTRATION_API_THROTTLE_WINDOW)
+    if added:
+        return False
+
+    try:
+        attempts = cache.incr(cache_key)
+    except ValueError:
+        cache.set(cache_key, 1, COURSE_REGISTRATION_API_THROTTLE_WINDOW)
+        return False
+
+    return attempts > COURSE_REGISTRATION_API_THROTTLE_LIMIT
 
 
 def _get_telegram_redirect_url() -> str:
@@ -977,6 +997,15 @@ def course_registration_view(request):
 def course_registration_api(request):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
+
+    if _registration_api_is_throttled(request):
+        return JsonResponse(
+            {
+                'success': False,
+                'message': 'Слишком много попыток регистрации. Попробуйте позже.',
+            },
+            status=429,
+        )
 
     payload = _load_registration_payload(request)
     if payload is None:
@@ -1113,7 +1142,7 @@ def export_student_credentials_xlsx(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
-@staff_member_required
+@user_passes_test(lambda user: user.is_active and user.is_superuser)
 def export_all_data_excel(request):
     workbook = build_full_export_workbook()
 

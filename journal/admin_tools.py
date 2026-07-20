@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import user_passes_test
 from django.core.management import call_command
 from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest, HttpResponse
@@ -22,13 +22,15 @@ from openpyxl.utils import get_column_letter
 from .models import TemporaryCredential
 
 
+superuser_required = user_passes_test(lambda user: user.is_active and user.is_superuser)
+
 HEADER_FILL = PatternFill('solid', fgColor='D9EAF7')
 HEADER_FONT = Font(bold=True)
 DEFAULT_COLUMN_WIDTH = 18
 MAX_COLUMN_WIDTH = 60
 
 
-@staff_member_required
+@superuser_required
 def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
     """
     Страница инструментов данных в Django Admin.
@@ -56,7 +58,7 @@ def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
     return render(request, 'admin/journal/data_tools.html', context)
 
 
-@staff_member_required
+@superuser_required
 def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
     """
     Запускает management-команду seed_data из админки.
@@ -92,7 +94,7 @@ def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
     return redirect('admin:journal_temporarycredential_changelist')
 
 
-@staff_member_required
+@superuser_required
 def admin_export_test_credentials_excel_view(request: HttpRequest) -> HttpResponse:
     """
     Экспорт временных учетных данных в Excel.

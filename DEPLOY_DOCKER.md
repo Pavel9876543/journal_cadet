@@ -70,6 +70,8 @@ scripts\start-docker.cmd
 - `DJANGO_SUPERUSER_PASSWORD`
 - `DJANGO_SUPERUSER_ROTATE_PASSWORD` (`0` или `1`)
 
+GitHub Secrets с префиксом `DJANGO_` используются только в workflow. При деплое они записываются в `.env.prod` как `SECRET_KEY`, `ALLOWED_HOSTS` и `CSRF_TRUSTED_ORIGINS`, которые читает Django-приложение.
+
 ### Переменные (`Actions variables`)
 
 - `REPO_URL` (пример: `git@github.com:ORG/REPO.git`)
