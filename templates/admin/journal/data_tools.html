@@ -64,9 +64,55 @@
                     <span>Подтверждаю пересоздание тестовых данных</span>
                 </label>
 
+                <label class="journal-password-field">
+                    <span>Пароль подтверждения</span>
+                    <input
+                        type="password"
+                        name="{{ data_tools_password_field }}"
+                        class="form-control"
+                        autocomplete="off"
+                        required
+                    >
+                </label>
+
                 <button type="submit" class="btn btn-primary">
                     <i class="fas fa-database" aria-hidden="true"></i>
                     Создать тестовые данные
+                </button>
+            </form>
+        </section>
+
+        <section class="journal-section journal-danger-section">
+            <div class="journal-section-heading">
+                <h2>Удаление базы данных</h2>
+                <p>
+                    Очищает данные журнала, заявки, оценки, справочники и обычных
+                    пользователей. Суперпользователи и staff-пользователи сохраняются.
+                </p>
+            </div>
+
+            <form method="post" action="{{ delete_database_url }}" class="journal-seed-form">
+                {% csrf_token %}
+
+                <label>
+                    <input type="checkbox" name="confirm_delete" value="yes">
+                    <span>Подтверждаю удаление базы данных</span>
+                </label>
+
+                <label class="journal-password-field">
+                    <span>Пароль подтверждения</span>
+                    <input
+                        type="password"
+                        name="{{ data_tools_password_field }}"
+                        class="form-control"
+                        autocomplete="off"
+                        required
+                    >
+                </label>
+
+                <button type="submit" class="btn btn-danger">
+                    <i class="fas fa-trash-alt" aria-hidden="true"></i>
+                    Удалить базу данных
                 </button>
             </form>
         </section>

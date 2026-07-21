@@ -1310,10 +1310,32 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 302)
 
+    def test_superuser_can_open_data_tools_with_delete_database_button(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_data_tools'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Удалить базу данных')
+        self.assertContains(response, 'name="pas_key_data"')
+
     def test_staff_user_cannot_open_seed_test_data_tool(self):
         self.client.login(username='staff_xlsx', password='Pass12345!')
 
         response = self.client.get(reverse('admin_seed_test_data'))
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_staff_user_cannot_delete_database(self):
+        self.client.login(username='staff_xlsx', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin_delete_database'),
+            data={
+                'confirm_delete': 'yes',
+                'pas_key_data': 'rtycds28',
+            },
+        )
 
         self.assertEqual(response.status_code, 302)
 
@@ -1326,19 +1348,90 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Запуск тестовых данных')
         self.assertContains(response, 'Подтверждаю пересоздание тестовых данных')
+        self.assertContains(response, 'name="pas_key_data"')
         mocked_call_command.assert_not_called()
 
+    @override_settings(DATA_TOOLS_PASSWORD='rtycds28')
     @patch('journal.admin_tools.call_command')
     def test_superuser_can_run_seed_test_data_tool(self, mocked_call_command):
         self.client.login(username='admin_xlsx', password='Pass12345!')
 
         response = self.client.post(
             reverse('admin_seed_test_data'),
-            data={'confirm': 'yes'},
+            data={
+                'confirm': 'yes',
+                'pas_key_data': 'rtycds28',
+            },
         )
 
         self.assertEqual(response.status_code, 302)
         mocked_call_command.assert_called_once_with('seed_data')
+
+    @override_settings(DATA_TOOLS_PASSWORD='rtycds28')
+    @patch('journal.admin_tools.call_command')
+    def test_seed_test_data_tool_rejects_wrong_password(self, mocked_call_command):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin_seed_test_data'),
+            data={
+                'confirm': 'yes',
+                'pas_key_data': 'wrong',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        mocked_call_command.assert_not_called()
+
+    @override_settings(DATA_TOOLS_PASSWORD='rtycds28')
+    def test_superuser_can_delete_database_with_confirmation_password(self):
+        self.create_base_journal()
+        CourseRegistrationSettings.objects.create(
+            pk=1,
+            telegram_group_url='https://t.me/test_group',
+        )
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin_delete_database'),
+            data={
+                'confirm_delete': 'yes',
+                'pas_key_data': 'rtycds28',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AcademicYear.objects.exists())
+        self.assertFalse(Instrument.objects.exists())
+        self.assertFalse(Subject.objects.exists())
+        self.assertFalse(Teacher.objects.exists())
+        self.assertFalse(Student.objects.exists())
+        self.assertFalse(GroupSubject.objects.exists())
+        self.assertFalse(StudentSubject.objects.exists())
+        self.assertFalse(Grade.objects.exists())
+        self.assertFalse(SubjectResult.objects.exists())
+        self.assertFalse(CourseApplication.objects.exists())
+        self.assertFalse(CourseRegistrationSettings.objects.exists())
+        self.assertFalse(TemporaryCredential.objects.exists())
+        self.assertTrue(User.objects.filter(pk=self.admin_user.pk).exists())
+        self.assertTrue(User.objects.filter(pk=self.staff_user.pk).exists())
+        self.assertFalse(User.objects.filter(pk=self.regular_user.pk).exists())
+
+    @override_settings(DATA_TOOLS_PASSWORD='rtycds28')
+    def test_delete_database_rejects_wrong_password(self):
+        self.create_base_journal()
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin_delete_database'),
+            data={
+                'confirm_delete': 'yes',
+                'pas_key_data': 'wrong',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Student.objects.exists())
 
     def test_staff_user_cannot_download_full_export(self):
         self.client.login(username='staff_xlsx', password='Pass12345!')

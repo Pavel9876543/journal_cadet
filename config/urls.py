@@ -6,6 +6,7 @@ from journal.forms import DetailedPasswordChangeForm, SiteAuthenticationForm
 from journal.views import export_student_credentials_xlsx, export_all_data_excel
 
 from journal.admin_tools import (
+    admin_delete_database_view,
     admin_data_tools_view,
     admin_export_test_credentials_excel_view,
     admin_seed_test_data_view,
@@ -21,6 +22,11 @@ urlpatterns = [
         'admin/journal/data-tools/seed/',
         admin_seed_test_data_view,
         name='admin_seed_test_data',
+    ),
+    path(
+        'admin/journal/data-tools/delete-database/',
+        admin_delete_database_view,
+        name='admin_delete_database',
     ),
     path(
         'admin/journal/data-tools/export-credentials.xlsx',

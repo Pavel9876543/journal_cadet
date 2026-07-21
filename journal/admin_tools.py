@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import datetime
+from secrets import compare_digest
 from io import BytesIO
 from urllib.parse import quote
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import user_passes_test
+from django.conf import settings
 from django.core.management import call_command
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -19,7 +22,22 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .models import TemporaryCredential
+from .models import (
+    AcademicYear,
+    CourseApplication,
+    CourseRegistrationSettings,
+    Grade,
+    GroupSubject,
+    Instrument,
+    Student,
+    StudentSubject,
+    StudyGroup,
+    Subject,
+    SubjectResult,
+    Teacher,
+    TeacherSubject,
+    TemporaryCredential,
+)
 
 
 superuser_required = user_passes_test(lambda user: user.is_active and user.is_superuser)
@@ -28,6 +46,7 @@ HEADER_FILL = PatternFill('solid', fgColor='D9EAF7')
 HEADER_FONT = Font(bold=True)
 DEFAULT_COLUMN_WIDTH = 18
 MAX_COLUMN_WIDTH = 60
+DATA_TOOLS_PASSWORD_FIELD = 'pas_key_data'
 
 
 @superuser_required
@@ -53,7 +72,9 @@ def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
         'export_credentials_url': reverse('admin_export_test_credentials_excel'),
         'seed_confirm_url': reverse('admin_seed_test_data'),
         'seed_url': reverse('admin_seed_test_data'),
+        'delete_database_url': reverse('admin_delete_database'),
         'export_all_data_url': safe_reverse('admin_export_all_data_excel'),
+        'data_tools_password_field': DATA_TOOLS_PASSWORD_FIELD,
     }
 
     return render(request, 'admin/journal/data_tools.html', context)
@@ -77,11 +98,15 @@ def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
             'title': 'Запуск тестовых данных',
             'seed_url': reverse('admin_seed_test_data'),
             'data_tools_url': reverse('admin_data_tools'),
+            'data_tools_password_field': DATA_TOOLS_PASSWORD_FIELD,
         }
         return render(request, 'admin/journal/seed_data_confirm.html', context)
 
     if request.POST.get('confirm') != 'yes':
         messages.error(request, 'Подтвердите создание тестовых данных.')
+        return redirect('admin_data_tools')
+
+    if not validate_data_tools_password(request):
         return redirect('admin_data_tools')
 
     try:
@@ -97,6 +122,102 @@ def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
     )
 
     return redirect('admin:journal_temporarycredential_changelist')
+
+
+@superuser_required
+def admin_delete_database_view(request: HttpRequest) -> HttpResponse:
+    """
+    Очищает данные журнала из админских инструментов.
+
+    Суперпользователи и staff-пользователи сохраняются, чтобы после очистки
+    администратор не потерял доступ к панели.
+    """
+    if not request.user.is_superuser:
+        raise PermissionDenied('Удаление базы данных доступно только суперпользователю.')
+
+    if request.method != 'POST':
+        return redirect('admin_data_tools')
+
+    if request.POST.get('confirm_delete') != 'yes':
+        messages.error(request, 'Подтвердите удаление базы данных.')
+        return redirect('admin_data_tools')
+
+    if not validate_data_tools_password(request):
+        return redirect('admin_data_tools')
+
+    try:
+        deleted_counts = clear_database_data()
+    except Exception as exc:
+        messages.error(request, f'Ошибка при удалении базы данных: {exc}')
+        return redirect('admin_data_tools')
+
+    messages.success(
+        request,
+        f'База данных очищена. Удалено записей: {sum(deleted_counts.values())}. '
+        'Суперпользователи и staff-пользователи сохранены.',
+    )
+
+    return redirect('admin_data_tools')
+
+
+def validate_data_tools_password(request: HttpRequest) -> bool:
+    expected_password = str(getattr(settings, 'DATA_TOOLS_PASSWORD', '') or '')
+    provided_password = request.POST.get(DATA_TOOLS_PASSWORD_FIELD, '')
+
+    if not expected_password:
+        messages.error(
+            request,
+            'Пароль для инструментов данных не настроен. '
+            'Добавьте pas_key_data в env-файл.',
+        )
+        return False
+
+    if not compare_digest(provided_password, expected_password):
+        messages.error(request, 'Неверный пароль подтверждения.')
+        return False
+
+    return True
+
+
+def clear_database_data() -> dict[str, int]:
+    UserModel = get_user_model()
+    protected_user_ids = set(
+        UserModel.objects.filter(is_superuser=True).values_list('id', flat=True),
+    )
+    protected_user_ids.update(
+        UserModel.objects.filter(is_staff=True).values_list('id', flat=True),
+    )
+
+    deleted_counts: dict[str, int] = {}
+
+    with transaction.atomic():
+        for model in (
+            TemporaryCredential,
+            CourseApplication,
+            SubjectResult,
+            Grade,
+            StudentSubject,
+            GroupSubject,
+            TeacherSubject,
+            Student,
+            Teacher,
+            StudyGroup,
+            Subject,
+            Instrument,
+            AcademicYear,
+            CourseRegistrationSettings,
+        ):
+            deleted_count, _deleted_by_model = model.objects.all().delete()
+            deleted_counts[model._meta.label_lower] = deleted_count
+
+        deleted_count, _deleted_by_model = (
+            UserModel.objects
+            .exclude(id__in=protected_user_ids)
+            .delete()
+        )
+        deleted_counts[UserModel._meta.label_lower] = deleted_count
+
+    return deleted_counts
 
 
 @superuser_required

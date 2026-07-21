@@ -19,8 +19,10 @@ def _load_env_file(env_filename: str) -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
-# Загружаем один локальный env-файл, если он есть.
+# Загружаем общий .env и env-файл конкретного окружения, если они есть.
 # Явные переменные окружения всегда имеют приоритет над значениями из файла.
+_load_env_file('.env')
+
 env_file = os.getenv('DJANGO_ENV_FILE')
 if env_file:
     _load_env_file(env_file)
@@ -217,6 +219,8 @@ DATABASES = {
         'PORT': os.getenv('DB_PORT', ''),
     }
 }
+
+DATA_TOOLS_PASSWORD = os.getenv('pas_key_data', '')
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},

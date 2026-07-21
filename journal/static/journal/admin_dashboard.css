@@ -514,6 +514,23 @@ body:not(.login-page) .app-main {
     height: 16px;
 }
 
+.journal-seed-form .journal-password-field {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+    min-width: min(100%, 260px);
+}
+
+.journal-seed-form .journal-password-field span {
+    color: var(--journal-admin-muted);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.journal-seed-form .journal-password-field .form-control {
+    width: 100%;
+}
+
 body.change-list #changelist,
 body.change-form .inline-group {
     max-width: 100%;
@@ -1018,6 +1035,11 @@ body.change-form .inline-group table {
         width: 100%;
         justify-content: center;
         white-space: normal;
+    }
+
+    .journal-seed-form label,
+    .journal-seed-form .journal-password-field {
+        width: 100%;
     }
 
     .journal-link-grid {
