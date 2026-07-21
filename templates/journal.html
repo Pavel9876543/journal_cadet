@@ -1,5 +1,5 @@
 <!doctype html>
-{% load journal_extras %}
+{% load static journal_extras %}
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -287,7 +287,7 @@
         }
 
         .grade-form {
-            grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             align-items: end;
         }
 
@@ -327,6 +327,20 @@
         input[readonly] {
             background: var(--surface-muted);
             color: var(--muted);
+        }
+
+        select:disabled,
+        input:disabled {
+            background: var(--surface-muted);
+            color: var(--muted);
+            cursor: not-allowed;
+        }
+
+        .dependency-status {
+            min-height: 1.2em;
+            grid-column: 1 / -1;
+            color: var(--muted);
+            font-size: 0.82rem;
         }
 
         button,
@@ -1165,9 +1179,28 @@
                     </div>
 
                     <div class="quick-entry-body">
-                        <form method="post" id="grade-create-form" class="grade-form">
+                        <form
+                            method="post"
+                            id="grade-create-form"
+                            class="grade-form"
+                            data-grade-options-url="{% url 'grade_options_api' %}"
+                            data-fixed-teacher="{{ grade_form.dependency_teacher_id }}"
+                            data-fixed-subject="{{ grade_form.dependency_subject_id }}"
+                            data-fixed-academic-year="{{ grade_form.dependency_academic_year_id }}"
+                        >
                             {% csrf_token %}
                             <input type="hidden" name="action" value="add_grade">
+                            <div class="field">
+                                <label for="id_group">Группа</label>
+                                {{ grade_form.group }}
+                                {% if grade_form.group.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.group.errors %}
+                                            <div class="field-error" data-error-for="group">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
                             <div class="field">
                                 <label for="id_student">Ученик</label>
                                 {{ grade_form.student }}
@@ -1231,6 +1264,7 @@
                                     <span>Сохранить</span>
                                 </button>
                             </div>
+                            <div class="dependency-status" data-grade-options-status role="status" aria-live="polite"></div>
                         </form>
 
                         {% if grade_form.non_field_errors %}
@@ -1415,6 +1449,7 @@
     </main>
 </div>
 
+<script src="{% static 'journal/grade_dependencies.js' %}"></script>
 <script>
     (function () {
         const key = 'journal-scroll-y';

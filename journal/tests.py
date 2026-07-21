@@ -23,7 +23,7 @@ from journal.account_utils import (
     display_name_for_user,
     generate_temporary_password,
 )
-from journal.admin import GradeAdminForm, StudentAdminForm, TeacherAdminForm
+from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, TeacherAdminForm
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -34,6 +34,12 @@ from journal.forms import (
     get_student_subject_teachers,
     get_teacher_groups,
     get_teacher_subjects,
+)
+from journal.grade_options import (
+    get_grade_groups,
+    get_grade_students,
+    get_grade_subjects,
+    get_grade_teachers,
 )
 from journal.registration_utils import normalize_parent_contacts
 from journal.models import (
@@ -886,6 +892,90 @@ class FormTests(JournalTestDataMixin, TestCase):
             str(form.errors),
         )
 
+    def test_grade_form_rejects_student_from_another_group(self):
+        data = self.create_base_journal()
+        another_group = self.create_group(
+            name='Другая группа',
+            academic_year=data['year'],
+        )
+
+        form = GradeCreateForm(
+            data={
+                'group': another_group.pk,
+                'student': data['student'].pk,
+                'subject': data['solfeggio'].pk,
+                'teacher': data['teacher'].pk,
+                'academic_year': data['year'].pk,
+                'date': '2025-10-10',
+                'value': '5',
+                'comment': '',
+            },
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('Ученик не состоит в выбранной группе.', str(form.errors))
+
+    def test_grade_form_rejects_inactive_student_from_forged_post(self):
+        data = self.create_base_journal()
+        data['student'].is_active = False
+        data['student'].save()
+
+        form = GradeCreateForm(
+            data={
+                'group': data['group'].pk,
+                'student': data['student'].pk,
+                'subject': data['solfeggio'].pk,
+                'teacher': data['teacher'].pk,
+                'academic_year': data['year'].pk,
+                'date': '2025-10-10',
+                'value': '5',
+                'comment': '',
+            },
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('Ученик не может получить оценку', str(form.errors))
+
+    def test_grade_form_rejects_group_from_another_academic_year(self):
+        data = self.create_base_journal()
+        another_year = AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+            is_active=False,
+        )
+
+        form = GradeCreateForm(
+            data={
+                'group': data['group'].pk,
+                'student': data['student'].pk,
+                'subject': data['solfeggio'].pk,
+                'teacher': data['teacher'].pk,
+                'academic_year': another_year.pk,
+                'date': '2026-10-10',
+                'value': '5',
+                'comment': '',
+            },
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('Группа относится к другому учебному году.', str(form.errors))
+
+    def test_grade_admin_form_limits_related_fields_and_loads_dependency_script(self):
+        data = self.create_base_journal()
+        form = GradeAdminForm(
+            data={
+                'group': data['group'].pk,
+                'student': data['student'].pk,
+                'subject': data['solfeggio'].pk,
+                'academic_year': data['year'].pk,
+            },
+        )
+
+        self.assertEqual(list(form.fields['teacher'].queryset), [data['teacher']])
+        self.assertEqual(list(form.fields['student'].queryset), [data['student']])
+        self.assertIn('journal/grade_dependencies.js', GradeAdmin.Media.js)
+
     def test_grade_edit_form_keeps_existing_date_value(self):
         form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
 
@@ -1013,6 +1103,109 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
         self.assertIn(data['group'], get_teacher_groups(data['teacher']))
         self.assertIn(data['solfeggio'], get_teacher_subjects(data['teacher']))
         self.assertNotIn(data['specialty'], get_teacher_subjects(data['teacher']))
+
+    def test_grade_option_helpers_keep_only_complete_active_assignments(self):
+        data = self.create_base_journal()
+
+        self.assertEqual(
+            list(get_grade_groups(teacher=data['teacher'])),
+            [data['group']],
+        )
+        self.assertEqual(
+            list(get_grade_students(
+                group=data['group'],
+                subject=data['solfeggio'],
+                teacher=data['teacher'],
+            )),
+            [data['student']],
+        )
+        self.assertFalse(
+            get_grade_students(
+                group=data['group'],
+                subject=data['solfeggio'],
+                teacher=data['other_teacher'],
+            ).exists(),
+        )
+        self.assertEqual(
+            list(get_grade_subjects(
+                group=data['group'],
+                student=data['student'],
+                teacher=data['teacher'],
+            )),
+            [data['solfeggio']],
+        )
+        self.assertEqual(
+            list(get_grade_teachers(
+                group=data['group'],
+                student=data['student'],
+                subject=data['specialty'],
+            )),
+            [data['other_teacher']],
+        )
+
+
+class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.data = self.create_base_journal()
+        self.admin_user = User.objects.create_superuser(
+            username='grade_options_admin',
+            password='Pass12345!',
+        )
+
+    def test_admin_options_narrow_teachers_for_selected_assignment(self):
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'group': self.data['group'].pk,
+                'student': self.data['student'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload['teachers'],
+            [{'id': self.data['teacher'].pk, 'label': self.data['teacher'].full_name}],
+        )
+        self.assertEqual(
+            [item['id'] for item in payload['students']],
+            [self.data['student'].pk],
+        )
+
+    def test_teacher_options_are_always_limited_to_own_assignments(self):
+        self.client.login(username='teacher_ivanov', password='Pass12345!')
+
+        response = self.client.get(reverse('grade_options_api'))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item['id'] for item in payload['teachers']],
+            [self.data['teacher'].pk],
+        )
+        self.assertIn(
+            self.data['solfeggio'].pk,
+            [item['id'] for item in payload['subjects']],
+        )
+        self.assertNotIn(
+            self.data['literature'].pk,
+            [item['id'] for item in payload['subjects']],
+        )
+        self.assertNotIn(
+            self.data['specialty'].pk,
+            [item['id'] for item in payload['subjects']],
+        )
+
+    def test_student_cannot_request_grade_entry_options(self):
+        self.client.login(username='student_sidorov', password='Pass12345!')
+
+        response = self.client.get(reverse('grade_options_api'))
+
+        self.assertEqual(response.status_code, 403)
 
 
 class ViewTests(JournalTestDataMixin, TestCase):

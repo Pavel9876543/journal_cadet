@@ -21,6 +21,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
 
@@ -32,6 +33,12 @@ from .forms import (
     get_students_for_group_subject,
     get_teacher_groups,
     get_teacher_subjects,
+)
+from .grade_options import (
+    get_grade_groups,
+    get_grade_students,
+    get_grade_subjects,
+    get_grade_teachers,
 )
 from .models import (
     AcademicYear,
@@ -62,6 +69,102 @@ def password_help_view(request):
         'registration/password_help.html',
         {'contacts': contacts},
     )
+
+
+@login_required
+@require_GET
+def grade_options_api(request):
+    teacher_profile = getattr(request.user, 'teacher_profile', None)
+    can_manage_all_grades = (
+        request.user.is_superuser
+        or (
+            teacher_profile is None
+            and (
+                request.user.has_perm('journal.add_grade')
+                or request.user.has_perm('journal.change_grade')
+            )
+        )
+    )
+    if teacher_profile is None and not can_manage_all_grades:
+        return JsonResponse(
+            {'error': 'Выставление оценок недоступно для этой учетной записи.'},
+            status=403,
+        )
+
+    group = _get_selected_object(
+        StudyGroup.objects.filter(is_active=True),
+        request.GET.get('group'),
+    )
+    student = _get_selected_object(
+        Student.objects.filter(is_active=True).select_related('group'),
+        request.GET.get('student'),
+    )
+    subject = _get_selected_object(
+        Subject.objects.filter(is_active=True),
+        request.GET.get('subject'),
+    )
+    academic_year = _get_selected_object(
+        AcademicYear.objects.all(),
+        request.GET.get('academic_year'),
+    )
+
+    if can_manage_all_grades:
+        teacher = _get_selected_object(
+            Teacher.objects.filter(is_active=True),
+            request.GET.get('teacher'),
+        )
+    else:
+        teacher = teacher_profile
+
+    groups = get_grade_groups(
+        student=student,
+        subject=subject,
+        teacher=teacher,
+        academic_year=academic_year,
+    )
+    students = get_grade_students(
+        group=group,
+        subject=subject,
+        teacher=teacher,
+        academic_year=academic_year,
+    )
+    subjects = get_grade_subjects(
+        group=group,
+        student=student,
+        teacher=teacher,
+        academic_year=academic_year,
+    )
+    teachers = get_grade_teachers(
+        group=group,
+        student=student,
+        subject=subject,
+        academic_year=academic_year,
+    )
+    if not can_manage_all_grades:
+        teachers = teachers.filter(pk=teacher_profile.pk)
+
+    return JsonResponse({
+        'groups': [
+            {'id': group.pk, 'label': str(group)}
+            for group in groups
+        ],
+        'students': [
+            {
+                'id': student.pk,
+                'label': student.full_name,
+                'group_id': student.group_id,
+            }
+            for student in students
+        ],
+        'subjects': [
+            {'id': subject.pk, 'label': subject.name}
+            for subject in subjects
+        ],
+        'teachers': [
+            {'id': teacher.pk, 'label': teacher.full_name}
+            for teacher in teachers
+        ],
+    })
 
 
 def _calculate_average(grade_values: Iterable[str]) -> str:

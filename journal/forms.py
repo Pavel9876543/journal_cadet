@@ -7,6 +7,12 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 from django.db.models import Q
 
+from .grade_options import (
+    get_grade_groups,
+    get_grade_students,
+    get_grade_subjects,
+    get_grade_teachers,
+)
 from .models import (
     AcademicYear,
     CourseApplication,
@@ -52,23 +58,7 @@ def get_student_allowed_subjects(student: Optional[Student]):
     """
     if student is None or not getattr(student, 'pk', None):
         return Subject.objects.none()
-
-    group_subject_ids = GroupSubject.objects.filter(
-        group_id=student.group_id,
-        is_active=True,
-    ).values_list('subject_id', flat=True)
-
-    individual_subject_ids = StudentSubject.objects.filter(
-        student_id=student.pk,
-        is_active=True,
-    ).values_list('subject_id', flat=True)
-
-    return (
-        Subject.objects
-        .filter(Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids))
-        .distinct()
-        .order_by('name')
-    )
+    return get_grade_subjects(student=student)
 
 
 def get_student_subject_teachers(student: Optional[Student], subject: Optional[Subject]):
@@ -79,24 +69,7 @@ def get_student_subject_teachers(student: Optional[Student], subject: Optional[S
     if student is None or subject is None or not getattr(student, 'pk', None) or not getattr(subject, 'pk', None):
         return Teacher.objects.none()
 
-    group_teacher_ids = GroupSubject.objects.filter(
-        group_id=student.group_id,
-        subject_id=subject.pk,
-        is_active=True,
-    ).values_list('teacher_id', flat=True)
-
-    individual_teacher_ids = StudentSubject.objects.filter(
-        student_id=student.pk,
-        subject_id=subject.pk,
-        is_active=True,
-    ).values_list('teacher_id', flat=True)
-
-    return (
-        Teacher.objects
-        .filter(Q(pk__in=group_teacher_ids) | Q(pk__in=individual_teacher_ids))
-        .distinct()
-        .order_by('full_name')
-    )
+    return get_grade_teachers(student=student, subject=subject)
 
 
 def get_teacher_subjects(teacher: Optional[Teacher], group: Optional[StudyGroup] = None):
@@ -109,22 +82,7 @@ def get_teacher_subjects(teacher: Optional[Teacher], group: Optional[StudyGroup]
     if teacher is None or not getattr(teacher, 'pk', None):
         return Subject.objects.none()
 
-    group_assignments = GroupSubject.objects.filter(teacher=teacher, is_active=True)
-    individual_assignments = StudentSubject.objects.filter(teacher=teacher, is_active=True)
-
-    if group is not None:
-        group_assignments = group_assignments.filter(group=group)
-        individual_assignments = individual_assignments.filter(student__group=group)
-
-    group_subject_ids = group_assignments.values_list('subject_id', flat=True)
-    individual_subject_ids = individual_assignments.values_list('subject_id', flat=True)
-
-    return (
-        Subject.objects
-        .filter(Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids))
-        .distinct()
-        .order_by('name')
-    )
+    return get_grade_subjects(group=group, teacher=teacher)
 
 
 def get_teacher_groups(teacher: Optional[Teacher]):
@@ -136,22 +94,7 @@ def get_teacher_groups(teacher: Optional[Teacher]):
     if teacher is None or not getattr(teacher, 'pk', None):
         return StudyGroup.objects.none()
 
-    group_ids = GroupSubject.objects.filter(
-        teacher=teacher,
-        is_active=True,
-    ).values_list('group_id', flat=True)
-
-    individual_group_ids = StudentSubject.objects.filter(
-        teacher=teacher,
-        is_active=True,
-    ).values_list('student__group_id', flat=True)
-
-    return (
-        StudyGroup.objects
-        .filter(Q(pk__in=group_ids) | Q(pk__in=individual_group_ids))
-        .distinct()
-        .order_by('academic_year__name', 'name')
-    )
+    return get_grade_groups(teacher=teacher)
 
 
 def get_students_for_group_subject(
@@ -167,18 +110,12 @@ def get_students_for_group_subject(
     """
     if group is None or subject is None:
         return Student.objects.none()
-
-    qs = base_queryset if base_queryset is not None else Student.objects.filter(group=group, is_active=True)
-    qs = qs.filter(group=group)
-
-    group_assignment_filter = Q(group__group_subjects__subject=subject, group__group_subjects__is_active=True)
-    individual_assignment_filter = Q(individual_subjects__subject=subject, individual_subjects__is_active=True)
-
-    if teacher is not None:
-        group_assignment_filter &= Q(group__group_subjects__teacher=teacher)
-        individual_assignment_filter &= Q(individual_subjects__teacher=teacher)
-
-    return qs.filter(group_assignment_filter | individual_assignment_filter).distinct().order_by('full_name')
+    return get_grade_students(
+        group=group,
+        subject=subject,
+        teacher=teacher,
+        base_queryset=base_queryset,
+    )
 
 
 def _safe_model_choice_value(model, raw_value):
@@ -265,9 +202,25 @@ class SiteAuthenticationForm(AuthenticationForm):
 
 
 class GradeCreateForm(forms.ModelForm):
+    group = forms.ModelChoiceField(
+        label='Группа',
+        queryset=StudyGroup.objects.none(),
+        required=False,
+        empty_label='Выберите группу',
+    )
+
     class Meta:
         model = Grade
-        fields = ['student', 'subject', 'teacher', 'academic_year', 'date', 'value', 'comment']
+        fields = [
+            'group',
+            'student',
+            'subject',
+            'teacher',
+            'academic_year',
+            'date',
+            'value',
+            'comment',
+        ]
         widgets = {
             'date': html_date_input(),
             'comment': forms.TextInput(attrs={'placeholder': 'Комментарий, если нужен'}),
@@ -286,63 +239,103 @@ class GradeCreateForm(forms.ModelForm):
     ):
         super().__init__(*args, **kwargs)
         self.teacher = teacher
-        self.group = group
+        self.context_group = group
         self.fixed_subject = subject
         self.fixed_academic_year = academic_year
+        self.dependency_teacher_id = teacher.pk if teacher is not None else ''
+        self.dependency_subject_id = subject.pk if subject is not None else ''
+        self.dependency_academic_year_id = academic_year.pk if academic_year is not None else ''
+        self.fields['group'].widget.attrs['required'] = True
 
         self.fields['date'].initial = self.fields['date'].initial or date.today()
         self.fields['academic_year'].queryset = AcademicYear.objects.order_by('-starts_on')
-        self.fields['student'].queryset = Student.objects.filter(is_active=True).select_related('group', 'instrument').order_by('full_name')
-        self.fields['subject'].queryset = Subject.objects.filter(is_active=True).order_by('name')
-        self.fields['teacher'].queryset = Teacher.objects.filter(is_active=True).order_by('full_name')
 
         if academic_year is not None:
             self.fields['academic_year'].initial = academic_year
-
-        if group is not None:
-            self.fields['student'].queryset = Student.objects.filter(group=group, is_active=True).order_by('full_name')
-            self.fields['subject'].queryset = get_teacher_subjects(teacher, group) if teacher else Subject.objects.filter(
-                group_subjects__group=group,
-                group_subjects__is_active=True,
-                is_active=True,
-            ).distinct().order_by('name')
-
-        if students_queryset is not None:
-            self.fields['student'].queryset = students_queryset.order_by('full_name')
-
-        if subject is not None:
-            self.fields['subject'].initial = subject
-            self.fields['subject'].queryset = Subject.objects.filter(pk=subject.pk)
+            self.fields['academic_year'].disabled = True
 
         selected_student = self._selected_student()
-        selected_subject = self._selected_subject() or subject
+        selected_group = group or self._selected_group(selected_student)
+        selected_subject = subject or self._selected_subject()
+        selected_teacher = teacher or self._selected_teacher()
+        selected_academic_year = academic_year or self._selected_academic_year()
 
-        if selected_student is not None:
-            self.fields['subject'].queryset = get_student_allowed_subjects(selected_student)
-            if subject is not None:
-                self.fields['subject'].queryset = self.fields['subject'].queryset.filter(pk=subject.pk)
+        group_queryset = get_grade_groups(
+            student=selected_student,
+            subject=selected_subject,
+            teacher=selected_teacher,
+            academic_year=selected_academic_year,
+        )
+        if group is not None:
+            group_queryset = group_queryset.filter(pk=group.pk)
 
-        if selected_student is not None and selected_subject is not None:
-            self.fields['teacher'].queryset = get_student_subject_teachers(
-                selected_student,
-                selected_subject,
-            )
-            if teacher is not None:
-                self.fields['teacher'].queryset = self.fields['teacher'].queryset.filter(
-                    pk=teacher.pk,
-                )
+        student_queryset = get_grade_students(
+            group=selected_group,
+            subject=selected_subject,
+            teacher=selected_teacher,
+            academic_year=selected_academic_year,
+            base_queryset=students_queryset,
+        )
+        subject_queryset = get_grade_subjects(
+            group=selected_group,
+            student=selected_student,
+            teacher=selected_teacher,
+            academic_year=selected_academic_year,
+        )
+        teacher_queryset = get_grade_teachers(
+            group=selected_group,
+            student=selected_student,
+            subject=selected_subject,
+            academic_year=selected_academic_year,
+        )
 
-        if self.is_bound and 'teacher' in self.fields:
-            teacher_id = self.data.get(self.add_prefix('teacher')) or self.data.get('teacher')
-            if teacher_id:
-                self.fields['teacher'].queryset = Teacher.objects.filter(pk=teacher_id)
+        if subject is not None:
+            subject_queryset = subject_queryset.filter(pk=subject.pk)
+            self.fields['subject'].initial = subject
+        if teacher is not None:
+            teacher_queryset = teacher_queryset.filter(pk=teacher.pk)
+            self.fields['teacher'].initial = teacher
+
+        self.fields['group'].queryset = self._include_submitted_choice(
+            group_queryset,
+            StudyGroup,
+            'group',
+        )
+        self.fields['student'].queryset = self._include_submitted_choice(
+            student_queryset,
+            Student,
+            'student',
+        )
+        self.fields['subject'].queryset = self._include_submitted_choice(
+            subject_queryset,
+            Subject,
+            'subject',
+        )
+        self.fields['teacher'].queryset = self._include_submitted_choice(
+            teacher_queryset,
+            Teacher,
+            'teacher',
+        )
+
+        if selected_group is not None:
+            self.fields['group'].initial = selected_group
 
         if teacher is not None:
-            self.fields['teacher'].initial = teacher
             self.fields.pop('teacher', None)
 
         if subject is not None:
             self.fields.pop('subject', None)
+
+    def _include_submitted_choice(self, queryset, model, field_name):
+        if not self.is_bound:
+            return queryset
+        raw_value = self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
+        selected = _safe_model_choice_value(model, raw_value)
+        if selected is None:
+            return queryset
+        return model.objects.filter(
+            Q(pk__in=queryset.values('pk')) | Q(pk=selected.pk),
+        ).distinct()
 
     def _selected_student(self):
         student = getattr(self.instance, 'student', None) if self.instance and self.instance.pk else None
@@ -358,6 +351,27 @@ class GradeCreateForm(forms.ModelForm):
             subject = _safe_model_choice_value(Subject, raw_subject_id) or subject
         return subject
 
+    def _selected_teacher(self):
+        teacher = getattr(self.instance, 'teacher', None) if self.instance and self.instance.pk else None
+        raw_teacher_id = self.data.get(self.add_prefix('teacher')) or self.data.get('teacher') or getattr(self.instance, 'teacher_id', None)
+        if raw_teacher_id:
+            teacher = _safe_model_choice_value(Teacher, raw_teacher_id) or teacher
+        return teacher
+
+    def _selected_group(self, selected_student=None):
+        group = selected_student.group if selected_student is not None else None
+        raw_group_id = self.data.get(self.add_prefix('group')) or self.data.get('group')
+        if raw_group_id:
+            group = _safe_model_choice_value(StudyGroup, raw_group_id) or group
+        return group
+
+    def _selected_academic_year(self):
+        academic_year = getattr(self.instance, 'academic_year', None) if self.instance and self.instance.pk else None
+        raw_year_id = self.data.get(self.add_prefix('academic_year')) or self.data.get('academic_year') or getattr(self.instance, 'academic_year_id', None)
+        if raw_year_id:
+            academic_year = _safe_model_choice_value(AcademicYear, raw_year_id) or academic_year
+        return academic_year
+
     def clean_value(self):
         value = str(self.cleaned_data['value']).strip().upper()
         if value not in Grade.ALLOWED_VALUES:
@@ -367,40 +381,51 @@ class GradeCreateForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
 
+        group = self.context_group or cleaned_data.get('group')
         student = cleaned_data.get('student')
         subject = self.fixed_subject or cleaned_data.get('subject')
         teacher = self.teacher or cleaned_data.get('teacher')
+        academic_year = self.fixed_academic_year or cleaned_data.get('academic_year')
+
+        if group is None and student is not None:
+            group = student.group
+            cleaned_data['group'] = group
+
+        if self.context_group is not None:
+            cleaned_data['group'] = self.context_group
 
         if self.fixed_subject is not None:
             cleaned_data['subject'] = self.fixed_subject
         if self.teacher is not None:
             cleaned_data['teacher'] = self.teacher
-        if self.fixed_academic_year is not None and not cleaned_data.get('academic_year'):
+        if self.fixed_academic_year is not None:
             cleaned_data['academic_year'] = self.fixed_academic_year
 
-        if student and subject:
-            if not get_student_allowed_subjects(student).filter(pk=subject.pk).exists():
+        if group and student and student.group_id != group.pk:
+            self.add_error('student', 'Ученик не состоит в выбранной группе.')
+
+        if group and academic_year and group.academic_year_id != academic_year.pk:
+            self.add_error('academic_year', 'Группа относится к другому учебному году.')
+
+        if group and student and subject:
+            if not get_grade_subjects(
+                group=group,
+                student=student,
+                academic_year=academic_year,
+            ).filter(pk=subject.pk).exists():
                 raise forms.ValidationError(
                     'Ученик не может получить оценку по предмету, который не назначен его группе '
                     'и не назначен ему индивидуально.'
                 )
 
-        if student and subject and teacher:
-            group_assignment_exists = GroupSubject.objects.filter(
-                group=student.group,
-                subject=subject,
-                teacher=teacher,
-                is_active=True,
-            ).exists()
-
-            individual_assignment_exists = StudentSubject.objects.filter(
+        if group and student and subject and teacher:
+            teacher_is_allowed = get_grade_teachers(
+                group=group,
                 student=student,
                 subject=subject,
-                teacher=teacher,
-                is_active=True,
-            ).exists()
-
-            if not group_assignment_exists and not individual_assignment_exists:
+                academic_year=academic_year,
+            ).filter(pk=teacher.pk).exists()
+            if not teacher_is_allowed:
                 message = 'Этот преподаватель не назначен выбранному ученику по выбранному предмету.'
                 if 'teacher' in self.fields:
                     self.add_error('teacher', message)

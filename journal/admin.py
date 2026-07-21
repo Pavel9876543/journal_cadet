@@ -10,6 +10,12 @@ from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
 from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
+from .grade_options import (
+    get_grade_groups,
+    get_grade_students,
+    get_grade_subjects,
+    get_grade_teachers,
+)
 from .models import (
     AcademicYear,
     CourseApplication,
@@ -167,6 +173,13 @@ class HiddenFromAdminIndexMixin:
 
 
 class GradeAdminForm(forms.ModelForm):
+    group = forms.ModelChoiceField(
+        label='Группа',
+        queryset=StudyGroup.objects.none(),
+        required=False,
+        empty_label='Выберите группу',
+    )
+
     class Meta:
         model = Grade
         fields = '__all__'
@@ -181,9 +194,14 @@ class GradeAdminForm(forms.ModelForm):
         instance = self.instance if self.instance and self.instance.pk else None
         student = getattr(instance, 'student', None)
         subject = getattr(instance, 'subject', None)
+        teacher = getattr(instance, 'teacher', None)
+        academic_year = getattr(instance, 'academic_year', None)
 
+        group_id = self.data.get('group')
         student_id = self.data.get('student') or getattr(instance, 'student_id', None)
         subject_id = self.data.get('subject') or getattr(instance, 'subject_id', None)
+        teacher_id = self.data.get('teacher') or getattr(instance, 'teacher_id', None)
+        academic_year_id = self.data.get('academic_year') or getattr(instance, 'academic_year_id', None)
 
         if student_id:
             try:
@@ -197,33 +215,113 @@ class GradeAdminForm(forms.ModelForm):
             except (Subject.DoesNotExist, ValueError, TypeError):
                 subject = None
 
-        if student:
-            group_subject_ids = GroupSubject.objects.filter(
-                group_id=student.group_id,
-                is_active=True,
-            ).values_list('subject_id', flat=True)
-            individual_subject_ids = StudentSubject.objects.filter(
-                student_id=student.pk,
-                is_active=True,
-            ).values_list('subject_id', flat=True)
-            self.fields['subject'].queryset = Subject.objects.filter(
-                Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids)
-            ).distinct().order_by('name')
+        if teacher_id:
+            try:
+                teacher = Teacher.objects.get(pk=teacher_id)
+            except (Teacher.DoesNotExist, ValueError, TypeError):
+                teacher = None
 
-        if student and subject:
-            group_teacher_ids = GroupSubject.objects.filter(
-                group_id=student.group_id,
-                subject=subject,
-                is_active=True,
-            ).values_list('teacher_id', flat=True)
-            individual_teacher_ids = StudentSubject.objects.filter(
+        if academic_year_id:
+            try:
+                academic_year = AcademicYear.objects.get(pk=academic_year_id)
+            except (AcademicYear.DoesNotExist, ValueError, TypeError):
+                academic_year = None
+
+        group = student.group if student is not None else None
+        if group_id:
+            try:
+                group = StudyGroup.objects.get(pk=group_id)
+            except (StudyGroup.DoesNotExist, ValueError, TypeError):
+                group = None
+
+        self.fields['group'].queryset = self._include_submitted_choice(
+            get_grade_groups(
                 student=student,
                 subject=subject,
-                is_active=True,
-            ).values_list('teacher_id', flat=True)
-            self.fields['teacher'].queryset = Teacher.objects.filter(
-                Q(pk__in=group_teacher_ids) | Q(pk__in=individual_teacher_ids)
-            ).distinct().order_by('full_name')
+                teacher=teacher,
+                academic_year=academic_year,
+            ),
+            StudyGroup,
+            group_id,
+        )
+        self.fields['student'].queryset = self._include_submitted_choice(
+            get_grade_students(
+                group=group,
+                subject=subject,
+                teacher=teacher,
+                academic_year=academic_year,
+            ),
+            Student,
+            student_id,
+        )
+        self.fields['subject'].queryset = self._include_submitted_choice(
+            get_grade_subjects(
+                group=group,
+                student=student,
+                teacher=teacher,
+                academic_year=academic_year,
+            ),
+            Subject,
+            subject_id,
+        )
+        self.fields['teacher'].queryset = self._include_submitted_choice(
+            get_grade_teachers(
+                group=group,
+                student=student,
+                subject=subject,
+                academic_year=academic_year,
+            ),
+            Teacher,
+            teacher_id,
+        )
+        self.fields['group'].initial = group
+        self.fields['group'].widget.attrs.update({
+            'required': True,
+            'data-grade-options-url': reverse('grade_options_api'),
+        })
+
+    def _include_submitted_choice(self, queryset, model, raw_value):
+        if not self.is_bound or not raw_value:
+            return queryset
+        try:
+            return model.objects.filter(
+                Q(pk__in=queryset.values('pk')) | Q(pk=raw_value),
+            ).distinct()
+        except (TypeError, ValueError):
+            return queryset
+
+    def clean(self):
+        cleaned_data = super().clean()
+        group = cleaned_data.get('group')
+        student = cleaned_data.get('student')
+        subject = cleaned_data.get('subject')
+        teacher = cleaned_data.get('teacher')
+        academic_year = cleaned_data.get('academic_year')
+
+        if group is None and student is not None:
+            group = student.group
+            cleaned_data['group'] = group
+
+        if group and student and student.group_id != group.pk:
+            self.add_error('student', 'Ученик не состоит в выбранной группе.')
+
+        if group and academic_year and group.academic_year_id != academic_year.pk:
+            self.add_error('academic_year', 'Группа относится к другому учебному году.')
+
+        if group and student and subject and teacher:
+            teacher_is_allowed = get_grade_teachers(
+                group=group,
+                student=student,
+                subject=subject,
+                academic_year=academic_year,
+            ).filter(pk=teacher.pk).exists()
+            if not teacher_is_allowed:
+                self.add_error(
+                    'teacher',
+                    'Преподаватель не ведёт выбранный предмет у этого ученика.',
+                )
+
+        return cleaned_data
 
 
 class SubjectResultAdminForm(forms.ModelForm):
@@ -851,7 +949,7 @@ class GradeAdmin(admin.ModelAdmin):
         'teacher__full_name',
         'comment',
     )
-    autocomplete_fields = ('student', 'subject', 'teacher', 'academic_year')
+    autocomplete_fields = ('academic_year',)
     readonly_fields = ('source_type_display', 'student_group_display')
     date_hierarchy = 'date'
     list_select_related = ('student', 'student__group', 'subject', 'teacher', 'academic_year')
@@ -862,6 +960,7 @@ class GradeAdmin(admin.ModelAdmin):
         ('Оценка', {
             'fields': (
                 'date',
+                'group',
                 'student',
                 'student_group_display',
                 'subject',
@@ -880,6 +979,9 @@ class GradeAdmin(admin.ModelAdmin):
             'classes': ('collapse',),
         }),
     )
+
+    class Media:
+        js = ('journal/grade_dependencies.js',)
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
