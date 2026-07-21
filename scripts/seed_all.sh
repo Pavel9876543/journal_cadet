@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [ ! -f ".env.prod" ]; then
-  echo "Ошибка: файл .env.prod не найден в корне проекта."
+if [ ! -f ".env.dev" ]; then
+  echo "Ошибка: файл .env.dev не найден в корне проекта."
   exit 1
 fi
 
@@ -20,9 +20,9 @@ fi
 COMPOSE_CMD=(
   "${DOCKER_CMD[@]}"
   compose
-  --env-file .env.prod
+  --env-file .env.dev
   -f docker-compose.yml
-  -f docker-compose.prod.yml
+  -f docker-compose.dev.yml
 )
 
 echo "=== Проверка контейнеров ==="

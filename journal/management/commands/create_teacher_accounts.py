@@ -40,10 +40,17 @@ class Command(BaseCommand):
             teacher.save(update_fields=['user'])
             used_usernames.add(username)
 
-            TemporaryCredential.objects.create(
-                login=username,
-                temporary_password=password,
-            )
+            credential = TemporaryCredential.objects.filter(login=username).order_by('id').first()
+            if credential is None:
+                TemporaryCredential.objects.create(
+                    login=username,
+                    temporary_password=password,
+                )
+            else:
+                credential.temporary_password = password
+                credential.student_phone = ''
+                credential.save(update_fields=['temporary_password', 'student_phone'])
+                TemporaryCredential.objects.filter(login=username).exclude(pk=credential.pk).delete()
 
             credentials.append(
                 {

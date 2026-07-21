@@ -220,7 +220,7 @@ DATABASES = {
     }
 }
 
-DATA_TOOLS_PASSWORD = os.getenv('pas_key_data', '')
+DATA_TOOLS_PASSWORD = os.getenv('pas_key_data') or os.getenv('DATA_TOOLS_PASSWORD', '')
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -254,3 +254,5 @@ SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', False)
 
 if _env_bool('USE_X_FORWARDED_PROTO', False):
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+TRUST_X_FORWARDED_FOR = _env_bool('TRUST_X_FORWARDED_FOR', False)

@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 output="export.csv"
 
-if [ ! -f ".env.dev" ]; then
+if [ ! -f ".env.prod" ]; then
   echo "Ошибка: файл .env.prod не найден в корне проекта."
   exit 1
 fi

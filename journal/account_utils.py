@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from string import ascii_letters, ascii_lowercase, ascii_uppercase, digits
-
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
 
-_TEMP_PASSWORD_ALPHABET = ascii_letters + digits + '!@#$%'
+_TEMP_PASSWORD_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
 
 
 def _name_parts(full_name: str) -> list[str]:
@@ -56,8 +54,8 @@ def split_user_name(full_name: str) -> tuple[str, str]:
     return parts[0], parts[-1]
 
 
-def generate_temporary_password(length: int = 12) -> str:
-    length = max(length, 12)
+def generate_temporary_password(length: int = 8) -> str:
+    length = max(length, 8)
     return get_random_string(length, allowed_chars=_TEMP_PASSWORD_ALPHABET)
 
 

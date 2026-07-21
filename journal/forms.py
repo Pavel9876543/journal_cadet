@@ -19,6 +19,7 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
+    TemporaryCredential,
 )
 from .registration_utils import (
     calculate_age,
@@ -234,6 +235,12 @@ class DetailedPasswordChangeForm(SetPasswordForm):
                 ),
             )
         return cleaned_data
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        if commit:
+            TemporaryCredential.objects.filter(login=user.username).delete()
+        return user
 
 
 class SiteAuthenticationForm(AuthenticationForm):

@@ -3,8 +3,8 @@
 ## Что реализовано
 
 - CI: линтинг + проверки Django + тесты + проверка сборки Docker-образа
-- CD: при push в `main` собирается Docker-образ, отправляется в GHCR и выполняется деплой на сервер по SSH
-- Для production используется готовый образ (`ghcr.io/...:latest`) для быстрых обновлений
+- CD: при push в `main` обновляет код на сервере по SSH и запускает production-стек
+- Для production образ собирается на сервере из текущего кода
 - Суперпользователь создаётся/проверяется автоматически при старте контейнера
 - Контейнеры автоматически поднимаются после перезагрузки через `restart: unless-stopped`
 
@@ -51,7 +51,7 @@ scripts\start-docker.cmd
 Инфраструктура:
 - `SSH_HOST`
 - `SSH_USER`
-- `SSH_PRIVATE_KEY`
+- `SSH_PASSWORD`
 - `SSH_PORT` (обычно `22`)
 - `GHCR_PULL_USER` (опционально, если пакет образа публичный)
 - `GHCR_PULL_TOKEN` (опционально, если пакет образа публичный)
@@ -63,6 +63,7 @@ scripts\start-docker.cmd
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
+- `DATA_TOOLS_PASSWORD`
 
 Суперпользователь:
 - `DJANGO_SUPERUSER_USERNAME`
@@ -74,7 +75,7 @@ GitHub Secrets с префиксом `DJANGO_` используются толь
 
 ### Переменные (`Actions variables`)
 
-- `REPO_URL` (пример: `git@github.com:ORG/REPO.git`)
+- `REPO_CLONE_URL` (пример: `git@github.com:ORG/REPO.git`)
 - `APP_DIR` (пример: `/opt/cadet_journal`)
 
 ## 2) Одноразовая подготовка сервера
@@ -93,7 +94,7 @@ sudo systemctl start docker
 Во время деплоя workflow выполнит:
 - клонирование репозитория, если его ещё нет на сервере
 - генерацию `.env.prod` из секретов
-- загрузку свежего образа из GHCR
+- сборку свежего Docker-образа на сервере
 - запуск `docker compose up -d`
 - применение миграций и проверку/создание суперпользователя при старте контейнера
 

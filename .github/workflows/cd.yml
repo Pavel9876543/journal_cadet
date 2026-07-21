@@ -180,6 +180,7 @@ jobs:
               "DJANGO_SUPERUSER_EMAIL=${{ secrets.DJANGO_SUPERUSER_EMAIL }}" \
               "DJANGO_SUPERUSER_PASSWORD=${{ secrets.DJANGO_SUPERUSER_PASSWORD }}" \
               "DJANGO_SUPERUSER_ROTATE_PASSWORD=${{ secrets.DJANGO_SUPERUSER_ROTATE_PASSWORD }}" \
+              "pas_key_data=${{ secrets.DATA_TOOLS_PASSWORD }}" \
               "APP_IMAGE=cadet-journal:web" >> .env.prod
 
             chmod 600 .env.prod

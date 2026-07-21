@@ -228,6 +228,18 @@
         <div class="alert error">{{ access_error }}</div>
     {% else %}
         <form method="get">
+            <div>
+                <label for="academic_year">Учебный год</label>
+                <select id="academic_year" name="academic_year">
+                    <option value="">Текущий учебный год</option>
+                    {% for academic_year in academic_years %}
+                        <option value="{{ academic_year.id }}" {% if selected_academic_year_id == academic_year.id|stringformat:"s" %}selected{% endif %}>
+                            {{ academic_year.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
             {% if role_mode == 'teacher' or role_mode == 'superuser' %}
                 <div>
                     <label for="group">Группа (необязательно)</label>
@@ -326,102 +338,101 @@
                 </h2>
 
                 {% if not table.dates %}
-                    <p class="muted">По этому предмету пока нет оценок по выбранным фильтрам.</p>
-                {% else %}
-                    <form method="post">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="inline_edit">
-                        <div class="table-scroll">
-                            <table>
-                                <thead>
+                    <p class="muted">По этому предмету пока нет оценок по датам.</p>
+                {% endif %}
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="inline_edit">
+                    <div class="table-scroll">
+                        <table>
+                            <thead>
+                            <tr>
+                                <th>Ученик</th>
+                                {% for lesson_date in table.dates %}
+                                    <th>{{ lesson_date|date:"d.m" }}</th>
+                                {% endfor %}
+                                <th>Средняя оценка</th>
+                                <th>Экзамен</th>
+                                <th>Итоговая оценка</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {% for row in table.rows %}
                                 <tr>
-                                    <th>Ученик</th>
+                                    <td>{{ row.student.full_name }}</td>
                                     {% for lesson_date in table.dates %}
-                                        <th>{{ lesson_date|date:"d.m" }}</th>
-                                    {% endfor %}
-                                    <th>Средняя оценка</th>
-                                    <th>Экзамен</th>
-                                    <th>Итоговая оценка</th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                {% for row in table.rows %}
-                                    <tr>
-                                        <td>{{ row.student.full_name }}</td>
-                                        {% for lesson_date in table.dates %}
-                                            {% with cell=row.grades_by_date|get_item:lesson_date %}
-                                                <td>
-                                                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                                        {% if cell %}
-                                                            <input
-                                                                type="text"
-                                                                maxlength="1"
-                                                                pattern="[1-5Нн]"
-                                                                name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
-                                                                value="{{ cell }}"
-                                                            >
-                                                        {% else %}
-                                                            <span class="muted">—</span>
-                                                        {% endif %}
+                                        {% with cell=row.grades_by_date|get_item:lesson_date %}
+                                            <td>
+                                                {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                    {% if cell %}
+                                                        <input
+                                                            type="text"
+                                                            maxlength="1"
+                                                            pattern="[1-5Нн]"
+                                                            name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
+                                                            value="{{ cell }}"
+                                                        >
                                                     {% else %}
-                                                        {% if cell %}
-                                                            {{ cell }}
-                                                        {% else %}
-                                                            <span class="muted">—</span>
-                                                        {% endif %}
+                                                        <span class="muted">—</span>
                                                     {% endif %}
-                                                </td>
-                                            {% endwith %}
-                                        {% endfor %}
-                                        <td>
-                                            {% if row.average_grade %}
-                                                {{ row.average_grade }}
+                                                {% else %}
+                                                    {% if cell %}
+                                                        {{ cell }}
+                                                    {% else %}
+                                                        <span class="muted">—</span>
+                                                    {% endif %}
+                                                {% endif %}
+                                            </td>
+                                        {% endwith %}
+                                    {% endfor %}
+                                    <td>
+                                        {% if row.average_grade %}
+                                            {{ row.average_grade }}
+                                        {% else %}
+                                            <span class="muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                            <select name="exam__{{ table.subject.id }}__{{ row.student.id }}">
+                                                <option value="">—</option>
+                                                {% for option in table.final_grade_options %}
+                                                    <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        {% else %}
+                                            {% if row.exam_grade %}
+                                                {{ row.exam_grade }}
                                             {% else %}
                                                 <span class="muted">—</span>
                                             {% endif %}
-                                        </td>
-                                        <td>
-                                            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                                <select name="exam__{{ table.subject.id }}__{{ row.student.id }}">
-                                                    <option value="">—</option>
-                                                    {% for option in table.final_grade_options %}
-                                                        <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
-                                                    {% endfor %}
-                                                </select>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                            <select name="final__{{ table.subject.id }}__{{ row.student.id }}">
+                                                <option value="">—</option>
+                                                {% for option in table.final_grade_options %}
+                                                    <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        {% else %}
+                                            {% if row.final_grade %}
+                                                {{ row.final_grade }}
                                             {% else %}
-                                                {% if row.exam_grade %}
-                                                    {{ row.exam_grade }}
-                                                {% else %}
-                                                    <span class="muted">—</span>
-                                                {% endif %}
+                                                <span class="muted">—</span>
                                             {% endif %}
-                                        </td>
-                                        <td>
-                                            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                                <select name="final__{{ table.subject.id }}__{{ row.student.id }}">
-                                                    <option value="">—</option>
-                                                    {% for option in table.final_grade_options %}
-                                                        <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>
-                                                    {% endfor %}
-                                                </select>
-                                            {% else %}
-                                                {% if row.final_grade %}
-                                                    {{ row.final_grade }}
-                                                {% else %}
-                                                    <span class="muted">—</span>
-                                                {% endif %}
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                        {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                            <button type="submit">Сохранить изменения в таблице</button>
-                        {% endif %}
-                    </form>
-                {% endif %}
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                        <button type="submit">Сохранить изменения в таблице</button>
+                    {% endif %}
+                </form>
             {% endfor %}
         {% endif %}
     {% endif %}

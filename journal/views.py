@@ -9,15 +9,18 @@ from urllib.parse import quote, urlencode
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q, QuerySet
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 
 from .services.excel_export import build_full_export_workbook
 
@@ -95,6 +98,12 @@ def _get_selected_object(queryset, raw_pk):
 
 def _current_academic_year() -> AcademicYear | None:
     return AcademicYear.get_for_date(timezone.localdate()) or AcademicYear.get_active()
+
+
+def _filter_groups_by_academic_year(groups, selected_academic_year: AcademicYear | None):
+    if selected_academic_year is None:
+        return groups
+    return groups.filter(academic_year=selected_academic_year)
 
 
 def _result_year_for_student(student: Student, selected_year: AcademicYear | None = None) -> AcademicYear | None:
@@ -317,127 +326,133 @@ def _save_inline_grades(
     student_ids = set(students.values_list('pk', flat=True))
     subject_ids = set(subjects.values_list('pk', flat=True))
 
-    for field_name, raw_value in request.POST.items():
-        if not (
-            field_name.startswith('grade__')
-            or field_name.startswith('exam__')
-            or field_name.startswith('final__')
-        ):
-            continue
-
-        value = str(raw_value or '').strip()
-
-        if field_name.startswith('exam__') or field_name.startswith('final__'):
-            field_mode = 'exam' if field_name.startswith('exam__') else 'final'
-            parts = field_name.split('__')
-            if len(parts) != 3:
+    with transaction.atomic():
+        for field_name, raw_value in request.POST.items():
+            if not (
+                field_name.startswith('grade__')
+                or field_name.startswith('exam__')
+                or field_name.startswith('final__')
+            ):
                 continue
 
-            _, subject_id_raw, student_id_raw = parts
+            value = str(raw_value or '').strip()
+
+            if field_name.startswith('exam__') or field_name.startswith('final__'):
+                field_mode = 'exam' if field_name.startswith('exam__') else 'final'
+                parts = field_name.split('__')
+                if len(parts) != 3:
+                    continue
+
+                _, subject_id_raw, student_id_raw = parts
+                try:
+                    subject_id = int(subject_id_raw)
+                    student_id = int(student_id_raw)
+                except (TypeError, ValueError):
+                    continue
+
+                if student_id not in student_ids or subject_id not in subject_ids:
+                    continue
+
+                student = students.filter(pk=student_id).select_related('group', 'group__academic_year').first()
+                subject = subjects.filter(pk=subject_id).first()
+                if student is None or subject is None:
+                    continue
+
+                if role_mode == 'teacher' and not _student_subject_allowed_for_teacher(student, subject, teacher):
+                    continue
+
+                try:
+                    normalized_value = _normalize_final_grade_value(subject, value)
+                except ValidationError as exc:
+                    messages.error(request, '; '.join(exc.messages))
+                    transaction.set_rollback(True)
+                    return False
+
+                academic_year = _result_year_for_student(student, selected_academic_year)
+                if academic_year is None:
+                    messages.error(request, 'Не удалось определить учебный год для итоговой оценки.')
+                    transaction.set_rollback(True)
+                    return False
+
+                result, _ = SubjectResult.objects.get_or_create(
+                    student=student,
+                    subject=subject,
+                    academic_year=academic_year,
+                )
+
+                if field_mode == 'exam':
+                    if result.exam_grade == normalized_value:
+                        continue
+                    result.exam_grade = normalized_value
+                else:
+                    if result.final_grade == normalized_value:
+                        continue
+                    result.final_grade = normalized_value
+
+                try:
+                    result.save()
+                except ValidationError as exc:
+                    messages.error(request, '; '.join(exc.messages))
+                    transaction.set_rollback(True)
+                    return False
+                changed += 1
+                continue
+
+            normalized_grade_value = _normalize_grade_value(value)
+            if normalized_grade_value and normalized_grade_value not in Grade.ALLOWED_VALUES:
+                messages.error(request, 'Оценка должна быть 1-5 или Н.')
+                transaction.set_rollback(True)
+                return False
+
+            parts = field_name.split('__')
+            if len(parts) != 4:
+                continue
+
+            _, subject_id_raw, student_id_raw, grade_date_raw = parts
             try:
                 subject_id = int(subject_id_raw)
                 student_id = int(student_id_raw)
+                grade_date = date.fromisoformat(grade_date_raw)
             except (TypeError, ValueError):
                 continue
 
             if student_id not in student_ids or subject_id not in subject_ids:
                 continue
 
-            student = students.filter(pk=student_id).select_related('group', 'group__academic_year').first()
-            subject = subjects.filter(pk=subject_id).first()
-            if student is None or subject is None:
+            grade = (
+                Grade.objects
+                .filter(
+                    student_id=student_id,
+                    subject_id=subject_id,
+                    date=grade_date,
+                    student_id__in=student_ids,
+                    subject_id__in=subject_ids,
+                )
+                .select_related('teacher', 'student', 'subject')
+                .first()
+            )
+            if grade is None:
                 continue
 
-            if role_mode == 'teacher' and not _student_subject_allowed_for_teacher(student, subject, teacher):
+            if role_mode == 'teacher' and (teacher is None or grade.teacher_id != teacher.pk):
                 continue
 
+            if normalized_grade_value == '':
+                grade.delete()
+                changed += 1
+                continue
+
+            if grade.value == normalized_grade_value:
+                continue
+
+            grade.value = normalized_grade_value
             try:
-                normalized_value = _normalize_final_grade_value(subject, value)
+                grade.save()
             except ValidationError as exc:
                 messages.error(request, '; '.join(exc.messages))
-                return False
-
-            academic_year = _result_year_for_student(student, selected_academic_year)
-            if academic_year is None:
-                messages.error(request, 'Не удалось определить учебный год для итоговой оценки.')
-                return False
-
-            result, _ = SubjectResult.objects.get_or_create(
-                student=student,
-                subject=subject,
-                academic_year=academic_year,
-            )
-
-            if field_mode == 'exam':
-                if result.exam_grade == normalized_value:
-                    continue
-                result.exam_grade = normalized_value
-            else:
-                if result.final_grade == normalized_value:
-                    continue
-                result.final_grade = normalized_value
-
-            try:
-                result.save()
-            except ValidationError as exc:
-                messages.error(request, '; '.join(exc.messages))
+                transaction.set_rollback(True)
                 return False
             changed += 1
-            continue
-
-        normalized_grade_value = _normalize_grade_value(value)
-        if normalized_grade_value and normalized_grade_value not in Grade.ALLOWED_VALUES:
-            messages.error(request, 'Оценка должна быть 1-5 или Н.')
-            return False
-
-        parts = field_name.split('__')
-        if len(parts) != 4:
-            continue
-
-        _, subject_id_raw, student_id_raw, grade_date_raw = parts
-        try:
-            subject_id = int(subject_id_raw)
-            student_id = int(student_id_raw)
-            grade_date = date.fromisoformat(grade_date_raw)
-        except (TypeError, ValueError):
-            continue
-
-        if student_id not in student_ids or subject_id not in subject_ids:
-            continue
-
-        grade = (
-            Grade.objects
-            .filter(
-                student_id=student_id,
-                subject_id=subject_id,
-                date=grade_date,
-                student_id__in=student_ids,
-                subject_id__in=subject_ids,
-            )
-            .select_related('teacher', 'student', 'subject')
-            .first()
-        )
-        if grade is None:
-            continue
-
-        if role_mode == 'teacher' and (teacher is None or grade.teacher_id != teacher.pk):
-            continue
-
-        if normalized_grade_value == '':
-            grade.delete()
-            changed += 1
-            continue
-
-        if grade.value == normalized_grade_value:
-            continue
-
-        grade.value = normalized_grade_value
-        try:
-            grade.save()
-        except ValidationError as exc:
-            messages.error(request, '; '.join(exc.messages))
-            return False
-        changed += 1
 
     if changed:
         messages.success(request, f'Изменения сохранены: {changed}.')
@@ -453,6 +468,13 @@ def _save_inline_grades(
 
 @login_required
 def journal_view(request):
+    if (
+        not request.user.is_superuser
+        and TemporaryCredential.objects.filter(login=request.user.username).exists()
+    ):
+        messages.info(request, 'Смените временный пароль перед работой с журналом.')
+        return redirect('password_change')
+
     selected_group_id = request.GET.get('group')
     selected_subject_id = request.GET.get('subject')
     selected_year_id = request.GET.get('academic_year') or request.GET.get('year')
@@ -527,6 +549,7 @@ def _journal_for_admin(
         .select_related('academic_year')
         .order_by('academic_year__name', 'name')
     )
+    groups = _filter_groups_by_academic_year(groups, selected_academic_year)
     subjects = Subject.objects.filter(is_active=True).order_by('name')
 
     selected_group = _get_selected_object(groups, selected_group_id)
@@ -631,10 +654,11 @@ def _journal_for_teacher(
     role_mode = 'teacher'
 
     groups = get_teacher_groups(teacher).filter(is_active=True).select_related('academic_year')
+    groups = _filter_groups_by_academic_year(groups, selected_academic_year)
     selected_group = _get_selected_object(groups, selected_group_id)
     groups_to_show = [selected_group] if selected_group else list(groups)
 
-    subjects = get_teacher_subjects(teacher, selected_group) if selected_group else get_teacher_subjects(teacher)
+    subjects = get_teacher_subjects(teacher, selected_group) if selected_group else _subjects_for_groups(groups_to_show, teacher=teacher)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
     subjects_to_show = [selected_subject] if selected_subject else list(subjects)
 
@@ -918,6 +942,9 @@ def _load_registration_payload(request):
 
 
 def _get_client_ip(request) -> str:
+    if not getattr(settings, 'TRUST_X_FORWARDED_FOR', False):
+        return request.META.get('REMOTE_ADDR', '') or 'unknown'
+
     forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
     if forwarded_for:
         return forwarded_for.split(',', 1)[0].strip()
@@ -994,6 +1021,7 @@ def course_registration_view(request):
     )
 
 
+@csrf_exempt
 def course_registration_api(request):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
