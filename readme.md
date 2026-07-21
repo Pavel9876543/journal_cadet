@@ -29,6 +29,7 @@ Django-приложение для ведения журнала кадет/уч
 - `DJANGO_ENV` - окружение запуска: `development` или `production`.
 - `DJANGO_ENV_FILE` - явный путь к env-файлу, если нужен нестандартный файл.
 - `DEBUG` - `1` для разработки, `0` для production.
+- `ALLOW_EMBEDDED_PREVIEW` - разрешить открытие сайта во встроенном iframe; по умолчанию включено только при `DEBUG=1`.
 - `SECRET_KEY` - секретный ключ Django.
 - `ALLOWED_HOSTS` - хосты через запятую.
 - `CSRF_TRUSTED_ORIGINS` - доверенные origins через запятую, например `https://example.com`.

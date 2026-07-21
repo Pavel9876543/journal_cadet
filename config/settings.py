@@ -81,6 +81,11 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+ALLOW_EMBEDDED_PREVIEW = _env_bool('ALLOW_EMBEDDED_PREVIEW', DEBUG)
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+if ALLOW_EMBEDDED_PREVIEW:
+    MIDDLEWARE.remove('django.middleware.clickjacking.XFrameOptionsMiddleware')
+
 JAZZMIN_SETTINGS = {
     'site_title': 'Электронный журнал',
     'site_header': 'Электронный журнал',
