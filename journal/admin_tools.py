@@ -29,6 +29,7 @@ from .models import (
     Grade,
     GroupSubject,
     Instrument,
+    PasswordRecoveryContact,
     Student,
     StudentSubject,
     StudyGroup,
@@ -205,6 +206,7 @@ def clear_database_data() -> dict[str, int]:
             Subject,
             Instrument,
             AcademicYear,
+            PasswordRecoveryContact,
             CourseRegistrationSettings,
         ):
             deleted_count, _deleted_by_model = model.objects.all().delete()

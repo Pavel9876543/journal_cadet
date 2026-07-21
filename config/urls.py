@@ -3,7 +3,7 @@ from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
 from journal.forms import DetailedPasswordChangeForm, SiteAuthenticationForm
-from journal.views import export_student_credentials_xlsx, export_all_data_excel
+from journal.views import export_student_credentials_xlsx, export_all_data_excel, password_help_view
 
 from journal.admin_tools import (
     admin_delete_database_view,
@@ -48,6 +48,11 @@ urlpatterns = [
         'accounts/login/',
         auth_views.LoginView.as_view(authentication_form=SiteAuthenticationForm),
         name='login',
+    ),
+    path(
+        'accounts/password-help/',
+        password_help_view,
+        name='password_help',
     ),
     path(
         'accounts/password_change/',

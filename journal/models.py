@@ -925,6 +925,46 @@ class CourseRegistrationSettings(models.Model):
         return 'Настройки регистрации на курсы'
 
 
+class PasswordRecoveryContact(models.Model):
+    name = models.CharField('Имя администратора', max_length=150)
+    phone = models.CharField('Номер телефона', max_length=32)
+    messengers = models.CharField(
+        'Мессенджеры',
+        max_length=255,
+        help_text='Укажите один или несколько мессенджеров, например: Telegram, WhatsApp.',
+    )
+    is_active = models.BooleanField('Показывать пользователям', default=True)
+    display_order = models.PositiveSmallIntegerField('Порядок показа', default=0)
+    updated_at = models.DateTimeField('Дата изменения', auto_now=True)
+
+    class Meta:
+        db_table = 'journal_password_recovery_settings'
+        verbose_name = 'Контакт администратора'
+        verbose_name_plural = 'Настройки восстановления пароля'
+        ordering = ['display_order', 'name', 'pk']
+
+    def __str__(self) -> str:
+        return f'{self.name}: {self.phone}'
+
+    def clean(self) -> None:
+        super().clean()
+        if self.name:
+            self.name = self.name.strip()
+        if self.phone:
+            self.phone = normalize_phone_number(self.phone)
+        if self.messengers:
+            self.messengers = self.messengers.strip()
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def phone_uri(self) -> str:
+        digits = ''.join(character for character in self.phone if character.isdigit())
+        return f'tel:+{digits}' if digits else ''
+
+
 class TemporaryCredential(models.Model):
     course_application = models.OneToOneField(
         'CourseApplication',

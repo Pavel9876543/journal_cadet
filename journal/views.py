@@ -39,6 +39,7 @@ from .models import (
     CourseRegistrationSettings,
     Grade,
     GroupSubject,
+    PasswordRecoveryContact,
     Student,
     StudentSubject,
     StudyGroup,
@@ -52,6 +53,15 @@ from .models import (
 # -----------------------------------------------------------------------------
 # Общие helper-функции журнала
 # -----------------------------------------------------------------------------
+
+
+def password_help_view(request):
+    contacts = PasswordRecoveryContact.objects.filter(is_active=True)
+    return render(
+        request,
+        'registration/password_help.html',
+        {'contacts': contacts},
+    )
 
 
 def _calculate_average(grade_values: Iterable[str]) -> str:

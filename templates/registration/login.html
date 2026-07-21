@@ -1,90 +1,82 @@
+{% load static %}
 <!doctype html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Вход в электронный журнал</title>
-    <style>
-        body {
-            font-family: "Segoe UI", Tahoma, sans-serif;
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(140deg, #dbeafe, #eef2ff 55%, #e0f2fe);
-            color: #1f2937;
-            padding: 16px;
-        }
-        .card {
-            width: 100%;
-            max-width: 420px;
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
-            padding: 24px;
-        }
-        h1 { margin-top: 0; }
-        label {
-            display: block;
-            margin-top: 10px;
-            margin-bottom: 6px;
-            font-size: 14px;
-        }
-        input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid #d1d5db;
-        }
-        button {
-            width: 100%;
-            margin-top: 14px;
-            padding: 10px;
-            border: none;
-            border-radius: 8px;
-            background: #2563eb;
-            color: #fff;
-            font-weight: 600;
-            cursor: pointer;
-        }
-        .muted { color: #6b7280; font-size: 14px; }
-        .errorlist { color: #991b1b; }
-    </style>
+    <title>Вход | Электронный журнал</title>
+    <link rel="stylesheet" href="{% static 'journal/auth.css' %}">
 </head>
 <body>
-<div class="card">
-    <h1>Вход в электронный журнал</h1>
-    <p class="muted">Войдите в учетную запись преподавателя, чтобы просматривать журнал и ставить оценки.</p>
-    <p class="muted">Нет аккаунта? <a href="{% url 'course_registration' %}">Подать заявку на курсы</a></p>
+<main class="auth-shell">
+    <section class="auth-panel" aria-labelledby="login-title">
+        <header class="auth-header">
+            <div class="brand">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg class="icon" viewBox="0 0 24 24">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"></path>
+                    </svg>
+                </span>
+                <span>
+                    <span class="brand-name">Электронный журнал</span>
+                    <span class="brand-context">Личный кабинет</span>
+                </span>
+            </div>
+            <h1 id="login-title">Вход в систему</h1>
+            <p class="lead">Используйте логин и пароль своей учётной записи.</p>
+        </header>
 
-    {% if form.non_field_errors %}
-        <div class="errorlist">
-            {% for error in form.non_field_errors %}
-                <div>{{ error }}</div>
-            {% endfor %}
+        <div class="auth-body">
+            {% if form.non_field_errors %}
+                <div class="errorlist" role="alert">
+                    {% for error in form.non_field_errors %}
+                        <div>{{ error }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+
+            <form method="post">
+                {% csrf_token %}
+                <div class="field">
+                    <div class="field-heading">
+                        <label for="id_username">Логин</label>
+                    </div>
+                    {{ form.username }}
+                    {% for error in form.username.errors %}
+                        <div class="errorlist" data-error-for="username" role="alert">{{ error }}</div>
+                    {% endfor %}
+                </div>
+
+                <div class="field">
+                    <div class="field-heading">
+                        <label for="id_password">Пароль</label>
+                        <a class="forgot-link" href="{% url 'password_help' %}">Забыли пароль?</a>
+                    </div>
+                    {{ form.password }}
+                    {% for error in form.password.errors %}
+                        <div class="errorlist" data-error-for="password" role="alert">{{ error }}</div>
+                    {% endfor %}
+                </div>
+
+                <button type="submit">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                        <path d="m10 17 5-5-5-5"></path>
+                        <path d="M15 12H3"></path>
+                    </svg>
+                    Войти
+                </button>
+                <input type="hidden" name="next" value="{{ next }}">
+            </form>
+
+            <p class="secondary-action">
+                Нет учётной записи? <a href="{% url 'course_registration' %}">Подать заявку на курсы</a>
+            </p>
         </div>
-    {% endif %}
+    </section>
+</main>
 
-    <form method="post">
-        {% csrf_token %}
-        <label for="id_username">Логин</label>
-        {{ form.username }}
-        {% for error in form.username.errors %}
-            <div class="errorlist" data-error-for="username">{{ error }}</div>
-        {% endfor %}
-
-        <label for="id_password">Пароль</label>
-        {{ form.password }}
-        {% for error in form.password.errors %}
-            <div class="errorlist" data-error-for="password">{{ error }}</div>
-        {% endfor %}
-
-        <button type="submit">Войти</button>
-        <input type="hidden" name="next" value="{{ next }}">
-    </form>
-</div>
 <script>
     document.addEventListener('DOMContentLoaded', function () {
         var form = document.querySelector('form');

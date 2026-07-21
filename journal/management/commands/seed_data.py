@@ -23,6 +23,7 @@ from journal.models import (
     Grade,
     GroupSubject,
     Instrument,
+    PasswordRecoveryContact,
     Student,
     StudentSubject,
     StudyGroup,
@@ -70,6 +71,21 @@ class Command(BaseCommand):
                 'telegram_group_url': 'https://t.me/cadet_journal_demo',
             },
         )
+        for contact_data in (
+            {
+                'name': 'Дежурный администратор',
+                'phone': '+7 (900) 000-00-01',
+                'messengers': 'Telegram, WhatsApp',
+                'display_order': 10,
+            },
+            {
+                'name': 'Учебная часть',
+                'phone': '+7 (900) 000-00-02',
+                'messengers': 'Telegram',
+                'display_order': 20,
+            },
+        ):
+            PasswordRecoveryContact.objects.create(**contact_data)
 
         academic_year = self._create_current_academic_year()
         instruments = self._create_instruments()
@@ -145,6 +161,7 @@ class Command(BaseCommand):
 
         # Сначала удаляем зависимые учебные данные.
         TemporaryCredential.objects.all().delete()
+        PasswordRecoveryContact.objects.all().delete()
         CourseApplication.objects.all().delete()
         SubjectResult.objects.all().delete()
         Grade.objects.all().delete()

@@ -128,6 +128,7 @@ JAZZMIN_SETTINGS = {
         'journal.CourseApplication',
         'journal.TemporaryCredential',
         'journal.CourseRegistrationSettings',
+        'journal.PasswordRecoveryContact',
         'journal.AcademicYear',
         'journal.Subject',
         'journal.Instrument',
@@ -158,6 +159,7 @@ JAZZMIN_SETTINGS = {
         'journal.subjectresult': 'fas fa-clipboard-check',
         'journal.courseapplication': 'fas fa-file-signature',
         'journal.courseregistrationsettings': 'fas fa-cog',
+        'journal.passwordrecoverycontact': 'fas fa-headset',
         'journal.temporarycredential': 'fas fa-key',
     },
     'custom_links': {

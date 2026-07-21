@@ -43,6 +43,7 @@ from journal.models import (
     Grade,
     GroupSubject,
     Instrument,
+    PasswordRecoveryContact,
     Student,
     StudentSubject,
     StudyGroup,
@@ -1220,6 +1221,63 @@ class ViewTests(JournalTestDataMixin, TestCase):
         )
 
 
+class PasswordRecoveryViewTests(TestCase):
+    def test_login_page_contains_password_help_link(self):
+        response = self.client.get(reverse('login'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Забыли пароль?')
+        self.assertContains(response, reverse('password_help'))
+
+    def test_password_help_lists_only_active_contacts_in_configured_order(self):
+        second = PasswordRecoveryContact.objects.create(
+            name='Второй администратор',
+            phone='8 999 222 33 44',
+            messengers='WhatsApp',
+            display_order=20,
+        )
+        first = PasswordRecoveryContact.objects.create(
+            name='Первый администратор',
+            phone='+7 (999) 111-22-33',
+            messengers='Telegram, MAX',
+            display_order=10,
+        )
+        PasswordRecoveryContact.objects.create(
+            name='Скрытый администратор',
+            phone='+7 (999) 000-00-00',
+            messengers='Telegram',
+            is_active=False,
+        )
+
+        response = self.client.get(reverse('password_help'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['contacts']), [first, second])
+        self.assertContains(response, 'Первый администратор')
+        self.assertContains(response, '+7 (999) 111-22-33')
+        self.assertContains(response, 'Telegram, MAX')
+        self.assertContains(response, 'Второй администратор')
+        self.assertNotContains(response, 'Скрытый администратор')
+
+    def test_password_help_has_empty_state_without_configured_contacts(self):
+        response = self.client.get(reverse('password_help'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Контакты администраторов пока не опубликованы')
+
+    def test_recovery_contact_normalizes_values_and_builds_phone_link(self):
+        contact = PasswordRecoveryContact.objects.create(
+            name='  Администратор  ',
+            phone='8 999 123 45 67',
+            messengers='  Telegram, WhatsApp  ',
+        )
+
+        self.assertEqual(contact.name, 'Администратор')
+        self.assertEqual(contact.phone, '+7 (999) 123-45-67')
+        self.assertEqual(contact.messengers, 'Telegram, WhatsApp')
+        self.assertEqual(contact.phone_uri, 'tel:+79991234567')
+
+
 class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
     def setUp(self):
         CourseRegistrationSettings.objects.create(
@@ -1513,6 +1571,11 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
             pk=1,
             telegram_group_url='https://t.me/test_group',
         )
+        PasswordRecoveryContact.objects.create(
+            name='Администратор',
+            phone='+7 (999) 123-45-67',
+            messengers='Telegram',
+        )
         self.client.login(username='admin_xlsx', password='Pass12345!')
 
         response = self.client.post(
@@ -1535,6 +1598,7 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertFalse(SubjectResult.objects.exists())
         self.assertFalse(CourseApplication.objects.exists())
         self.assertFalse(CourseRegistrationSettings.objects.exists())
+        self.assertFalse(PasswordRecoveryContact.objects.exists())
         self.assertFalse(TemporaryCredential.objects.exists())
         self.assertTrue(User.objects.filter(pk=self.admin_user.pk).exists())
         self.assertTrue(User.objects.filter(pk=self.staff_user.pk).exists())
@@ -1691,6 +1755,7 @@ class SeedDataCommandTests(TestCase):
 
     def test_seed_data_creates_new_architecture_records(self):
         self.assertTrue(CourseRegistrationSettings.objects.filter(pk=1).exists())
+        self.assertEqual(PasswordRecoveryContact.objects.count(), 2)
         self.assertTrue(AcademicYear.objects.exists())
         self.assertEqual(AcademicYear.objects.count(), 1)
         self.assertTrue(

@@ -1,0 +1,349 @@
+:root {
+    color-scheme: light;
+    --page: #eef1f4;
+    --surface: #ffffff;
+    --surface-muted: #f7f9fb;
+    --line: #d7dee7;
+    --line-strong: #bcc7d4;
+    --text: #17202a;
+    --muted: #667085;
+    --accent: #1f6feb;
+    --accent-strong: #174ea6;
+    --danger: #b42318;
+    --danger-bg: #fef3f2;
+    --radius: 8px;
+    --shadow: 0 18px 48px rgba(16, 24, 40, 0.11);
+    --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    background: var(--page);
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--page);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+a {
+    color: var(--accent-strong);
+}
+
+.auth-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 32px 16px;
+}
+
+.auth-panel {
+    width: min(100%, 460px);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.auth-panel-wide {
+    width: min(100%, 680px);
+}
+
+.auth-header {
+    border-bottom: 1px solid var(--line);
+    padding: 22px 24px 20px;
+    background: var(--surface-muted);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    margin-bottom: 22px;
+}
+
+.brand-mark {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    border-radius: var(--radius);
+    background: #1f2937;
+    color: #ffffff;
+}
+
+.icon {
+    width: 19px;
+    height: 19px;
+    flex: 0 0 auto;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.brand-name {
+    display: block;
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.brand-context {
+    display: block;
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+h1 {
+    margin: 0;
+    font-size: 1.55rem;
+    line-height: 1.2;
+}
+
+.lead {
+    margin: 8px 0 0;
+    color: var(--muted);
+}
+
+.auth-body {
+    padding: 22px 24px 24px;
+}
+
+.field {
+    margin-top: 16px;
+}
+
+.field:first-child {
+    margin-top: 0;
+}
+
+.field-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+
+label {
+    color: #344054;
+    font-size: 0.86rem;
+    font-weight: 750;
+}
+
+.forgot-link {
+    font-size: 0.84rem;
+    font-weight: 750;
+    text-decoration: none;
+}
+
+.forgot-link:hover {
+    text-decoration: underline;
+}
+
+input {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    background: #ffffff;
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    padding: 10px 12px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.14);
+}
+
+button,
+.button {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    background: var(--accent);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 800;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+button {
+    width: 100%;
+    margin-top: 20px;
+}
+
+button:hover,
+.button:hover {
+    background: var(--accent-strong);
+}
+
+button:focus-visible,
+.button:focus-visible,
+a:focus-visible {
+    outline: 3px solid rgba(31, 111, 235, 0.24);
+    outline-offset: 2px;
+}
+
+.button-secondary {
+    border-color: var(--line);
+    background: #ffffff;
+    color: #344054;
+}
+
+.button-secondary:hover {
+    border-color: var(--line-strong);
+    background: var(--surface-muted);
+}
+
+.errorlist {
+    margin: 8px 0 0;
+    border: 1px solid #fecdca;
+    border-radius: var(--radius);
+    padding: 9px 11px;
+    background: var(--danger-bg);
+    color: var(--danger);
+    font-size: 0.88rem;
+}
+
+ul.errorlist {
+    list-style: none;
+}
+
+.secondary-action {
+    margin: 18px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.secondary-action a {
+    font-weight: 750;
+}
+
+.recovery-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 18px;
+    border: 1px solid #bfd0ff;
+    border-radius: var(--radius);
+    padding: 12px 13px;
+    background: #eef4ff;
+    color: #194185;
+}
+
+.contact-list {
+    border-top: 1px solid var(--line);
+}
+
+.contact-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(210px, 1.25fr);
+    gap: 18px;
+    padding: 17px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.contact-name {
+    font-weight: 800;
+}
+
+.contact-label {
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 750;
+    text-transform: uppercase;
+}
+
+.phone-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    width: fit-content;
+    color: var(--text);
+    font-size: 1rem;
+    font-weight: 800;
+    text-decoration: none;
+}
+
+.phone-link:hover {
+    color: var(--accent-strong);
+}
+
+.messengers {
+    margin-top: 8px;
+    color: #344054;
+}
+
+.empty-state {
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 18px 0;
+    color: var(--muted);
+}
+
+.page-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+@media (max-width: 560px) {
+    .auth-shell {
+        align-items: start;
+        padding: 12px;
+    }
+
+    .auth-header,
+    .auth-body {
+        padding-left: 18px;
+        padding-right: 18px;
+    }
+
+    .contact-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    input {
+        font-size: 16px;
+    }
+
+    .page-actions .button {
+        width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+    }
+}

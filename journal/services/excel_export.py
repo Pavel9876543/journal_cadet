@@ -35,6 +35,7 @@ JOURNAL_MODEL_SHEETS = [
     ('Заявки', 'journal', 'CourseApplication'),
     ('Временные доступы', 'journal', 'TemporaryCredential'),
     ('Настройки регистрации', 'journal', 'CourseRegistrationSettings'),
+    ('Настройки восстановления', 'journal', 'PasswordRecoveryContact'),
 ]
 
 

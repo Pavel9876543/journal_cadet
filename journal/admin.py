@@ -17,6 +17,7 @@ from .models import (
     Grade,
     GroupSubject,
     Instrument,
+    PasswordRecoveryContact,
     Student,
     StudentSubject,
     StudyGroup,
@@ -1151,3 +1152,35 @@ class CourseRegistrationSettingsAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(PasswordRecoveryContact)
+class PasswordRecoveryContactAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'phone',
+        'messengers',
+        'is_active',
+        'display_order',
+        'updated_at',
+    )
+    list_editable = ('is_active', 'display_order')
+    list_filter = ('is_active', 'messengers')
+    search_fields = ('name', 'phone', 'messengers')
+    readonly_fields = ('updated_at',)
+    ordering = ('display_order', 'name')
+    fieldsets = (
+        ('Контакт для восстановления доступа', {
+            'fields': (
+                'name',
+                'phone',
+                'messengers',
+                'is_active',
+                'display_order',
+                'updated_at',
+            ),
+            'description': (
+                'Активные контакты показываются на публичной странице восстановления пароля.'
+            ),
+        }),
+    )
