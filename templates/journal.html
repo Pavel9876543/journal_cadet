@@ -4,439 +4,1417 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Электронный журнал</title>
+    <title>Личный кабинет | Электронный журнал</title>
     <style>
+        :root {
+            color-scheme: light;
+            --page: #f4f6f8;
+            --surface: #ffffff;
+            --surface-muted: #f8fafc;
+            --line: #d9e0e8;
+            --line-strong: #c5ced9;
+            --text: #17202a;
+            --muted: #667085;
+            --accent: #1f6feb;
+            --accent-strong: #174ea6;
+            --success: #0f766e;
+            --success-bg: #ecfdf5;
+            --warning: #b45309;
+            --warning-bg: #fffbeb;
+            --danger: #b42318;
+            --danger-bg: #fef3f2;
+            --shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+            --radius: 8px;
+            --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            background: var(--page);
+        }
+
         body {
-            font-family: "Segoe UI", Tahoma, sans-serif;
             margin: 0;
-            padding: 24px;
-            background: #f5f7fb;
-            color: #1f2937;
+            min-height: 100vh;
+            background: var(--page);
+            color: var(--text);
+            font-family: var(--font);
+            font-size: 15px;
+            line-height: 1.45;
         }
-        .container {
-            max-width: 1100px;
+
+        a {
+            color: inherit;
+        }
+
+        .skip-link {
+            position: fixed;
+            top: 8px;
+            left: 8px;
+            z-index: 100;
+            padding: 9px 12px;
+            border-radius: var(--radius);
+            background: var(--text);
+            color: #ffffff;
+            font-weight: 800;
+            text-decoration: none;
+            transform: translateY(-160%);
+            transition: transform 0.15s ease;
+        }
+
+        .skip-link:focus {
+            transform: translateY(0);
+        }
+
+        .icon-sprite {
+            display: none;
+        }
+
+        .icon {
+            width: 18px;
+            height: 18px;
+            flex: 0 0 auto;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            fill: none;
+        }
+
+        .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            border-bottom: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(12px);
+        }
+
+        .topbar-inner {
+            width: min(100%, 1480px);
             margin: 0 auto;
-            background: #ffffff;
-            border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-            padding: 24px;
-        }
-        .header {
+            padding: 14px 24px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
+            gap: 18px;
         }
-        .auth-box {
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .brand-mark {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius);
+            display: grid;
+            place-items: center;
+            color: #ffffff;
+            background: #1f2937;
+        }
+
+        .brand-copy {
+            min-width: 0;
+        }
+
+        .brand-copy h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            line-height: 1.2;
+        }
+
+        .brand-copy p {
+            margin: 2px 0 0;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .user-panel {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .user-meta {
+            min-width: 0;
+            text-align: right;
+        }
+
+        .user-name {
+            display: block;
+            max-width: 320px;
+            overflow: hidden;
+            color: var(--text);
+            font-weight: 700;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .role-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            width: fit-content;
+            margin-top: 2px;
+            color: var(--success);
+            font-size: 0.82rem;
+            font-weight: 700;
+        }
+
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .inline-form {
+            display: inline-flex;
+            margin: 0;
+        }
+
+        .main {
+            width: min(100%, 1480px);
+            margin: 0 auto;
+            padding: 24px 24px 48px;
+            display: grid;
+            gap: 18px;
+        }
+
+        .workspace-heading {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 18px;
+            padding: 4px 0;
+        }
+
+        .workspace-title h2 {
+            margin: 0;
+            font-size: 1.55rem;
+            line-height: 1.2;
+        }
+
+        .workspace-title p {
+            margin: 6px 0 0;
+            color: var(--muted);
+        }
+
+        .context-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--muted);
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .message-stack {
+            display: grid;
+            gap: 10px;
+        }
+
+        .alert {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            border: 1px solid #bfd0ff;
+            border-radius: var(--radius);
+            padding: 12px 14px;
+            background: #eef4ff;
+            color: #194185;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+        }
+
+        .alert.error {
+            border-color: #fecdca;
+            background: var(--danger-bg);
+            color: var(--danger);
+        }
+
+        .alert.success {
+            border-color: #a6f4c5;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+
+        .alert svg {
+            margin-top: 1px;
+        }
+
+        .toolbar,
+        .quick-entry,
+        .empty-state,
+        .table-panel {
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .toolbar {
+            padding: 14px;
+        }
+
+        .filter-form,
+        .grade-form {
+            display: grid;
+            gap: 12px;
+            margin: 0;
+        }
+
+        .filter-form {
+            grid-template-columns: minmax(170px, 0.8fr) repeat(2, minmax(210px, 1fr)) auto;
+            align-items: end;
+        }
+
+        .grade-form {
+            grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
+            align-items: end;
+        }
+
+        .field {
+            min-width: 0;
+        }
+
+        label,
+        .field-label {
+            display: block;
+            margin: 0 0 6px;
+            color: #344054;
+            font-size: 0.82rem;
+            font-weight: 700;
+        }
+
+        select,
+        input {
+            width: 100%;
+            min-height: 42px;
+            border: 1px solid var(--line-strong);
+            border-radius: var(--radius);
+            background: #ffffff;
+            color: var(--text);
+            font: inherit;
+            outline: none;
+            padding: 9px 11px;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+        }
+
+        select:focus,
+        input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.13);
+        }
+
+        input[readonly] {
+            background: var(--surface-muted);
+            color: var(--muted);
+        }
+
+        button,
+        .button {
+            min-height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border: 1px solid transparent;
+            border-radius: var(--radius);
+            padding: 9px 13px;
+            color: #ffffff;
+            background: var(--accent);
+            font: inherit;
+            font-weight: 800;
+            text-decoration: none;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+        }
+
+        button:hover,
+        .button:hover {
+            background: var(--accent-strong);
+        }
+
+        button:active,
+        .button:active {
+            transform: translateY(1px);
+        }
+
+        button:focus-visible,
+        .button:focus-visible,
+        a:focus-visible {
+            outline: 3px solid rgba(31, 111, 235, 0.24);
+            outline-offset: 2px;
+        }
+
+        button:disabled {
+            border-color: var(--line);
+            background: var(--surface-muted);
+            color: var(--muted);
+            cursor: default;
+            transform: none;
+        }
+
+        .form-action {
+            display: flex;
+            gap: 8px;
+        }
+
+        .button-secondary {
+            border-color: var(--line);
+            background: #ffffff;
+            color: #344054;
+        }
+
+        .button-secondary:hover {
+            border-color: var(--line-strong);
+            background: var(--surface-muted);
+            color: var(--text);
+        }
+
+        .button-danger {
+            background: #344054;
+        }
+
+        .button-danger:hover {
+            background: #1d2939;
+        }
+
+        .quick-entry {
+            overflow: hidden;
+        }
+
+        .section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            border-bottom: 1px solid var(--line);
+            padding: 14px 16px;
+            background: #fbfcfe;
+        }
+
+        .section-title {
             display: flex;
             align-items: center;
             gap: 10px;
+            min-width: 0;
         }
-        form {
+
+        .section-title h3 {
+            margin: 0;
+            font-size: 1.05rem;
+            line-height: 1.2;
+        }
+
+        .section-title p {
+            margin: 2px 0 0;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .section-icon {
+            width: 34px;
+            height: 34px;
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            place-items: center;
+            border-radius: var(--radius);
+            background: #eef4ff;
+            color: var(--accent);
+        }
+
+        .quick-entry-body {
+            padding: 16px;
+        }
+
+        .field-errors {
+            display: grid;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .field-error {
+            border: 1px solid #fecdca;
+            border-radius: var(--radius);
+            padding: 8px 10px;
+            background: var(--danger-bg);
+            color: var(--danger);
+            font-size: 0.9rem;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 12px;
-            align-items: end;
-            margin-bottom: 24px;
         }
-        .inline {
-            display: inline;
+
+        .summary-item {
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            padding: 13px 14px;
+            box-shadow: 0 3px 14px rgba(16, 24, 40, 0.05);
         }
-        label {
-            display: block;
-            font-size: 14px;
-            margin-bottom: 6px;
+
+        .summary-label {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            color: var(--muted);
+            font-size: 0.82rem;
+            font-weight: 700;
         }
-        select, input, button {
-            width: 100%;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid #d1d5db;
-            background: #fff;
-            box-sizing: border-box;
+
+        .summary-value {
+            margin-top: 6px;
+            color: var(--text);
+            font-size: 1.35rem;
+            font-weight: 800;
         }
-        button {
-            cursor: pointer;
-            border: none;
-            background: #2563eb;
-            color: #fff;
-            font-weight: 600;
+
+        .journal-tabs {
+            position: sticky;
+            top: 77px;
+            z-index: 30;
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 6px;
+            background: rgba(255, 255, 255, 0.96);
+            box-shadow: 0 6px 18px rgba(16, 24, 40, 0.07);
+            scrollbar-width: thin;
         }
-        .btn-secondary {
-            width: auto;
-            background: #4b5563;
-            padding: 8px 12px;
+
+        .journal-tab {
+            min-width: max-content;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: #344054;
+            text-decoration: none;
+            transition: background 0.15s ease, color 0.15s ease;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: #fff;
-            margin-bottom: 18px;
-            min-width: 560px;
+
+        .journal-tab:hover {
+            background: #eef4ff;
+            color: var(--accent-strong);
         }
-        th, td {
-            border: 1px solid #e5e7eb;
-            padding: 10px;
-            text-align: left;
-            vertical-align: top;
+
+        .journal-tab strong {
+            font-size: 0.88rem;
         }
-        th {
-            background: #f3f4f6;
+
+        .journal-tab span {
+            color: var(--muted);
+            font-size: 0.8rem;
         }
-        .muted {
-            color: #6b7280;
+
+        .table-stack {
+            display: grid;
+            gap: 18px;
         }
-        .alert {
-            border-radius: 8px;
+
+        .table-panel {
+            overflow: hidden;
+            scroll-margin-top: 150px;
+        }
+
+        .table-panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            border-bottom: 1px solid var(--line);
+            padding: 14px 16px;
+            background: #ffffff;
+        }
+
+        .table-title {
+            min-width: 0;
+        }
+
+        .table-title h3 {
+            margin: 0;
+            font-size: 1.08rem;
+            line-height: 1.2;
+        }
+
+        .table-title p {
+            margin: 4px 0 0;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .table-meta {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .meta-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 6px 9px;
+            background: var(--surface-muted);
+            color: #344054;
+            font-size: 0.82rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .table-note {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 12px 16px 0;
+            border: 1px solid #fedf89;
+            border-radius: var(--radius);
             padding: 10px 12px;
-            margin-bottom: 12px;
-            background: #eef2ff;
-            color: #1e3a8a;
+            background: var(--warning-bg);
+            color: var(--warning);
+            font-weight: 700;
         }
-        .error {
-            background: #fef2f2;
-            color: #991b1b;
+
+        .table-form {
+            margin: 0;
         }
+
         .table-scroll {
             width: 100%;
-            max-height: 60vh;
+            max-height: 64vh;
             overflow: auto;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            margin-bottom: 18px;
+            border-top: 1px solid var(--line);
+            border-bottom: 1px solid var(--line);
+            background: #ffffff;
             -webkit-overflow-scrolling: touch;
+            scrollbar-color: var(--line-strong) transparent;
         }
-        .table-scroll table {
-            margin-bottom: 0;
+
+        .table-scroll:focus-visible {
+            outline: 3px solid rgba(31, 111, 235, 0.2);
+            outline-offset: -3px;
         }
-        @media (min-width: 1025px) {
-            .container {
-                max-width: 1180px;
-                padding: 28px;
-            }
-            table {
-                min-width: 680px;
-            }
+
+        table {
+            width: 100%;
+            min-width: 820px;
+            border-spacing: 0;
+            border-collapse: separate;
+            background: #ffffff;
         }
-        @media (min-width: 769px) and (max-width: 1024px) {
-            body {
-                padding: 16px;
-            }
-            .container {
-                max-width: 100%;
-                padding: 18px;
-            }
-            form {
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            }
-            .table-scroll {
-                max-height: 62vh;
-            }
-            table {
-                min-width: 620px;
-            }
-            th, td {
-                padding: 8px;
-            }
+
+        th,
+        td {
+            border-right: 1px solid var(--line);
+            border-bottom: 1px solid var(--line);
+            padding: 9px 10px;
+            text-align: left;
+            vertical-align: middle;
         }
-        @media (max-width: 768px) {
-            body {
-                padding: 12px;
+
+        th:last-child,
+        td:last-child {
+            border-right: 0;
+        }
+
+        thead th {
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            background: #f3f6fa;
+            color: #344054;
+            font-size: 0.78rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        tbody tr:nth-child(even) td {
+            background: #fcfdff;
+        }
+
+        tbody tr:hover td {
+            background: #f5fbff;
+        }
+
+        .student-col {
+            min-width: 230px;
+        }
+
+        .sticky-col {
+            position: sticky;
+            left: 0;
+            z-index: 4;
+            background: #ffffff;
+            box-shadow: 1px 0 0 var(--line);
+        }
+
+        thead .sticky-col {
+            z-index: 7;
+            background: #f3f6fa;
+        }
+
+        tbody tr:nth-child(even) .sticky-col {
+            background: #fcfdff;
+        }
+
+        tbody tr:hover .sticky-col {
+            background: #f5fbff;
+        }
+
+        .student-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 800;
+        }
+
+        .student-avatar {
+            width: 28px;
+            height: 28px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: #e6f4f1;
+            color: var(--success);
+        }
+
+        .grade-cell {
+            min-width: 68px;
+            text-align: center;
+        }
+
+        .grade-cell input {
+            width: 46px;
+            min-height: 36px;
+            margin: 0 auto;
+            padding: 7px 8px;
+            text-align: center;
+            font-weight: 800;
+        }
+
+        .average-cell {
+            min-width: 116px;
+            color: var(--success);
+            font-weight: 800;
+        }
+
+        .result-cell {
+            min-width: 150px;
+        }
+
+        .result-cell select {
+            min-height: 36px;
+            padding: 7px 9px;
+            font-size: 0.92rem;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .empty-state {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 18px;
+            color: var(--muted);
+        }
+
+        .empty-state strong {
+            display: block;
+            color: var(--text);
+        }
+
+        .table-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 12px 16px 16px;
+        }
+
+        .save-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            margin-right: auto;
+            color: var(--success);
+            font-size: 0.84rem;
+            font-weight: 700;
+        }
+
+        .save-state.is-dirty {
+            color: var(--warning);
+        }
+
+        @media (max-width: 1200px) {
+            .filter-form,
+            .grade-form {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
-            .container {
-                padding: 14px;
+
+            .filter-form .form-action,
+            .grade-form .form-action {
+                grid-column: 1 / -1;
             }
-            .header h1 {
-                margin: 0;
-                font-size: 1.4rem;
-            }
-            .auth-box {
+
+            .filter-form button,
+            .filter-form .button,
+            .grade-form button {
                 width: 100%;
-                justify-content: space-between;
             }
-            form {
+        }
+
+        @media (max-width: 860px) {
+            .topbar {
+                position: static;
+            }
+
+            .journal-tabs {
+                position: static;
+            }
+
+            .topbar-inner,
+            .main {
+                padding-left: 14px;
+                padding-right: 14px;
+            }
+
+            .topbar-inner,
+            .workspace-heading,
+            .table-panel-head,
+            .section-head {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .user-panel {
+                align-items: stretch;
+                justify-content: flex-start;
+                flex-direction: column;
+            }
+
+            .user-meta {
+                text-align: left;
+            }
+
+            .topbar-actions {
+                width: 100%;
+            }
+
+            .topbar-actions .button,
+            .topbar-actions button,
+            .inline-form {
+                width: 100%;
+            }
+
+            .summary-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .table-meta {
+                justify-content: flex-start;
+            }
+        }
+
+        @media (max-width: 620px) {
+            body {
+                font-size: 14px;
+            }
+
+            .main {
+                padding-top: 16px;
+            }
+
+            .brand-copy h1 {
+                font-size: 1.1rem;
+            }
+
+            .filter-form,
+            .grade-form,
+            .summary-grid {
                 grid-template-columns: 1fr;
-                gap: 10px;
             }
-            select, input, button {
-                padding: 10px;
+
+            select,
+            input {
                 font-size: 16px;
             }
-            .table-scroll {
-                max-height: 65vh;
+
+            .toolbar,
+            .quick-entry-body,
+            .section-head,
+            .table-panel-head {
+                padding: 12px;
             }
+
             table {
-                min-width: 540px;
+                min-width: 720px;
             }
-            th, td {
-                padding: 7px;
-                font-size: 0.92rem;
-            }
-            .btn-secondary {
-                padding: 8px 10px;
-            }
-        }
-        @media (max-width: 420px) {
-            body {
+
+            th,
+            td {
                 padding: 8px;
             }
-            .container {
-                border-radius: 10px;
-                padding: 10px;
+
+            .student-col {
+                min-width: 190px;
             }
-            .header {
-                gap: 8px;
+
+            .table-actions {
+                align-items: stretch;
+                flex-direction: column;
             }
-            .header h1 {
-                font-size: 1.25rem;
+
+            .save-state {
+                margin-right: 0;
             }
-            .table-scroll {
-                max-height: 68vh;
+
+            .table-actions button {
+                width: 100%;
             }
-            th, td {
-                padding: 6px;
-                font-size: 0.86rem;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                scroll-behavior: auto !important;
+                transition-duration: 0.01ms !important;
             }
         }
     </style>
 </head>
 <body>
-<div class="container">
-    <div class="header">
-        <h1>Электронный журнал</h1>
-        {% if request.user.is_authenticated %}
-            <div class="auth-box">
-                <a class="btn-secondary" href="{% url 'password_change' %}">Сменить пароль</a>
-                <span class="muted">
-                    Вы вошли как: {{ request.user|display_user_name }}
-                    {% if role_mode == 'teacher' %}(Преподаватель){% elif role_mode == 'student' %}(Ученик){% elif role_mode == 'superuser' %}(Администратор){% endif %}
-                </span>
-                <form method="post" action="{% url 'logout' %}" class="inline">
-                    {% csrf_token %}
-                    <button class="btn-secondary" type="submit">Выйти</button>
-                </form>
-            </div>
-        {% endif %}
-    </div>
+<svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-book" viewBox="0 0 24 24">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+        <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"></path>
+    </symbol>
+    <symbol id="icon-user" viewBox="0 0 24 24">
+        <path d="M20 21a8 8 0 0 0-16 0"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+    </symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24">
+        <rect x="5" y="11" width="14" height="10" rx="2"></rect>
+        <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+    </symbol>
+    <symbol id="icon-log-out" viewBox="0 0 24 24">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+        <path d="m16 17 5-5-5-5"></path>
+        <path d="M21 12H9"></path>
+    </symbol>
+    <symbol id="icon-filter" viewBox="0 0 24 24">
+        <path d="M4 6h16"></path>
+        <path d="M7 12h10"></path>
+        <path d="M10 18h4"></path>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14"></path>
+        <path d="M5 12h14"></path>
+    </symbol>
+    <symbol id="icon-save" viewBox="0 0 24 24">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+        <path d="M17 21v-8H7v8"></path>
+        <path d="M7 3v5h8"></path>
+    </symbol>
+    <symbol id="icon-calendar" viewBox="0 0 24 24">
+        <path d="M8 2v4"></path>
+        <path d="M16 2v4"></path>
+        <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+        <path d="M3 10h18"></path>
+    </symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24">
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+        <circle cx="9" cy="7" r="4"></circle>
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </symbol>
+    <symbol id="icon-table" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+        <path d="M3 10h18"></path>
+        <path d="M10 4v16"></path>
+    </symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24">
+        <path d="m21.7 18-8.5-15a1.4 1.4 0 0 0-2.4 0L2.3 18a1.4 1.4 0 0 0 1.2 2h17a1.4 1.4 0 0 0 1.2-2z"></path>
+        <path d="M12 9v4"></path>
+        <path d="M12 17h.01"></path>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m20 6-11 11-5-5"></path>
+    </symbol>
+    <symbol id="icon-reset" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+        <path d="M3 3v5h5"></path>
+    </symbol>
+</svg>
 
-    {% for message in messages %}
-        <div class="alert {% if message.tags == 'error' %}error{% endif %}">{{ message }}</div>
-    {% endfor %}
-
-    {% if access_error %}
-        <div class="alert error">{{ access_error }}</div>
-    {% else %}
-        <form method="get">
-            <div>
-                <label for="academic_year">Учебный год</label>
-                <select id="academic_year" name="academic_year">
-                    <option value="">Текущий учебный год</option>
-                    {% for academic_year in academic_years %}
-                        <option value="{{ academic_year.id }}" {% if selected_academic_year_id == academic_year.id|stringformat:"s" %}selected{% endif %}>
-                            {{ academic_year.name }}
-                        </option>
-                    {% endfor %}
-                </select>
-            </div>
-
-            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                <div>
-                    <label for="group">Группа (необязательно)</label>
-                    <select id="group" name="group">
-                        <option value="">Все группы</option>
-                        {% for group in groups %}
-                            <option value="{{ group.id }}" {% if selected_group_id == group.id|stringformat:"s" %}selected{% endif %}>
-                                {{ group.name }}
-                            </option>
-                        {% endfor %}
-                    </select>
+<a class="skip-link" href="#main-content">К содержанию</a>
+<div class="app-shell">
+    <header class="topbar">
+        <div class="topbar-inner">
+            <div class="brand">
+                <div class="brand-mark">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
                 </div>
-            {% else %}
-                <div>
-                    <label>Группа</label>
-                    <input type="text" value="{{ selected_group.name }}" readonly>
+                <div class="brand-copy">
+                    <h1>Электронный журнал</h1>
+                    <p>Личный кабинет для учебного процесса</p>
+                </div>
+            </div>
+
+            {% if request.user.is_authenticated %}
+                <div class="user-panel">
+                    <div class="user-meta">
+                        <span class="user-name">{{ request.user|display_user_name }}</span>
+                        <span class="role-chip">
+                            <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
+                            {% if role_mode == 'teacher' %}Преподаватель{% elif role_mode == 'student' %}Ученик{% elif role_mode == 'superuser' %}Администратор{% else %}Пользователь{% endif %}
+                        </span>
+                    </div>
+                    <div class="topbar-actions">
+                        <a class="button button-secondary" href="{% url 'password_change' %}">
+                            <svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
+                            <span>Сменить пароль</span>
+                        </a>
+                        <form method="post" action="{% url 'logout' %}" class="inline-form">
+                            {% csrf_token %}
+                            <button class="button-danger" type="submit">
+                                <svg class="icon" aria-hidden="true"><use href="#icon-log-out"></use></svg>
+                                <span>Выйти</span>
+                            </button>
+                        </form>
+                    </div>
                 </div>
             {% endif %}
+        </div>
+    </header>
 
-            <div>
-                <label for="subject">Предмет</label>
-                <select id="subject" name="subject">
-                    <option value="">Все предметы</option>
-                    {% for subject in subjects %}
-                        <option value="{{ subject.id }}" {% if selected_subject_id == subject.id|stringformat:"s" %}selected{% endif %}>
-                            {{ subject.name }}
-                        </option>
-                    {% endfor %}
-                </select>
-            </div>
-
-            <div>
-                <button type="submit">Применить фильтры</button>
-            </div>
-        </form>
-
-        {% if grade_form and role_mode != 'student' %}
-            <h2>Поставить оценку</h2>
-            <form method="post" id="grade-create-form">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="add_grade">
-                <div>
-                    <label for="id_student">Ученик</label>
-                    {{ grade_form.student }}
-                    {% for error in grade_form.student.errors %}
-                        <div class="alert error" data-error-for="student">{{ error }}</div>
-                    {% endfor %}
-                </div>
-                <div>
-                    <label for="id_subject">Предмет</label>
-                    {{ grade_form.subject }}
-                    {% for error in grade_form.subject.errors %}
-                        <div class="alert error" data-error-for="subject">{{ error }}</div>
-                    {% endfor %}
-                </div>
-                {% if role_mode == 'superuser' %}
-                    <div>
-                        <label for="id_teacher">Преподаватель</label>
-                        {{ grade_form.teacher }}
-                        {% for error in grade_form.teacher.errors %}
-                            <div class="alert error" data-error-for="teacher">{{ error }}</div>
-                        {% endfor %}
-                    </div>
+    <main class="main" id="main-content">
+        <div class="workspace-heading">
+            <div class="workspace-title">
+                {% if role_mode == 'teacher' %}
+                    <h2>Журнал преподавателя</h2>
+                    <p>Учебные группы и ведомости</p>
+                {% elif role_mode == 'student' %}
+                    <h2>Мои оценки</h2>
+                    <p>Успеваемость по предметам</p>
+                {% elif role_mode == 'superuser' %}
+                    <h2>Управление журналом</h2>
+                    <p>Все группы и предметы</p>
+                {% else %}
+                    <h2>Личный кабинет</h2>
+                    <p>Электронный журнал</p>
                 {% endif %}
-                <div>
-                    <label for="id_date">Дата</label>
-                    {{ grade_form.date }}
-                    {% for error in grade_form.date.errors %}
-                        <div class="alert error" data-error-for="date">{{ error }}</div>
-                    {% endfor %}
+            </div>
+            {% if selected_academic_year %}
+                <div class="context-pill">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>
+                    <span>{{ selected_academic_year.name }}</span>
                 </div>
-                <div>
-                    <label for="id_value">Оценка</label>
-                    {{ grade_form.value }}
-                    {% for error in grade_form.value.errors %}
-                        <div class="alert error" data-error-for="value">{{ error }}</div>
-                    {% endfor %}
-                </div>
-                <div>
-                    <button type="submit">Сохранить оценку</button>
-                </div>
-            </form>
-            {% if grade_form.non_field_errors %}
-                {% for error in grade_form.non_field_errors %}
-                    <div class="alert error">{{ error }}</div>
+            {% endif %}
+        </div>
+
+        {% if messages %}
+            <div class="message-stack">
+                {% for message in messages %}
+                    <div class="alert{% if message.tags == 'error' %} error{% elif message.tags == 'success' %} success{% endif %}" role="status">
+                        <svg class="icon" aria-hidden="true"><use href="{% if message.tags == 'success' %}#icon-check{% else %}#icon-alert{% endif %}"></use></svg>
+                        <span>{{ message }}</span>
+                    </div>
                 {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if access_error %}
+            <div class="alert error">
+                <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+                <span>{{ access_error }}</span>
+            </div>
+        {% else %}
+            <section class="toolbar" aria-label="Фильтры журнала">
+                <form method="get" class="filter-form">
+                    <div class="field">
+                        <label for="academic_year">Учебный год</label>
+                        <select id="academic_year" name="academic_year">
+                            <option value="">Текущий учебный год</option>
+                            {% for academic_year in academic_years %}
+                                <option value="{{ academic_year.id }}" {% if selected_academic_year_id == academic_year.id|stringformat:"s" %}selected{% endif %}>
+                                    {{ academic_year.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                        <div class="field">
+                            <label for="group">Группа</label>
+                            <select id="group" name="group">
+                                <option value="">Все группы</option>
+                                {% for group in groups %}
+                                    <option value="{{ group.id }}" {% if selected_group_id == group.id|stringformat:"s" %}selected{% endif %}>
+                                        {{ group.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    {% else %}
+                        <div class="field">
+                            <span class="field-label">Группа</span>
+                            <input type="text" value="{{ selected_group.name }}" readonly>
+                        </div>
+                    {% endif %}
+
+                    <div class="field">
+                        <label for="subject">Предмет</label>
+                        <select id="subject" name="subject">
+                            <option value="">Все предметы</option>
+                            {% for subject in subjects %}
+                                <option value="{{ subject.id }}" {% if selected_subject_id == subject.id|stringformat:"s" %}selected{% endif %}>
+                                    {{ subject.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-action">
+                        <button type="submit">
+                            <svg class="icon" aria-hidden="true"><use href="#icon-filter"></use></svg>
+                            <span>Применить</span>
+                        </button>
+                        <a class="button button-secondary" href="{% url 'journal' %}">
+                            <svg class="icon" aria-hidden="true"><use href="#icon-reset"></use></svg>
+                            <span>Сбросить</span>
+                        </a>
+                    </div>
+                </form>
+            </section>
+
+            <section class="summary-grid" aria-label="Сводка">
+                <div class="summary-item">
+                    <span class="summary-label">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-users"></use></svg>
+                        Группы
+                    </span>
+                    <div class="summary-value">{{ groups|length }}</div>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
+                        Предметы
+                    </span>
+                    <div class="summary-value">{{ subjects|length }}</div>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
+                        Ученики
+                    </span>
+                    <div class="summary-value">{{ students|length }}</div>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-table"></use></svg>
+                        Журналы
+                    </span>
+                    <div class="summary-value">{{ journal_tables|length }}</div>
+                </div>
+            </section>
+
+            {% if grade_form and role_mode != 'student' %}
+                <section class="quick-entry" aria-labelledby="quick-grade-title">
+                    <div class="section-head">
+                        <div class="section-title">
+                            <span class="section-icon">
+                                <svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg>
+                            </span>
+                            <div>
+                                <h3 id="quick-grade-title">Новая оценка</h3>
+                                <p>Новая запись в журнале</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="quick-entry-body">
+                        <form method="post" id="grade-create-form" class="grade-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="add_grade">
+                            <div class="field">
+                                <label for="id_student">Ученик</label>
+                                {{ grade_form.student }}
+                                {% if grade_form.student.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.student.errors %}
+                                            <div class="field-error" data-error-for="student">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                            <div class="field">
+                                <label for="id_subject">Предмет</label>
+                                {{ grade_form.subject }}
+                                {% if grade_form.subject.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.subject.errors %}
+                                            <div class="field-error" data-error-for="subject">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                            {% if role_mode == 'superuser' %}
+                                <div class="field">
+                                    <label for="id_teacher">Преподаватель</label>
+                                    {{ grade_form.teacher }}
+                                    {% if grade_form.teacher.errors %}
+                                        <div class="field-errors">
+                                            {% for error in grade_form.teacher.errors %}
+                                                <div class="field-error" data-error-for="teacher">{{ error }}</div>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+                            <div class="field">
+                                <label for="id_date">Дата</label>
+                                {{ grade_form.date }}
+                                {% if grade_form.date.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.date.errors %}
+                                            <div class="field-error" data-error-for="date">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                            <div class="field">
+                                <label for="id_value">Оценка</label>
+                                {{ grade_form.value }}
+                                {% if grade_form.value.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.value.errors %}
+                                            <div class="field-error" data-error-for="value">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                            <div class="form-action">
+                                <button type="submit">
+                                    <svg class="icon" aria-hidden="true"><use href="#icon-save"></use></svg>
+                                    <span>Сохранить</span>
+                                </button>
+                            </div>
+                        </form>
+
+                        {% if grade_form.non_field_errors %}
+                            <div class="field-errors">
+                                {% for error in grade_form.non_field_errors %}
+                                    <div class="field-error">{{ error }}</div>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                </section>
+            {% endif %}
+
+            {% if not journal_tables %}
+                <section class="empty-state">
+                    <span class="section-icon">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-table"></use></svg>
+                    </span>
+                    <span>
+                        <strong>Нет данных по выбранным фильтрам.</strong>
+                        Для выбранного учебного периода журналов пока нет.
+                    </span>
+                </section>
+            {% else %}
+                {% if journal_tables|length > 1 %}
+                    <nav class="journal-tabs" aria-label="Быстрый переход между журналами">
+                        {% for table in journal_tables %}
+                            <a class="journal-tab" href="#journal-{{ table.group.id }}-{{ table.subject.id }}">
+                                <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
+                                <strong>{{ table.subject.name }}</strong>
+                                <span>{{ table.group.name }}</span>
+                            </a>
+                        {% endfor %}
+                    </nav>
+                {% endif %}
+                <div class="table-stack">
+                    {% for table in journal_tables %}
+                        <section class="table-panel" id="journal-{{ table.group.id }}-{{ table.subject.id }}">
+                            <div class="table-panel-head">
+                                <div class="table-title">
+                                    <h3>{{ table.subject.name }}</h3>
+                                    <p>{{ table.group.name }}</p>
+                                </div>
+                                <div class="table-meta">
+                                    <span class="meta-chip">
+                                        <svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>
+                                        {{ table.academic_year.name }}
+                                    </span>
+                                    <span class="meta-chip">
+                                        <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
+                                        Учеников: {{ table.rows|length }}
+                                    </span>
+                                    <span class="meta-chip">
+                                        <svg class="icon" aria-hidden="true"><use href="#icon-table"></use></svg>
+                                        Занятий: {{ table.dates|length }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {% if not table.dates %}
+                                <div class="table-note">
+                                    <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+                                    <span>Оценки за занятия ещё не выставлены.</span>
+                                </div>
+                            {% endif %}
+
+                            <form method="post" class="table-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="inline_edit">
+                                <div class="table-scroll" tabindex="0" role="region" aria-label="{{ table.subject.name }}, {{ table.group.name }}">
+                                    <table>
+                                        <thead>
+                                        <tr>
+                                            <th class="student-col sticky-col" scope="col">Ученик</th>
+                                            {% for lesson_date in table.dates %}
+                                                <th scope="col">{{ lesson_date|date:"d.m" }}</th>
+                                            {% endfor %}
+                                            <th scope="col">Средняя</th>
+                                            <th scope="col">Экзамен</th>
+                                            <th scope="col">Итог</th>
+                                        </tr>
+                                        </thead>
+                                        <tbody>
+                                        {% for row in table.rows %}
+                                            <tr>
+                                                <th class="sticky-col" scope="row">
+                                                    <span class="student-name">
+                                                        <span class="student-avatar">
+                                                            <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
+                                                        </span>
+                                                        <span>{{ row.student.full_name }}</span>
+                                                    </span>
+                                                </th>
+                                                {% for lesson_date in table.dates %}
+                                                    {% with cell=row.grades_by_date|get_item:lesson_date %}
+                                                        <td class="grade-cell">
+                                                            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                                {% if cell %}
+                                                                    <input
+                                                                        type="text"
+                                                                        maxlength="1"
+                                                                        pattern="[1-5Нн]"
+                                                                        name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
+                                                                        value="{{ cell }}"
+                                                                        aria-label="{{ row.student.full_name }}: {{ lesson_date|date:'d.m.Y' }}"
+                                                                    >
+                                                                {% else %}
+                                                                    <span class="muted">-</span>
+                                                                {% endif %}
+                                                            {% else %}
+                                                                {% if cell %}
+                                                                    {{ cell }}
+                                                                {% else %}
+                                                                    <span class="muted">-</span>
+                                                                {% endif %}
+                                                            {% endif %}
+                                                        </td>
+                                                    {% endwith %}
+                                                {% endfor %}
+                                                <td class="average-cell">
+                                                    {% if row.average_grade %}
+                                                        {{ row.average_grade }}
+                                                    {% else %}
+                                                        <span class="muted">-</span>
+                                                    {% endif %}
+                                                </td>
+                                                <td class="result-cell">
+                                                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                        <select name="exam__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student.full_name }}: экзамен">
+                                                            <option value="">-</option>
+                                                            {% for option in table.final_grade_options %}
+                                                                <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                    {% else %}
+                                                        {% if row.exam_grade %}
+                                                            {{ row.exam_grade }}
+                                                        {% else %}
+                                                            <span class="muted">-</span>
+                                                        {% endif %}
+                                                    {% endif %}
+                                                </td>
+                                                <td class="result-cell">
+                                                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                        <select name="final__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student.full_name }}: итоговая оценка">
+                                                            <option value="">-</option>
+                                                            {% for option in table.final_grade_options %}
+                                                                <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                    {% else %}
+                                                        {% if row.final_grade %}
+                                                            {{ row.final_grade }}
+                                                        {% else %}
+                                                            <span class="muted">-</span>
+                                                        {% endif %}
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                    <div class="table-actions">
+                                        <span class="save-state" role="status" aria-live="polite">
+                                            <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+                                            <span>Все изменения сохранены</span>
+                                        </span>
+                                        <button class="table-save-button" type="submit">
+                                            <svg class="icon" aria-hidden="true"><use href="#icon-save"></use></svg>
+                                            <span>Сохранить изменения</span>
+                                        </button>
+                                    </div>
+                                {% endif %}
+                            </form>
+                        </section>
+                    {% endfor %}
+                </div>
             {% endif %}
         {% endif %}
-
-        {% if not journal_tables %}
-            <p class="muted">Нет данных по выбранным фильтрам.</p>
-        {% else %}
-            {% for table in journal_tables %}
-                <h2>
-                    Группа: {{ table.group.name }} | Предмет: {{ table.subject.name }}
-                </h2>
-
-                {% if not table.dates %}
-                    <p class="muted">По этому предмету пока нет оценок по датам.</p>
-                {% endif %}
-                <form method="post">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="inline_edit">
-                    <div class="table-scroll">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>Ученик</th>
-                                {% for lesson_date in table.dates %}
-                                    <th>{{ lesson_date|date:"d.m" }}</th>
-                                {% endfor %}
-                                <th>Средняя оценка</th>
-                                <th>Экзамен</th>
-                                <th>Итоговая оценка</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            {% for row in table.rows %}
-                                <tr>
-                                    <td>{{ row.student.full_name }}</td>
-                                    {% for lesson_date in table.dates %}
-                                        {% with cell=row.grades_by_date|get_item:lesson_date %}
-                                            <td>
-                                                {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                                    {% if cell %}
-                                                        <input
-                                                            type="text"
-                                                            maxlength="1"
-                                                            pattern="[1-5Нн]"
-                                                            name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
-                                                            value="{{ cell }}"
-                                                        >
-                                                    {% else %}
-                                                        <span class="muted">—</span>
-                                                    {% endif %}
-                                                {% else %}
-                                                    {% if cell %}
-                                                        {{ cell }}
-                                                    {% else %}
-                                                        <span class="muted">—</span>
-                                                    {% endif %}
-                                                {% endif %}
-                                            </td>
-                                        {% endwith %}
-                                    {% endfor %}
-                                    <td>
-                                        {% if row.average_grade %}
-                                            {{ row.average_grade }}
-                                        {% else %}
-                                            <span class="muted">—</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                            <select name="exam__{{ table.subject.id }}__{{ row.student.id }}">
-                                                <option value="">—</option>
-                                                {% for option in table.final_grade_options %}
-                                                    <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
-                                                {% endfor %}
-                                            </select>
-                                        {% else %}
-                                            {% if row.exam_grade %}
-                                                {{ row.exam_grade }}
-                                            {% else %}
-                                                <span class="muted">—</span>
-                                            {% endif %}
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                                            <select name="final__{{ table.subject.id }}__{{ row.student.id }}">
-                                                <option value="">—</option>
-                                                {% for option in table.final_grade_options %}
-                                                    <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>
-                                                {% endfor %}
-                                            </select>
-                                        {% else %}
-                                            {% if row.final_grade %}
-                                                {{ row.final_grade }}
-                                            {% else %}
-                                                <span class="muted">—</span>
-                                            {% endif %}
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
-                        <button type="submit">Сохранить изменения в таблице</button>
-                    {% endif %}
-                </form>
-            {% endfor %}
-        {% endif %}
-    {% endif %}
+    </main>
 </div>
+
 <script>
     (function () {
         const key = 'journal-scroll-y';
@@ -455,19 +1433,57 @@
             if (field && typeof field.focus === 'function') {
                 field.focus({ preventScroll: true });
             }
-            return;
+        } else {
+            const savedY = sessionStorage.getItem(key);
+            if (savedY !== null) {
+                window.scrollTo(0, Number(savedY) || 0);
+                sessionStorage.removeItem(key);
+            }
         }
 
-        const savedY = sessionStorage.getItem(key);
-        if (savedY !== null) {
-            window.scrollTo(0, Number(savedY) || 0);
-            sessionStorage.removeItem(key);
-        }
-
-        document.querySelectorAll('form[method="post"]').forEach((form) => {
+        document.querySelectorAll('main form[method="post"]').forEach((form) => {
             form.addEventListener('submit', () => {
                 sessionStorage.setItem(key, String(window.scrollY));
             });
+        });
+
+        const dirtyForms = new Set();
+
+        document.querySelectorAll('.table-form').forEach((form) => {
+            const saveButton = form.querySelector('.table-save-button');
+            const state = form.querySelector('.save-state');
+            const stateText = state ? state.querySelector('span') : null;
+            const controls = form.querySelectorAll('input:not([type="hidden"]), select');
+
+            if (!saveButton || !state || !stateText || controls.length === 0) {
+                return;
+            }
+
+            saveButton.disabled = true;
+
+            const markDirty = () => {
+                dirtyForms.add(form);
+                saveButton.disabled = false;
+                state.classList.add('is-dirty');
+                stateText.textContent = 'Есть несохранённые изменения';
+            };
+
+            controls.forEach((control) => {
+                control.addEventListener('input', markDirty, { once: true });
+                control.addEventListener('change', markDirty, { once: true });
+            });
+
+            form.addEventListener('submit', () => {
+                dirtyForms.delete(form);
+            });
+        });
+
+        window.addEventListener('beforeunload', (event) => {
+            if (dirtyForms.size === 0) {
+                return;
+            }
+            event.preventDefault();
+            event.returnValue = '';
         });
     })();
 </script>
