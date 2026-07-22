@@ -1520,6 +1520,70 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         grade.refresh_from_db()
         self.assertEqual(grade.teacher, data['teacher'])
 
+    def test_student_birth_date_change_ignores_unchanged_historical_subject_results(self):
+        data = self.create_base_journal()
+        assignment = GroupSubject.objects.get(
+            group=data['group'],
+            subject=data['solfeggio'],
+        )
+        individual_assignment = StudentSubject.objects.get(
+            student=data['student'],
+            subject=data['specialty'],
+        )
+        result = SubjectResult.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            academic_year=data['year'],
+            exam_grade='5',
+            final_grade='5',
+        )
+        assignment.is_active = False
+        assignment.save()
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_student_change', args=[data['student'].pk]),
+            data={
+                'full_name': data['student'].full_name,
+                'gender': data['student'].gender,
+                'birth_date': '2011-02-02',
+                'group': data['group'].pk,
+                'instrument': data['instrument'].pk,
+                'is_active': 'on',
+                'student_phone': data['student'].student_phone,
+                'parent_contacts': data['student'].parent_contacts,
+                'city_church': data['student'].city_church,
+                'music_education': data['student'].music_education,
+                'comments': data['student'].comments,
+                'user': data['student'].user_id,
+                'individual_subjects-TOTAL_FORMS': '1',
+                'individual_subjects-INITIAL_FORMS': '1',
+                'individual_subjects-MIN_NUM_FORMS': '0',
+                'individual_subjects-MAX_NUM_FORMS': '1000',
+                'individual_subjects-0-id': individual_assignment.pk,
+                'individual_subjects-0-student': data['student'].pk,
+                'individual_subjects-0-subject': data['specialty'].pk,
+                'individual_subjects-0-teacher': data['other_teacher'].pk,
+                'individual_subjects-0-is_specialty': 'on',
+                'individual_subjects-0-is_active': 'on',
+                'subject_results-TOTAL_FORMS': '1',
+                'subject_results-INITIAL_FORMS': '1',
+                'subject_results-MIN_NUM_FORMS': '0',
+                'subject_results-MAX_NUM_FORMS': '1000',
+                'subject_results-0-id': result.pk,
+                'subject_results-0-student': data['student'].pk,
+                'subject_results-0-academic_year': data['year'].pk,
+                'subject_results-0-subject': data['solfeggio'].pk,
+                'subject_results-0-exam_grade': '5',
+                'subject_results-0-final_grade': '5',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        data['student'].refresh_from_db()
+        self.assertEqual(data['student'].birth_date, date(2011, 2, 2))
+
 
 class PasswordRecoveryViewTests(TestCase):
     def test_login_page_contains_password_help_link(self):

@@ -326,7 +326,8 @@ class SubjectResultAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         instance = self.instance if self.instance and self.instance.pk else None
-        student_id = self.data.get('student') or getattr(instance, 'student_id', None)
+        student_id = self._raw_value('student') or getattr(instance, 'student_id', None)
+        subject_id = self._raw_value('subject') or getattr(instance, 'subject_id', None)
 
         if student_id:
             try:
@@ -343,9 +344,40 @@ class SubjectResultAdminForm(forms.ModelForm):
                     student_id=student.pk,
                     is_active=True,
                 ).values_list('subject_id', flat=True)
-                self.fields['subject'].queryset = Subject.objects.filter(
+                subject_queryset = Subject.objects.filter(
                     Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids)
                 ).distinct().order_by('name')
+                self.fields['subject'].queryset = self._include_selected_subject(
+                    subject_queryset,
+                    subject_id,
+                )
+
+    def _raw_value(self, field_name):
+        if not self.is_bound:
+            return None
+        return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
+
+    def _include_selected_subject(self, queryset, raw_value):
+        if not raw_value:
+            return queryset
+        try:
+            return Subject.objects.filter(
+                Q(pk__in=queryset.values('pk')) | Q(pk=raw_value),
+            ).distinct().order_by('name')
+        except (TypeError, ValueError):
+            return queryset
+
+    def _post_clean(self):
+        if (
+            self.is_bound
+            and self.prefix
+            and self.prefix.startswith('subject_results-')
+            and self.instance
+            and self.instance.pk
+            and not self.has_changed()
+        ):
+            return
+        super()._post_clean()
 
 
 class TeacherAdminForm(forms.ModelForm):
