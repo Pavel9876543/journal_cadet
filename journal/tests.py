@@ -26,7 +26,7 @@ from journal.account_utils import (
     display_name_for_user,
     generate_temporary_password,
 )
-from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, SubjectAdmin, TeacherAdminForm
+from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, TeacherAdminForm
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -1567,7 +1567,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Квалификации преподавателей')
         self.assertContains(response, reverse('admin:journal_teachersubject_changelist'))
 
-    def test_related_models_are_visible_in_admin_and_subject_contains_all_relation_inlines(self):
+    def test_related_models_are_visible_in_admin_without_teacher_qualification_inlines(self):
         request = type('Request', (), {'user': self.admin_user})()
 
         for model in (GroupSubject, StudentSubject, TeacherSubject):
@@ -1576,8 +1576,12 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 self.assertTrue(model_admin.get_model_perms(request).get('view'))
 
         self.assertEqual(
-            [inline.model for inline in SubjectAdmin.inlines],
-            [TeacherSubject, GroupSubject, StudentSubject],
+            [inline.model for inline in django_admin.site._registry[Subject].inlines],
+            [GroupSubject, StudentSubject],
+        )
+        self.assertEqual(
+            [inline.model for inline in django_admin.site._registry[Teacher].inlines],
+            [GroupSubject, StudentSubject],
         )
 
     def test_group_admin_allows_adding_students_inline(self):
@@ -1585,6 +1589,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         group = StudyGroup.objects.create(name='Группа с учениками', academic_year=year)
         instrument = self.create_instrument()
         self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        get_response = self.client.get(reverse('admin:journal_studygroup_change', args=[group.pk]))
+        self.assertContains(get_response, 'name="students-0-full_name"')
+        self.assertContains(get_response, 'name="students-0-instrument"')
 
         response = self.client.post(
             reverse('admin:journal_studygroup_change', args=[group.pk]),
@@ -1618,6 +1626,70 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 instrument=instrument,
             ).exists(),
         )
+
+    def test_group_admin_allows_editing_and_deleting_students_inline(self):
+        year = self.create_academic_year()
+        group = StudyGroup.objects.create(name='Группа с редактированием', academic_year=year)
+        instrument = self.create_instrument()
+        student_to_edit = Student.objects.create(
+            full_name='Старое Имя',
+            group=group,
+            instrument=instrument,
+            is_active=True,
+        )
+        student_to_delete = Student.objects.create(
+            full_name='Удаляемый Ученик',
+            group=group,
+            instrument=instrument,
+            is_active=True,
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_studygroup_change', args=[group.pk]),
+            data={
+                'name': group.name,
+                'academic_year': year.pk,
+                'is_active': 'on',
+                'group_subjects-TOTAL_FORMS': '0',
+                'group_subjects-INITIAL_FORMS': '0',
+                'group_subjects-MIN_NUM_FORMS': '0',
+                'group_subjects-MAX_NUM_FORMS': '1000',
+                'students-TOTAL_FORMS': '2',
+                'students-INITIAL_FORMS': '2',
+                'students-MIN_NUM_FORMS': '0',
+                'students-MAX_NUM_FORMS': '1000',
+                'students-0-id': student_to_edit.pk,
+                'students-0-group': group.pk,
+                'students-0-full_name': 'Новое Имя',
+                'students-0-gender': Student.GENDER_MALE,
+                'students-0-birth_date': '',
+                'students-0-instrument': instrument.pk,
+                'students-0-student_phone': '',
+                'students-0-city_church': '',
+                'students-0-music_education': '',
+                'students-0-user': '',
+                'students-0-is_active': 'on',
+                'students-1-id': student_to_delete.pk,
+                'students-1-group': group.pk,
+                'students-1-full_name': student_to_delete.full_name,
+                'students-1-gender': '',
+                'students-1-birth_date': '',
+                'students-1-instrument': instrument.pk,
+                'students-1-student_phone': '',
+                'students-1-city_church': '',
+                'students-1-music_education': '',
+                'students-1-user': '',
+                'students-1-is_active': 'on',
+                'students-1-DELETE': 'on',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        student_to_edit.refresh_from_db()
+        self.assertEqual(student_to_edit.full_name, 'Новое Имя')
+        self.assertFalse(Student.objects.filter(pk=student_to_delete.pk).exists())
 
     def test_student_admin_uses_prefetched_specialty_without_row_queries(self):
         data = self.create_base_journal()
@@ -1674,6 +1746,78 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         credential = TemporaryCredential.objects.get(login=teacher.user.username)
         self.assertTrue(credential.temporary_password)
         self.assertTrue(teacher.user.check_password(credential.temporary_password))
+
+    def test_teacher_admin_allows_adding_group_and_individual_subjects_inline(self):
+        year = self.create_academic_year()
+        group = StudyGroup.objects.create(name='Группа преподавателя', academic_year=year)
+        instrument = self.create_instrument()
+        student = Student.objects.create(
+            full_name='Индивидуальный Ученик',
+            group=group,
+            instrument=instrument,
+        )
+        teacher = self.create_teacher(
+            full_name='Преподаватель Назначений',
+            username='teacher_assignments',
+        )
+        group_subject = self.create_subject(name='Групповой предмет')
+        individual_subject = self.create_subject(name='Специальность назначений', is_specialty=True)
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        get_response = self.client.get(reverse('admin:journal_teacher_change', args=[teacher.pk]))
+        self.assertContains(get_response, 'name="group_subjects-0-group"')
+        self.assertContains(get_response, 'name="individual_subjects-0-student"')
+
+        response = self.client.post(
+            reverse('admin:journal_teacher_change', args=[teacher.pk]),
+            data={
+                'full_name': teacher.full_name,
+                'birth_date': '',
+                'phone': '',
+                'email': '',
+                'comments': '',
+                'user': teacher.user_id,
+                'is_active': 'on',
+                'group_subjects-TOTAL_FORMS': '1',
+                'group_subjects-INITIAL_FORMS': '0',
+                'group_subjects-MIN_NUM_FORMS': '0',
+                'group_subjects-MAX_NUM_FORMS': '1000',
+                'group_subjects-0-id': '',
+                'group_subjects-0-teacher': teacher.pk,
+                'group_subjects-0-group': group.pk,
+                'group_subjects-0-subject': group_subject.pk,
+                'group_subjects-0-sort_order': '10',
+                'group_subjects-0-is_active': 'on',
+                'individual_subjects-TOTAL_FORMS': '1',
+                'individual_subjects-INITIAL_FORMS': '0',
+                'individual_subjects-MIN_NUM_FORMS': '0',
+                'individual_subjects-MAX_NUM_FORMS': '1000',
+                'individual_subjects-0-id': '',
+                'individual_subjects-0-teacher': teacher.pk,
+                'individual_subjects-0-student': student.pk,
+                'individual_subjects-0-subject': individual_subject.pk,
+                'individual_subjects-0-is_specialty': 'on',
+                'individual_subjects-0-is_active': 'on',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            GroupSubject.objects.filter(
+                group=group,
+                subject=group_subject,
+                teacher=teacher,
+            ).exists(),
+        )
+        self.assertTrue(
+            StudentSubject.objects.filter(
+                student=student,
+                subject=individual_subject,
+                teacher=teacher,
+                is_specialty=True,
+            ).exists(),
+        )
 
     def test_changing_group_assignment_in_admin_cascades_to_existing_grades(self):
         data = self.create_base_journal()

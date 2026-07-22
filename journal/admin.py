@@ -414,26 +414,6 @@ class StudentAdminForm(forms.ModelForm):
 # -----------------------------------------------------------------------------
 
 
-class TeacherSubjectInline(admin.TabularInline):
-    model = TeacherSubject
-    extra = 0
-    autocomplete_fields = ('subject',)
-    fields = ('subject',)
-    show_change_link = True
-    verbose_name = 'Предмет преподавателя'
-    verbose_name_plural = 'Предметы, которые может вести преподаватель'
-
-
-class TeacherSubjectForSubjectInline(admin.TabularInline):
-    model = TeacherSubject
-    extra = 0
-    autocomplete_fields = ('teacher',)
-    fields = ('teacher',)
-    show_change_link = True
-    verbose_name = 'Преподаватель'
-    verbose_name_plural = 'Преподаватели, которые могут вести предмет'
-
-
 class GroupSubjectInline(admin.TabularInline):
     model = GroupSubject
     extra = 0
@@ -446,11 +426,10 @@ class GroupSubjectInline(admin.TabularInline):
 
 class GroupSubjectForTeacherInline(admin.TabularInline):
     model = GroupSubject
-    extra = 0
+    extra = 1
     autocomplete_fields = ('group', 'subject')
     fields = ('group', 'subject', 'sort_order', 'is_active')
     show_change_link = True
-    classes = ('collapse',)
     verbose_name = 'Групповой предмет'
     verbose_name_plural = 'Групповые предметы преподавателя'
 
@@ -478,11 +457,10 @@ class StudentSubjectInline(admin.TabularInline):
 
 class StudentSubjectForTeacherInline(admin.TabularInline):
     model = StudentSubject
-    extra = 0
+    extra = 1
     autocomplete_fields = ('student', 'subject')
     fields = ('student', 'subject', 'is_specialty', 'is_active')
     show_change_link = True
-    classes = ('collapse',)
     verbose_name = 'Индивидуальный ученик'
     verbose_name_plural = 'Индивидуальные ученики преподавателя'
 
@@ -500,18 +478,25 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
 
 class StudentInline(admin.TabularInline):
     model = Student
-    extra = 0
+    form = StudentAdminForm
+    extra = 1
     autocomplete_fields = ('user', 'instrument')
     fields = (
         'full_name',
+        'gender',
+        'birth_date',
         'instrument',
+        'student_phone',
+        'city_church',
+        'music_education',
         'specialty_teacher_inline',
         'user',
         'is_active',
     )
     readonly_fields = ('specialty_teacher_inline',)
     show_change_link = True
-    classes = ('collapse',)
+    verbose_name = 'Ученик'
+    verbose_name_plural = 'Ученики группы'
 
     @admin.display(description='Преподаватель по специальности')
     def specialty_teacher_inline(self, obj):
@@ -607,7 +592,6 @@ class SubjectAdmin(admin.ModelAdmin):
         'individual_students__teacher__full_name',
     )
     inlines = (
-        TeacherSubjectForSubjectInline,
         GroupSubjectForSubjectInline,
         StudentSubjectForSubjectInline,
     )
@@ -769,7 +753,7 @@ class TeacherAdmin(admin.ModelAdmin):
         'individual_subjects__student__full_name',
     )
     autocomplete_fields = ('user',)
-    inlines = (TeacherSubjectInline, GroupSubjectForTeacherInline, StudentSubjectForTeacherInline)
+    inlines = (GroupSubjectForTeacherInline, StudentSubjectForTeacherInline)
     ordering = ('full_name',)
     list_select_related = ('user',)
     list_per_page = 30
