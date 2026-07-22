@@ -104,7 +104,7 @@ class Subject(models.Model):
         choices=FINAL_GRADE_TYPE_CHOICES,
         default=FINAL_GRADE_TYPE_NUMERIC,
     )
-    is_specialty = models.BooleanField('Предмет специальности', default=False)
+    is_specialty = models.BooleanField('Индивидуальный предмет', default=False)
     is_active = models.BooleanField('Активен', default=True)
 
     class Meta:
@@ -126,6 +126,14 @@ class Subject(models.Model):
         super().clean()
         if self.name:
             self.name = self.name.strip()
+        if self.pk and self.is_specialty and self.group_subjects.exists():
+            raise ValidationError({
+                'is_specialty': 'Нельзя сделать предмет индивидуальным, пока он назначен группам.'
+            })
+        if self.pk and not self.is_specialty and self.individual_students.exists():
+            raise ValidationError({
+                'is_specialty': 'Нельзя сделать предмет групповым, пока он назначен индивидуальным ученикам.'
+            })
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -490,7 +498,7 @@ class GroupSubject(models.Model):
         super().clean()
         if self.group_id and self.subject_id and self.subject.is_specialty:
             raise ValidationError({
-                'subject': 'Предмет специальности лучше назначать ученику индивидуально, а не всей группе.'
+                'subject': 'Индивидуальный предмет нельзя назначить группе.'
             })
 
     def save(self, *args, **kwargs):
@@ -585,9 +593,9 @@ class StudentSubject(models.Model):
 
     def clean(self) -> None:
         super().clean()
-        if self.is_specialty and self.subject_id and not self.subject.is_specialty:
+        if self.subject_id and not self.subject.is_specialty:
             raise ValidationError({
-                'subject': 'Для специальности выберите предмет, помеченный как “Предмет специальности”.'
+                'subject': 'Групповой предмет нельзя назначить индивидуальному ученику.'
             })
 
     def save(self, *args, **kwargs):

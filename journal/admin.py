@@ -409,6 +409,28 @@ class StudentAdminForm(forms.ModelForm):
         }
 
 
+class GroupSubjectAdminForm(forms.ModelForm):
+    class Meta:
+        model = GroupSubject
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'subject' in self.fields:
+            self.fields['subject'].queryset = Subject.objects.filter(is_specialty=False)
+
+
+class StudentSubjectAdminForm(forms.ModelForm):
+    class Meta:
+        model = StudentSubject
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'subject' in self.fields:
+            self.fields['subject'].queryset = Subject.objects.filter(is_specialty=True)
+
+
 # -----------------------------------------------------------------------------
 # Inline-классы
 # -----------------------------------------------------------------------------
@@ -416,6 +438,7 @@ class StudentAdminForm(forms.ModelForm):
 
 class GroupSubjectInline(admin.TabularInline):
     model = GroupSubject
+    form = GroupSubjectAdminForm
     extra = 0
     autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'sort_order', 'is_active')
@@ -426,6 +449,7 @@ class GroupSubjectInline(admin.TabularInline):
 
 class GroupSubjectForTeacherInline(admin.TabularInline):
     model = GroupSubject
+    form = GroupSubjectAdminForm
     extra = 1
     autocomplete_fields = ('group', 'subject')
     fields = ('group', 'subject', 'sort_order', 'is_active')
@@ -436,6 +460,7 @@ class GroupSubjectForTeacherInline(admin.TabularInline):
 
 class GroupSubjectForSubjectInline(admin.TabularInline):
     model = GroupSubject
+    form = GroupSubjectAdminForm
     extra = 0
     autocomplete_fields = ('group', 'teacher')
     fields = ('group', 'teacher', 'sort_order', 'is_active')
@@ -447,6 +472,7 @@ class GroupSubjectForSubjectInline(admin.TabularInline):
 
 class StudentSubjectInline(admin.TabularInline):
     model = StudentSubject
+    form = StudentSubjectAdminForm
     extra = 0
     autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'is_specialty', 'is_active')
@@ -457,6 +483,7 @@ class StudentSubjectInline(admin.TabularInline):
 
 class StudentSubjectForTeacherInline(admin.TabularInline):
     model = StudentSubject
+    form = StudentSubjectAdminForm
     extra = 1
     autocomplete_fields = ('student', 'subject')
     fields = ('student', 'subject', 'is_specialty', 'is_active')
@@ -467,6 +494,7 @@ class StudentSubjectForTeacherInline(admin.TabularInline):
 
 class StudentSubjectForSubjectInline(admin.TabularInline):
     model = StudentSubject
+    form = StudentSubjectAdminForm
     extra = 0
     autocomplete_fields = ('student', 'teacher')
     fields = ('student', 'teacher', 'is_specialty', 'is_active')
@@ -601,11 +629,18 @@ class SubjectAdmin(admin.ModelAdmin):
         ('Предмет', {
             'fields': ('name', 'final_grade_type', 'is_specialty', 'is_active'),
             'description': (
-                'Обычные предметы назначаются группе. Предметы специальности '
+                'Групповые предметы назначаются группе. Индивидуальные предметы '
                 'назначаются конкретному ученику.'
             ),
         }),
     )
+
+    def get_inlines(self, request, obj=None):
+        if obj is None:
+            return ()
+        if obj.is_specialty:
+            return (StudentSubjectForSubjectInline,)
+        return (GroupSubjectForSubjectInline,)
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -638,6 +673,16 @@ class SubjectAdmin(admin.ModelAdmin):
     @admin.display(description='Индивидуальных учеников')
     def individual_students_count(self, obj):
         return obj._individual_students_count
+
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+        if request.GET.get('field_name') == 'subject':
+            related_model_name = request.GET.get('model_name')
+            if related_model_name == 'groupsubject':
+                queryset = queryset.filter(is_specialty=False)
+            elif related_model_name == 'studentsubject':
+                queryset = queryset.filter(is_specialty=True)
+        return queryset, use_distinct
 
 
 # -----------------------------------------------------------------------------

@@ -334,6 +334,12 @@ class Command(BaseCommand):
             ('Импровизация', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
             ('История церковной музыки', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
             ('Специальность', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
+            ('Индивидуальная импровизация', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
+            ('Индивидуальное дирижирование', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
+            ('Индивидуальный оркестр', Subject.FINAL_GRADE_TYPE_PASS_FAIL, True),
+            ('Индивидуальная история церковной музыки', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
+            ('Индивидуальный ансамбль', Subject.FINAL_GRADE_TYPE_PASS_FAIL, True),
+            ('Индивидуальная гитара', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
         ]
 
         return {
@@ -619,11 +625,11 @@ class Command(BaseCommand):
             'Калуга / Музыкальное служение',
         ]
         extra_subject_specs = [
-            ('Импровизация', 'Дмитрий Ковалёв'),
-            ('Дирижирование', 'Ольга Захарова'),
-            ('Оркестр', 'Алексей Ветров'),
-            ('История церковной музыки', 'Ольга Захарова'),
-            ('Ансамбль', 'Наталья Лебедева'),
+            ('Индивидуальная импровизация', 'Дмитрий Ковалёв'),
+            ('Индивидуальное дирижирование', 'Ольга Захарова'),
+            ('Индивидуальный оркестр', 'Алексей Ветров'),
+            ('Индивидуальная история церковной музыки', 'Ольга Захарова'),
+            ('Индивидуальный ансамбль', 'Наталья Лебедева'),
         ]
 
         for index, (full_name, gender, group_name, instrument_name, specialty_teacher_name) in enumerate(
@@ -678,7 +684,7 @@ class Command(BaseCommand):
             if index % 10 == 0:
                 StudentSubject.objects.create(
                     student=student,
-                    subject=subjects['Гитара'],
+                    subject=subjects['Индивидуальная гитара'],
                     teacher=teachers['Игорь Романов'],
                     is_specialty=False,
                     is_active=False,
@@ -731,9 +737,9 @@ class Command(BaseCommand):
             'Сергей Аксёнов',
         ]
         extra_subjects = [
-            ('Импровизация', 'Дмитрий Ковалёв'),
-            ('Оркестр', 'Алексей Ветров'),
-            ('История церковной музыки', 'Ольга Захарова'),
+            ('Индивидуальная импровизация', 'Дмитрий Ковалёв'),
+            ('Индивидуальный оркестр', 'Алексей Ветров'),
+            ('Индивидуальная история церковной музыки', 'Ольга Захарова'),
         ]
         course_students = course_group.students.filter(is_active=True).order_by('id')
 

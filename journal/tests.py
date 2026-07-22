@@ -277,6 +277,12 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
                 teacher=teacher,
             )
 
+    def test_subject_specialty_flag_is_labeled_as_individual_subject(self):
+        self.assertEqual(
+            Subject._meta.get_field('is_specialty').verbose_name,
+            'Индивидуальный предмет',
+        )
+
     def test_student_subject_accepts_specialty_subject(self):
         data = self.create_base_journal()
         student = data['student']
@@ -285,7 +291,7 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertEqual(student.specialty_teacher, data['other_teacher'])
         self.assertIn('Специальность', student.subjects_display)
 
-    def test_student_subject_rejects_non_specialty_when_marked_as_specialty(self):
+    def test_student_subject_rejects_group_subject(self):
         data = self.create_base_journal()
 
         with self.assertRaises(ValidationError):
@@ -293,8 +299,24 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
                 student=data['student'],
                 subject=data['solfeggio'],
                 teacher=data['teacher'],
-                is_specialty=True,
+                is_specialty=False,
             )
+
+    def test_subject_cannot_be_switched_to_individual_with_group_assignments(self):
+        data = self.create_base_journal()
+        subject = data['solfeggio']
+        subject.is_specialty = True
+
+        with self.assertRaises(ValidationError):
+            subject.save()
+
+    def test_subject_cannot_be_switched_to_group_with_individual_assignments(self):
+        data = self.create_base_journal()
+        subject = data['specialty']
+        subject.is_specialty = False
+
+        with self.assertRaises(ValidationError):
+            subject.save()
 
     def test_student_can_have_only_one_active_specialty(self):
         data = self.create_base_journal()
@@ -1584,6 +1606,58 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             [GroupSubject, StudentSubject],
         )
 
+    def test_subject_admin_shows_assignment_inline_for_subject_type(self):
+        group_subject = self.create_subject(name='Групповой предмет')
+        individual_subject = self.create_subject(name='Индивидуальный предмет', is_specialty=True)
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        group_response = self.client.get(reverse('admin:journal_subject_change', args=[group_subject.pk]))
+        self.assertContains(group_response, 'Индивидуальный предмет')
+        self.assertContains(group_response, 'Группы, где есть этот предмет')
+        self.assertNotContains(group_response, 'Индивидуальные ученики по этому предмету')
+
+        individual_response = self.client.get(
+            reverse('admin:journal_subject_change', args=[individual_subject.pk])
+        )
+        self.assertContains(individual_response, 'Индивидуальный предмет')
+        self.assertContains(individual_response, 'Индивидуальные ученики по этому предмету')
+        self.assertNotContains(individual_response, 'Группы, где есть этот предмет')
+
+    def test_subject_admin_autocomplete_filters_subjects_by_assignment_type(self):
+        group_subject = self.create_subject(name='Групповой предмет')
+        individual_subject = self.create_subject(name='Индивидуальный предмет', is_specialty=True)
+        model_admin = django_admin.site._registry[Subject]
+
+        group_request = type(
+            'Request',
+            (),
+            {
+                'user': self.admin_user,
+                'GET': {'field_name': 'subject', 'model_name': 'groupsubject'},
+            },
+        )()
+        group_queryset, _ = model_admin.get_search_results(
+            group_request,
+            Subject.objects.all(),
+            '',
+        )
+        self.assertEqual(set(group_queryset), {group_subject})
+
+        individual_request = type(
+            'Request',
+            (),
+            {
+                'user': self.admin_user,
+                'GET': {'field_name': 'subject', 'model_name': 'studentsubject'},
+            },
+        )()
+        individual_queryset, _ = model_admin.get_search_results(
+            individual_request,
+            Subject.objects.all(),
+            '',
+        )
+        self.assertEqual(set(individual_queryset), {individual_subject})
+
     def test_group_admin_allows_adding_students_inline(self):
         year = self.create_academic_year()
         group = StudyGroup.objects.create(name='Группа с учениками', academic_year=year)
@@ -2583,14 +2657,16 @@ class SeedDataCommandTests(TestCase):
 
     def test_seed_data_populates_maximum_demo_profiles(self):
         self.assertGreaterEqual(Instrument.objects.count(), 14)
-        self.assertGreaterEqual(Subject.objects.count(), 15)
+        self.assertGreaterEqual(Subject.objects.count(), 21)
         self.assertGreaterEqual(StudyGroup.objects.count(), 7)
         self.assertGreaterEqual(Teacher.objects.count(), 9)
         self.assertGreaterEqual(Student.objects.count(), 35)
         self.assertGreaterEqual(GroupSubject.objects.count(), 33)
         self.assertGreaterEqual(StudentSubject.objects.count(), 70)
         self.assertGreaterEqual(StudentSubject.objects.filter(is_specialty=False).count(), 35)
-        self.assertEqual(Grade.objects.count(), 1482)
+        self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
+        self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
+        self.assertEqual(Grade.objects.count(), 1542)
 
         self.assertEqual(
             set(Grade.objects.values_list('value', flat=True)),
