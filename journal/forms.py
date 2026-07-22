@@ -511,9 +511,24 @@ class SubjectResultForm(forms.ModelForm):
 
 
 class BaseCourseApplicationForm(forms.ModelForm):
-    def __init__(self, *args, age_limit: bool = False, include_status: bool = False, **kwargs):
+    def __init__(
+        self,
+        *args,
+        age_limit: bool = False,
+        include_status: bool = False,
+        registration_settings: CourseRegistrationSettings | None = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.age_limit = age_limit
+        self.registration_settings = registration_settings
+        self.minimum_registration_age = None
+        self.age_reference_date = None
+
+        if self.age_limit:
+            self.registration_settings = self.registration_settings or CourseRegistrationSettings.load()
+            self.minimum_registration_age = self.registration_settings.minimum_registration_age
+            self.age_reference_date = self.registration_settings.course_starts_on
 
         if 'status' in self.fields and not include_status:
             self.fields.pop('status')
@@ -561,9 +576,23 @@ class BaseCourseApplicationForm(forms.ModelForm):
         self.fields['parent_contacts'].required = False
 
         if self.age_limit:
-            self.fields['birth_date'].widget.attrs['max'] = minimum_birth_date_for_age(14).isoformat()
-            self.fields['birth_date'].widget.attrs['data-age-limit'] = '14'
-            self.fields['birth_date'].help_text = 'Регистрация на курсы доступна с 14 лет.'
+            minimum_birth_date = minimum_birth_date_for_age(
+                self.minimum_registration_age,
+                today=self.age_reference_date,
+            )
+            age_error_message = (
+                f'Регистрация на курсы доступна только с {self.minimum_registration_age} лет.'
+            )
+            self.fields['birth_date'].widget.attrs.update({
+                'max': minimum_birth_date.isoformat(),
+                'data-age-limit': str(self.minimum_registration_age),
+                'data-age-reference-date': self.age_reference_date.isoformat(),
+                'data-age-error-message': age_error_message,
+            })
+            self.fields['birth_date'].help_text = (
+                f'Регистрация на курсы доступна с {self.minimum_registration_age} лет. '
+                f'Возраст считается на {self.age_reference_date:%d.%m.%Y}.'
+            )
 
     class Meta:
         model = CourseApplication
@@ -610,8 +639,13 @@ class BaseCourseApplicationForm(forms.ModelForm):
         birth_date = self.cleaned_data['birth_date']
         if birth_date > date.today():
             raise forms.ValidationError('Дата рождения не может быть в будущем.')
-        if self.age_limit and calculate_age(birth_date) < 14:
-            raise forms.ValidationError('Регистрация на курсы доступна только с 14 лет.')
+        if (
+            self.age_limit
+            and calculate_age(birth_date, today=self.age_reference_date) < self.minimum_registration_age
+        ):
+            raise forms.ValidationError(
+                f'Регистрация на курсы доступна только с {self.minimum_registration_age} лет.'
+            )
         return birth_date
 
     def clean_comments(self):
@@ -641,11 +675,22 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
 class CourseRegistrationSettingsForm(forms.ModelForm):
     class Meta:
         model = CourseRegistrationSettings
-        fields = ['telegram_group_url']
+        fields = [
+            'telegram_group_url',
+            'minimum_registration_age',
+            'course_starts_on',
+            'course_ends_on',
+        ]
         widgets = {
             'telegram_group_url': forms.URLInput(attrs={
                 'placeholder': 'https://t.me/your_group_or_invite_link',
             }),
+            'minimum_registration_age': forms.NumberInput(attrs={
+                'min': 0,
+                'max': 120,
+            }),
+            'course_starts_on': html_date_input(),
+            'course_ends_on': html_date_input(),
         }
 
     def clean_telegram_group_url(self):

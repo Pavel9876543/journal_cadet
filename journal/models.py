@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -8,6 +8,17 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .registration_utils import normalize_parent_contacts, normalize_phone_number
+
+
+def default_course_starts_on() -> date:
+    today = timezone.localdate()
+    start_year = today.year if today.month < 9 else today.year + 1
+    return date(start_year, 9, 1)
+
+
+def default_course_ends_on() -> date:
+    starts_on = default_course_starts_on()
+    return date(starts_on.year + 1, 8, 31)
 
 
 class AcademicYear(models.Model):
@@ -915,6 +926,19 @@ class CourseRegistrationSettings(models.Model):
         max_length=500,
         blank=True,
     )
+    minimum_registration_age = models.PositiveSmallIntegerField(
+        'Минимальный возраст для регистрации',
+        default=14,
+        help_text='Возраст считается на дату начала курсов.',
+    )
+    course_starts_on = models.DateField(
+        'Дата начала курсов',
+        default=default_course_starts_on,
+    )
+    course_ends_on = models.DateField(
+        'Дата окончания курсов',
+        default=default_course_ends_on,
+    )
     updated_at = models.DateTimeField('Дата изменения', auto_now=True)
 
     class Meta:
@@ -923,6 +947,33 @@ class CourseRegistrationSettings(models.Model):
 
     def __str__(self) -> str:
         return 'Настройки регистрации на курсы'
+
+    @classmethod
+    def load(cls):
+        settings_obj, _created = cls.objects.get_or_create(pk=1)
+        return settings_obj
+
+    def clean(self) -> None:
+        super().clean()
+
+        if self.telegram_group_url:
+            self.telegram_group_url = self.telegram_group_url.strip()
+
+        errors = {}
+        if self.minimum_registration_age is None:
+            errors['minimum_registration_age'] = 'Укажите минимальный возраст для регистрации.'
+        elif self.minimum_registration_age > 120:
+            errors['minimum_registration_age'] = 'Минимальный возраст не должен быть больше 120 лет.'
+
+        if self.course_starts_on and self.course_ends_on and self.course_starts_on >= self.course_ends_on:
+            errors['course_ends_on'] = 'Дата окончания курсов должна быть позже даты начала.'
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
 
 class PasswordRecoveryContact(models.Model):
@@ -1114,7 +1165,9 @@ class CourseApplication(models.Model):
     def age(self) -> int:
         from .registration_utils import calculate_age
 
-        return calculate_age(self.birth_date)
+        settings_obj = CourseRegistrationSettings.objects.filter(pk=1).first()
+        reference_date = settings_obj.course_starts_on if settings_obj else date.today()
+        return calculate_age(self.birth_date, today=reference_date)
 
     @property
     def has_journal_student(self) -> bool:

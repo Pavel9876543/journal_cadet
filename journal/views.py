@@ -1079,10 +1079,12 @@ def _registration_api_is_throttled(request) -> bool:
     return attempts > COURSE_REGISTRATION_API_THROTTLE_LIMIT
 
 
-def _get_telegram_redirect_url() -> str:
-    settings_obj = CourseRegistrationSettings.objects.first()
-    if settings_obj is None:
-        settings_obj = CourseRegistrationSettings.objects.create(pk=1, telegram_group_url='')
+def _get_registration_settings() -> CourseRegistrationSettings:
+    return CourseRegistrationSettings.load()
+
+
+def _get_telegram_redirect_url(settings_obj: CourseRegistrationSettings | None = None) -> str:
+    settings_obj = settings_obj or _get_registration_settings()
     return settings_obj.telegram_group_url.strip()
 
 
@@ -1106,8 +1108,12 @@ def course_registration_view(request):
     if request.method not in {'GET', 'POST'}:
         return HttpResponseNotAllowed(['GET', 'POST'])
 
-    form = CourseApplicationPublicForm(request.POST or None)
-    redirect_url = _get_telegram_redirect_url()
+    registration_settings = _get_registration_settings()
+    form = CourseApplicationPublicForm(
+        request.POST or None,
+        registration_settings=registration_settings,
+    )
+    redirect_url = _get_telegram_redirect_url(registration_settings)
 
     if request.method == 'POST' and form.is_valid():
         application = form.save()
@@ -1152,8 +1158,9 @@ def course_registration_api(request):
     if payload is None:
         return JsonResponse({'success': False, 'message': 'Неверный формат запроса.'}, status=400)
 
-    form = CourseApplicationPublicForm(payload)
-    redirect_url = _get_telegram_redirect_url()
+    registration_settings = _get_registration_settings()
+    form = CourseApplicationPublicForm(payload, registration_settings=registration_settings)
+    redirect_url = _get_telegram_redirect_url(registration_settings)
 
     if form.is_valid():
         application = form.save()

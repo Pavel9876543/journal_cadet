@@ -21,7 +21,10 @@ def calculate_age(birth_date: date, *, today: date | None = None) -> int:
 
 def minimum_birth_date_for_age(age: int, *, today: date | None = None) -> date:
     today = today or date.today()
-    return date(today.year - age, today.month, today.day)
+    try:
+        return date(today.year - age, today.month, today.day)
+    except ValueError:
+        return date(today.year - age, 2, 28)
 
 
 def normalize_phone_number(value: str) -> str:

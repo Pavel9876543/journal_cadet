@@ -1232,7 +1232,7 @@ class CourseApplicationAdmin(admin.ModelAdmin):
     def full_name_display(self, obj):
         return obj.full_name
 
-    @admin.display(description='Возраст')
+    @admin.display(description='Возраст на начало курсов')
     def age_display(self, obj):
         return obj.age if obj.birth_date else '—'
 
@@ -1311,12 +1311,27 @@ class TemporaryCredentialAdmin(admin.ModelAdmin):
 @admin.register(CourseRegistrationSettings)
 class CourseRegistrationSettingsAdmin(admin.ModelAdmin):
     form = CourseRegistrationSettingsForm
-    list_display = ('telegram_group_url', 'updated_at')
+    list_display = (
+        'telegram_group_url',
+        'minimum_registration_age',
+        'course_starts_on',
+        'course_ends_on',
+        'updated_at',
+    )
     readonly_fields = ('updated_at',)
     fieldsets = (
         ('Регистрация на курсы', {
-            'fields': ('telegram_group_url', 'updated_at'),
-            'description': 'Ссылка показывается ученику после успешной регистрации на курсы.',
+            'fields': (
+                'telegram_group_url',
+                'minimum_registration_age',
+                'course_starts_on',
+                'course_ends_on',
+                'updated_at',
+            ),
+            'description': (
+                'Здесь хранятся все настройки публичной регистрации: ссылка после заявки, '
+                'минимальный возраст и даты курсов.'
+            ),
         }),
     )
 

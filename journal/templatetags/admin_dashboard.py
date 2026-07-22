@@ -307,7 +307,7 @@ def journal_admin_dashboard(context):
                     'Настройки регистрации',
                     _admin_url('journal', 'courseregistrationsettings'),
                     'fas fa-cog',
-                    'Ссылка на Telegram-группу после регистрации.',
+                    'Возраст, даты курсов и ссылка на Telegram-группу.',
                     user,
                     'journal.view_courseregistrationsettings',
                 ),

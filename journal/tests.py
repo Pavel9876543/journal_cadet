@@ -28,6 +28,7 @@ from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, SubjectA
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
+    CourseRegistrationSettingsForm,
     DetailedPasswordChangeForm,
     GradeCreateForm,
     SubjectResultForm,
@@ -42,7 +43,7 @@ from journal.grade_options import (
     get_grade_subjects,
     get_grade_teachers,
 )
-from journal.registration_utils import normalize_parent_contacts
+from journal.registration_utils import minimum_birth_date_for_age, normalize_parent_contacts
 from journal.models import (
     AcademicYear,
     CourseApplication,
@@ -807,6 +808,12 @@ class FormTests(JournalTestDataMixin, TestCase):
             'Иванов Иван Иванович - +7 (999) 123-45-67',
         )
 
+    def test_minimum_birth_date_for_age_handles_leap_course_start_date(self):
+        self.assertEqual(
+            minimum_birth_date_for_age(14, today=date(2024, 2, 29)),
+            date(2010, 2, 28),
+        )
+
     def test_public_course_application_form_enforces_age_limit(self):
         too_young_birth_date = date.today().replace(
             year=date.today().year - 10,
@@ -820,6 +827,74 @@ class FormTests(JournalTestDataMixin, TestCase):
 
         self.assertFalse(form.is_valid())
         self.assertIn('birth_date', form.errors)
+
+    def test_public_course_application_form_uses_registration_settings_age_and_course_start(self):
+        registration_settings = CourseRegistrationSettings.objects.create(
+            pk=1,
+            telegram_group_url='https://t.me/test_group',
+            minimum_registration_age=15,
+            course_starts_on=date(2025, 9, 1),
+            course_ends_on=date(2026, 8, 31),
+        )
+
+        too_young_form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                birth_date=date(2010, 9, 2),
+            ),
+            registration_settings=registration_settings,
+        )
+        allowed_form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                birth_date=date(2010, 9, 1),
+            ),
+            registration_settings=registration_settings,
+        )
+
+        self.assertFalse(too_young_form.is_valid())
+        self.assertIn('birth_date', too_young_form.errors)
+        self.assertTrue(allowed_form.is_valid(), allowed_form.errors)
+        self.assertEqual(
+            allowed_form.fields['birth_date'].widget.attrs['max'],
+            '2010-09-01',
+        )
+        self.assertEqual(
+            allowed_form.fields['birth_date'].widget.attrs['data-age-limit'],
+            '15',
+        )
+        self.assertEqual(
+            allowed_form.fields['birth_date'].widget.attrs['data-age-reference-date'],
+            '2025-09-01',
+        )
+
+    def test_course_registration_settings_form_stores_age_and_course_dates(self):
+        form = CourseRegistrationSettingsForm(
+            data={
+                'telegram_group_url': ' https://t.me/test_group ',
+                'minimum_registration_age': 16,
+                'course_starts_on': '2025-09-01',
+                'course_ends_on': '2026-08-31',
+            },
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        settings_obj = form.save()
+        self.assertEqual(settings_obj.telegram_group_url, 'https://t.me/test_group')
+        self.assertEqual(settings_obj.minimum_registration_age, 16)
+        self.assertEqual(settings_obj.course_starts_on, date(2025, 9, 1))
+        self.assertEqual(settings_obj.course_ends_on, date(2026, 8, 31))
+
+    def test_course_registration_settings_form_rejects_invalid_course_dates(self):
+        form = CourseRegistrationSettingsForm(
+            data={
+                'telegram_group_url': 'https://t.me/test_group',
+                'minimum_registration_age': 14,
+                'course_starts_on': '2026-08-31',
+                'course_ends_on': '2025-09-01',
+            },
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('course_ends_on', form.errors)
 
     def test_grade_form_accepts_only_assigned_teacher_for_student_subject(self):
         data = self.create_base_journal()
@@ -1647,6 +1722,9 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         CourseRegistrationSettings.objects.create(
             pk=1,
             telegram_group_url='https://t.me/test_group',
+            minimum_registration_age=14,
+            course_starts_on=date(2025, 9, 1),
+            course_ends_on=date(2026, 8, 31),
         )
 
     def test_registration_page_creates_confirmed_application_and_shows_credentials(
@@ -2217,6 +2295,9 @@ class SeedDataCommandTests(TestCase):
             registration_settings.telegram_group_url,
             'https://t.me/cadet_journal_demo',
         )
+        self.assertEqual(registration_settings.minimum_registration_age, 14)
+        self.assertEqual(registration_settings.course_starts_on, date(2025, 9, 1))
+        self.assertEqual(registration_settings.course_ends_on, date(2026, 8, 31))
 
         self.assertFalse(Teacher.objects.filter(birth_date__isnull=True).exists())
         for field_name in ('phone', 'email', 'comments'):

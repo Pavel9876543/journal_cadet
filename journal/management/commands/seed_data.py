@@ -69,6 +69,9 @@ class Command(BaseCommand):
             pk=1,
             defaults={
                 'telegram_group_url': 'https://t.me/cadet_journal_demo',
+                'minimum_registration_age': 14,
+                'course_starts_on': date(2025, 9, 1),
+                'course_ends_on': date(2026, 8, 31),
             },
         )
         for contact_data in (

@@ -493,7 +493,10 @@
         var phoneInput = form.querySelector('[name="student_phone"]');
         var submitButton = document.getElementById('submit-button');
         var ageNote = document.getElementById('age-note');
-        var ageErrorMessage = 'Регистрация на курсы доступна только с 14 лет.';
+        var ageLimit = birthInput ? parseInt(birthInput.dataset.ageLimit || '0', 10) : 0;
+        var ageErrorMessage = birthInput && birthInput.dataset.ageErrorMessage
+            ? birthInput.dataset.ageErrorMessage
+            : 'Регистрация на курсы доступна только с ' + ageLimit + ' лет.';
         var phoneErrorMessage = 'Неверный формат телефона.';
 
         function scrollToField(field) {
@@ -529,7 +532,7 @@
             return false;
         }
 
-        function calcAge(value) {
+        function parseIsoDate(value) {
             if (!value) {
                 return null;
             }
@@ -537,15 +540,26 @@
             if (parts.length !== 3) {
                 return null;
             }
-            var birth = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+            var parsedDate = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+            if (Number.isNaN(parsedDate.getTime())) {
+                return null;
+            }
+            return parsedDate;
+        }
+
+        function calcAge(value) {
+            var birth = parseIsoDate(value);
+            if (!birth) {
+                return null;
+            }
+            var referenceDate = parseIsoDate(birthInput.dataset.ageReferenceDate) || new Date();
             if (Number.isNaN(birth.getTime())) {
                 return null;
             }
 
-            var today = new Date();
-            var age = today.getUTCFullYear() - birth.getUTCFullYear();
-            var monthDiff = today.getUTCMonth() - birth.getUTCMonth();
-            if (monthDiff < 0 || (monthDiff === 0 && today.getUTCDate() < birth.getUTCDate())) {
+            var age = referenceDate.getUTCFullYear() - birth.getUTCFullYear();
+            var monthDiff = referenceDate.getUTCMonth() - birth.getUTCMonth();
+            if (monthDiff < 0 || (monthDiff === 0 && referenceDate.getUTCDate() < birth.getUTCDate())) {
                 age -= 1;
             }
             return age;
@@ -577,15 +591,15 @@
                 return;
             }
             var age = calcAge(birthInput.value);
-            var valid = age === null || age >= 14;
+            var valid = age === null || !ageLimit || age >= ageLimit;
             if (age === null) {
                 ageNote.textContent = 'Возраст будет рассчитан после выбора даты рождения.';
                 ageNote.classList.remove('invalid');
-            } else if (age < 14) {
+            } else if (ageLimit && age < ageLimit) {
                 ageNote.textContent = ageErrorMessage;
                 ageNote.classList.add('invalid');
             } else {
-                ageNote.textContent = 'Возраст: ' + age + ' лет.';
+                ageNote.textContent = 'Возраст на дату начала курсов: ' + age + ' лет.';
                 ageNote.classList.remove('invalid');
             }
             birthInput.setCustomValidity(valid ? '' : ageErrorMessage);
