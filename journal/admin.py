@@ -160,13 +160,6 @@ def journal_url(params=None):
     return url
 
 
-class HiddenFromAdminIndexMixin:
-    """Оставляет прямые admin URL, но убирает техническую модель из списков меню."""
-
-    def get_model_perms(self, request):
-        return {}
-
-
 # -----------------------------------------------------------------------------
 # Forms для админки
 # -----------------------------------------------------------------------------
@@ -429,6 +422,8 @@ class GroupSubjectForSubjectInline(admin.TabularInline):
     fields = ('group', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
     classes = ('collapse',)
+    verbose_name = 'Групповой предмет'
+    verbose_name_plural = 'Группы, где есть этот предмет'
 
 
 class StudentSubjectInline(admin.TabularInline):
@@ -459,6 +454,8 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
     fields = ('student', 'teacher', 'is_specialty', 'is_active')
     show_change_link = True
     classes = ('collapse',)
+    verbose_name = 'Индивидуальный предмет ученика'
+    verbose_name_plural = 'Индивидуальные ученики по этому предмету'
 
 
 class StudentInline(admin.TabularInline):
@@ -569,7 +566,11 @@ class SubjectAdmin(admin.ModelAdmin):
         'individual_students__student__full_name',
         'individual_students__teacher__full_name',
     )
-    inlines = (TeacherSubjectForSubjectInline,)
+    inlines = (
+        TeacherSubjectForSubjectInline,
+        GroupSubjectForSubjectInline,
+        StudentSubjectForSubjectInline,
+    )
     ordering = ('name',)
     list_per_page = 50
     fieldsets = (
@@ -895,8 +896,28 @@ class StudentAdmin(admin.ModelAdmin):
         return subject or '—'
 
 
+@admin.register(TeacherSubject)
+class TeacherSubjectAdmin(admin.ModelAdmin):
+    list_display = ('teacher', 'subject')
+    list_filter = ('subject', 'teacher')
+    search_fields = ('teacher__full_name', 'subject__name')
+    autocomplete_fields = ('teacher', 'subject')
+    list_select_related = ('teacher', 'subject')
+    ordering = ('teacher__full_name', 'subject__name')
+    list_per_page = 50
+    fieldsets = (
+        ('Квалификация преподавателя', {
+            'fields': ('teacher', 'subject'),
+            'description': (
+                'Эта связь показывает, какие предметы может вести преподаватель. '
+                'При назначении преподавателя группе или ученику она создается автоматически.'
+            ),
+        }),
+    )
+
+
 @admin.register(GroupSubject)
-class GroupSubjectAdmin(HiddenFromAdminIndexMixin, admin.ModelAdmin):
+class GroupSubjectAdmin(admin.ModelAdmin):
     list_display = ('group', 'subject', 'teacher', 'sort_order', 'is_active')
     list_filter = ('is_active', 'group__academic_year', 'group', 'subject', 'teacher')
     search_fields = ('group__name', 'subject__name', 'teacher__full_name')
@@ -904,10 +925,19 @@ class GroupSubjectAdmin(HiddenFromAdminIndexMixin, admin.ModelAdmin):
     list_select_related = ('group', 'group__academic_year', 'subject', 'teacher')
     ordering = ('group__academic_year__name', 'group__name', 'sort_order', 'subject__name')
     list_per_page = 50
+    fieldsets = (
+        ('Групповой предмет', {
+            'fields': ('group', 'subject', 'teacher', 'sort_order', 'is_active'),
+            'description': (
+                'Связь можно редактировать здесь, в карточке группы, преподавателя или предмета. '
+                'При смене преподавателя связанные оценки по этому назначению обновляются автоматически.'
+            ),
+        }),
+    )
 
 
 @admin.register(StudentSubject)
-class StudentSubjectAdmin(HiddenFromAdminIndexMixin, admin.ModelAdmin):
+class StudentSubjectAdmin(admin.ModelAdmin):
     list_display = ('student', 'student_group_display', 'subject', 'teacher', 'is_specialty', 'is_active')
     list_filter = ('is_active', 'is_specialty', 'subject', 'teacher', 'student__group')
     search_fields = ('student__full_name', 'student__group__name', 'subject__name', 'teacher__full_name')
@@ -915,6 +945,15 @@ class StudentSubjectAdmin(HiddenFromAdminIndexMixin, admin.ModelAdmin):
     list_select_related = ('student', 'student__group', 'subject', 'teacher')
     ordering = ('student__full_name', 'subject__name')
     list_per_page = 50
+    fieldsets = (
+        ('Индивидуальный предмет ученика', {
+            'fields': ('student', 'subject', 'teacher', 'is_specialty', 'is_active'),
+            'description': (
+                'Связь можно редактировать здесь, в карточке ученика, преподавателя или предмета. '
+                'При смене преподавателя связанные оценки по этому назначению обновляются автоматически.'
+            ),
+        }),
+    )
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):

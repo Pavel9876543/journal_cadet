@@ -11,6 +11,7 @@ from journal.models import (
     AcademicYear,
     CourseApplication,
     Grade,
+    PasswordRecoveryContact,
     Student,
     StudyGroup,
     Subject,
@@ -160,6 +161,14 @@ def journal_admin_dashboard(context):
             user,
             'journal.view_temporarycredential',
         ),
+        _stat(
+            'Контакты восстановления',
+            PasswordRecoveryContact.objects.filter(is_active=True).count(),
+            _admin_url('journal', 'passwordrecoverycontact'),
+            'fas fa-headset',
+            user,
+            'journal.view_passwordrecoverycontact',
+        ),
     ]
 
     quick_actions = [
@@ -194,6 +203,14 @@ def journal_admin_dashboard(context):
             'Ручное внесение заявки на курсы.',
             user,
             'journal.add_courseapplication',
+        ),
+        _item(
+            'Контакт восстановления',
+            _admin_url('journal', 'passwordrecoverycontact', 'add'),
+            'fas fa-headset',
+            'Администратор для страницы восстановления пароля.',
+            user,
+            'journal.add_passwordrecoverycontact',
         ),
     ]
 
@@ -301,6 +318,44 @@ def journal_admin_dashboard(context):
                     'Логины и временные пароли для выдачи пользователям.',
                     user,
                     'journal.view_temporarycredential',
+                ),
+                _item(
+                    'Настройки восстановления',
+                    _admin_url('journal', 'passwordrecoverycontact'),
+                    'fas fa-headset',
+                    'Контакты администраторов на странице восстановления пароля.',
+                    user,
+                    'journal.view_passwordrecoverycontact',
+                ),
+            ],
+        ),
+        _section(
+            'Связанные данные',
+            'Назначения, которые должны быть одинаково видны из группы, ученика, преподавателя и предмета.',
+            [
+                _item(
+                    'Групповые предметы',
+                    _admin_url('journal', 'groupsubject'),
+                    'fas fa-project-diagram',
+                    'Связь группы, предмета и преподавателя.',
+                    user,
+                    'journal.view_groupsubject',
+                ),
+                _item(
+                    'Индивидуальные предметы',
+                    _admin_url('journal', 'studentsubject'),
+                    'fas fa-user-tag',
+                    'Связь ученика, предмета и преподавателя.',
+                    user,
+                    'journal.view_studentsubject',
+                ),
+                _item(
+                    'Квалификации преподавателей',
+                    _admin_url('journal', 'teachersubject'),
+                    'fas fa-chalkboard',
+                    'Предметы, которые преподаватель может вести.',
+                    user,
+                    'journal.view_teachersubject',
                 ),
             ],
         ),

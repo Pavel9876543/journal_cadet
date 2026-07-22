@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from zipfile import ZipFile
 
+from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
@@ -23,7 +24,7 @@ from journal.account_utils import (
     display_name_for_user,
     generate_temporary_password,
 )
-from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, TeacherAdminForm
+from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, SubjectAdmin, TeacherAdminForm
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -1412,6 +1413,112 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 password='NewPass12345!',
             ),
         )
+
+
+class AdminDashboardTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(
+            username='dashboard_admin',
+            password='Pass12345!',
+            email='dashboard-admin@example.com',
+        )
+
+    def test_admin_dashboard_links_recovery_settings_and_related_data(self):
+        self.create_base_journal()
+        PasswordRecoveryContact.objects.create(
+            name='Администратор',
+            phone='+7 (999) 123-45-67',
+            messengers='Telegram',
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.get(reverse('admin:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Настройки восстановления')
+        self.assertContains(response, reverse('admin:journal_passwordrecoverycontact_changelist'))
+        self.assertContains(response, 'Связанные данные')
+        self.assertContains(response, 'Групповые предметы')
+        self.assertContains(response, reverse('admin:journal_groupsubject_changelist'))
+        self.assertContains(response, 'Индивидуальные предметы')
+        self.assertContains(response, reverse('admin:journal_studentsubject_changelist'))
+        self.assertContains(response, 'Квалификации преподавателей')
+        self.assertContains(response, reverse('admin:journal_teachersubject_changelist'))
+
+    def test_related_models_are_visible_in_admin_and_subject_contains_all_relation_inlines(self):
+        request = type('Request', (), {'user': self.admin_user})()
+
+        for model in (GroupSubject, StudentSubject, TeacherSubject):
+            with self.subTest(model=model.__name__):
+                model_admin = django_admin.site._registry[model]
+                self.assertTrue(model_admin.get_model_perms(request).get('view'))
+
+        self.assertEqual(
+            [inline.model for inline in SubjectAdmin.inlines],
+            [TeacherSubject, GroupSubject, StudentSubject],
+        )
+
+    def test_changing_group_assignment_in_admin_cascades_to_existing_grades(self):
+        data = self.create_base_journal()
+        assignment = GroupSubject.objects.get(
+            group=data['group'],
+            subject=data['solfeggio'],
+        )
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            date=date(2025, 10, 8),
+            value='5',
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_groupsubject_change', args=[assignment.pk]),
+            data={
+                'group': data['group'].pk,
+                'subject': data['solfeggio'].pk,
+                'teacher': data['other_teacher'].pk,
+                'sort_order': assignment.sort_order,
+                'is_active': 'on',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.teacher, data['other_teacher'])
+
+    def test_changing_individual_assignment_in_admin_cascades_to_existing_grades(self):
+        data = self.create_base_journal()
+        assignment = StudentSubject.objects.get(
+            student=data['student'],
+            subject=data['specialty'],
+        )
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['specialty'],
+            teacher=data['other_teacher'],
+            date=date(2025, 10, 9),
+            value='4',
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_studentsubject_change', args=[assignment.pk]),
+            data={
+                'student': data['student'].pk,
+                'subject': data['specialty'].pk,
+                'teacher': data['teacher'].pk,
+                'is_specialty': 'on',
+                'is_active': 'on',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.teacher, data['teacher'])
 
 
 class PasswordRecoveryViewTests(TestCase):
