@@ -50,6 +50,16 @@ def get_grade_groups(
     if teacher is not None:
         group_assignments = group_assignments.filter(teacher=teacher)
         individual_assignments = individual_assignments.filter(teacher=teacher)
+    if academic_year is None:
+        group_assignments = group_assignments.filter(group__academic_year__is_active=True)
+        individual_assignments = individual_assignments.filter(
+            student__group__academic_year__is_active=True,
+        )
+    else:
+        group_assignments = group_assignments.filter(group__academic_year=academic_year)
+        individual_assignments = individual_assignments.filter(
+            student__group__academic_year=academic_year,
+        )
 
     groups = (
         StudyGroup.objects
@@ -62,7 +72,9 @@ def get_grade_groups(
         .distinct()
         .order_by('academic_year__name', 'name')
     )
-    if academic_year is not None:
+    if academic_year is None:
+        groups = groups.filter(academic_year__is_active=True)
+    else:
         groups = groups.filter(academic_year=academic_year)
     return groups
 
@@ -83,7 +95,9 @@ def get_grade_students(
 
     if group is not None:
         students = students.filter(group=group)
-    if academic_year is not None:
+    if academic_year is None:
+        students = students.filter(group__academic_year__is_active=True)
+    else:
         students = students.filter(group__academic_year=academic_year)
 
     group_assignment = Q(
@@ -145,7 +159,12 @@ def get_grade_subjects(
     if teacher is not None:
         group_assignments = group_assignments.filter(teacher=teacher)
         individual_assignments = individual_assignments.filter(teacher=teacher)
-    if academic_year is not None:
+    if academic_year is None:
+        group_assignments = group_assignments.filter(group__academic_year__is_active=True)
+        individual_assignments = individual_assignments.filter(
+            student__group__academic_year__is_active=True,
+        )
+    else:
         group_assignments = group_assignments.filter(group__academic_year=academic_year)
         individual_assignments = individual_assignments.filter(
             student__group__academic_year=academic_year,
@@ -196,7 +215,12 @@ def get_grade_teachers(
     if subject is not None:
         group_assignments = group_assignments.filter(subject=subject)
         individual_assignments = individual_assignments.filter(subject=subject)
-    if academic_year is not None:
+    if academic_year is None:
+        group_assignments = group_assignments.filter(group__academic_year__is_active=True)
+        individual_assignments = individual_assignments.filter(
+            student__group__academic_year__is_active=True,
+        )
+    else:
         group_assignments = group_assignments.filter(group__academic_year=academic_year)
         individual_assignments = individual_assignments.filter(
             student__group__academic_year=academic_year,

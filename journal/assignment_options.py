@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
 from .models import Student, StudyGroup, Subject, Teacher
 
@@ -21,14 +21,16 @@ def student_subject_queryset() -> QuerySet[Subject]:
 
 
 def active_group_queryset() -> QuerySet[StudyGroup]:
-    return StudyGroup.objects.filter(is_active=True).select_related('academic_year').order_by(
+    return StudyGroup.objects.filter(is_active=True, academic_year__is_active=True).select_related('academic_year').order_by(
         'academic_year__name',
         'name',
     )
 
 
 def active_student_queryset() -> QuerySet[Student]:
-    return Student.objects.filter(is_active=True).select_related('group', 'group__academic_year').order_by(
+    return Student.objects.filter(is_active=True).filter(
+        Q(group__isnull=True) | Q(group__academic_year__is_active=True),
+    ).select_related('group', 'group__academic_year').order_by(
         'full_name',
         'pk',
     )

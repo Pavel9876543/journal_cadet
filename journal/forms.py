@@ -248,8 +248,11 @@ class GradeCreateForm(forms.ModelForm):
         self.dependency_academic_year_id = academic_year.pk if academic_year is not None else ''
         self.fields['group'].widget.attrs['required'] = True
 
-        self.fields['date'].initial = self.fields['date'].initial or date.today()
-        self.fields['academic_year'].queryset = AcademicYear.objects.order_by('-starts_on')
+        default_grade_date = date.today()
+        if academic_year is not None and not (academic_year.starts_on <= default_grade_date <= academic_year.ends_on):
+            default_grade_date = academic_year.starts_on
+        self.fields['date'].initial = self.fields['date'].initial or default_grade_date
+        self.fields['academic_year'].queryset = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
 
         if academic_year is not None:
             self.fields['academic_year'].initial = academic_year
@@ -408,6 +411,19 @@ class GradeCreateForm(forms.ModelForm):
         if group and academic_year and group.academic_year_id != academic_year.pk:
             self.add_error('academic_year', 'Группа относится к другому учебному году.')
 
+        if academic_year and not academic_year.is_active:
+            self.add_error('academic_year', 'Архивный учебный год доступен только для просмотра.')
+
+        grade_date = cleaned_data.get('date')
+        if grade_date and academic_year and not (academic_year.starts_on <= grade_date <= academic_year.ends_on):
+            self.add_error(
+                'date',
+                (
+                    'Дата оценки должна попадать в период выбранного учебного года: '
+                    f'{academic_year.starts_on:%d.%m.%Y} - {academic_year.ends_on:%d.%m.%Y}.'
+                ),
+            )
+
         if group and student and subject:
             if not get_grade_subjects(
                 group=group,
@@ -464,7 +480,7 @@ class SubjectResultForm(forms.ModelForm):
 
         self.fields['student'].queryset = Student.objects.filter(is_active=True).order_by('full_name')
         self.fields['subject'].queryset = Subject.objects.filter(is_active=True).order_by('name')
-        self.fields['academic_year'].queryset = AcademicYear.objects.order_by('-starts_on')
+        self.fields['academic_year'].queryset = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
 
         if student is not None:
             self.fields['student'].initial = student
@@ -479,6 +495,7 @@ class SubjectResultForm(forms.ModelForm):
         cleaned_data = super().clean()
         student = self.fixed_student or cleaned_data.get('student')
         subject = self.fixed_subject or cleaned_data.get('subject')
+        academic_year = cleaned_data.get('academic_year')
 
         if self.fixed_student is not None:
             cleaned_data['student'] = self.fixed_student
@@ -486,6 +503,11 @@ class SubjectResultForm(forms.ModelForm):
             cleaned_data['subject'] = self.fixed_subject
 
         if student and subject:
+            if academic_year and not academic_year.is_active:
+                self.add_error('academic_year', 'Архивный учебный год доступен только для просмотра.')
+            if student.group_id and academic_year and student.group.academic_year_id != academic_year.pk:
+                self.add_error('academic_year', 'Учебный год итога должен совпадать с учебным годом группы ученика.')
+
             if not get_student_allowed_subjects(student).filter(pk=subject.pk).exists():
                 raise forms.ValidationError(
                     'Нельзя выставить итог по предмету, который не назначен ученику.'

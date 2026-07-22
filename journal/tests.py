@@ -262,6 +262,88 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertFalse(first.is_active)
         self.assertTrue(second.is_active)
 
+    def test_newest_academic_year_becomes_active_even_when_created_inactive(self):
+        first = self.create_academic_year(name='2025/2026', is_active=True)
+        second = AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+            is_active=False,
+        )
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        self.assertFalse(first.is_active)
+        self.assertTrue(second.is_active)
+
+    def test_cannot_save_group_in_archived_academic_year(self):
+        group = self.create_group()
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+
+        group.name = 'Переименованная группа'
+
+        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
+            group.save()
+
+    def test_grade_date_must_be_inside_selected_academic_year(self):
+        data = self.create_base_journal()
+
+        with self.assertRaisesMessage(ValidationError, 'Дата оценки должна попадать в период'):
+            Grade.objects.create(
+                student=data['student'],
+                subject=data['solfeggio'],
+                teacher=data['teacher'],
+                academic_year=data['year'],
+                date=date(2024, 10, 1),
+                value='5',
+            )
+
+    def test_grade_cannot_be_created_in_archived_academic_year(self):
+        data = self.create_base_journal()
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+
+        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
+            Grade.objects.create(
+                student=data['student'],
+                subject=data['solfeggio'],
+                teacher=data['teacher'],
+                academic_year=data['year'],
+                date=date(2025, 10, 1),
+                value='5',
+            )
+
+    def test_subject_final_grade_type_cannot_break_existing_results(self):
+        data = self.create_base_journal()
+        pass_fail_subject = self.create_subject(
+            name='Зачетный предмет',
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        GroupSubject.objects.create(
+            group=data['group'],
+            subject=pass_fail_subject,
+            teacher=data['teacher'],
+        )
+        SubjectResult.objects.create(
+            student=data['student'],
+            subject=pass_fail_subject,
+            academic_year=data['year'],
+            final_grade='Зачет',
+        )
+
+        pass_fail_subject.final_grade_type = Subject.FINAL_GRADE_TYPE_NUMERIC
+
+        with self.assertRaisesMessage(ValidationError, 'Нельзя изменить тип итоговой оценки'):
+            pass_fail_subject.save()
+
     def test_group_subject_links_group_subject_and_teacher(self):
         data = self.create_base_journal()
 
@@ -1286,6 +1368,20 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
             [data['other_teacher']],
         )
 
+    def test_grade_option_helpers_hide_archived_year_by_default_but_allow_explicit_view(self):
+        data = self.create_base_journal()
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+
+        self.assertNotIn(data['group'], get_grade_groups(teacher=data['teacher']))
+        self.assertIn(
+            data['group'],
+            get_grade_groups(teacher=data['teacher'], academic_year=data['year']),
+        )
+
 
 class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
     def setUp(self):
@@ -1581,6 +1677,78 @@ class ViewTests(JournalTestDataMixin, TestCase):
             f'name="final__{self.data["solfeggio"].pk}__{self.data["student"].pk}"',
         )
 
+    def test_archived_academic_year_is_read_only_in_journal(self):
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=date(2025, 10, 15),
+            value='5',
+        )
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+        self.client.login(username='admin_test', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('journal'),
+            {
+                'group': self.data['group'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, grade.value)
+        self.assertNotContains(
+            response,
+            (
+                f'name="grade__{self.data["solfeggio"].pk}__'
+                f'{self.data["student"].pk}__2025-10-15"'
+            ),
+        )
+        self.assertNotContains(response, '<button class="table-save-button"')
+        self.assertNotContains(response, 'name="action" value="add_grade"')
+
+    def test_post_to_archived_academic_year_does_not_change_grade(self):
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=date(2025, 10, 15),
+            value='5',
+        )
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+        self.client.login(username='admin_test', password='Pass12345!')
+
+        response = self.client.post(
+            (
+                f'{reverse("journal")}?group={self.data["group"].pk}'
+                f'&subject={self.data["solfeggio"].pk}'
+                f'&academic_year={self.data["year"].pk}'
+            ),
+            data={
+                'action': 'inline_edit',
+                (
+                    f'grade__{self.data["solfeggio"].pk}__'
+                    f'{self.data["student"].pk}__2025-10-15'
+                ): '4',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '5')
+
     def test_journal_table_builder_batches_assignment_queries(self):
         second_group = self.create_group(
             name='Вторая группа',
@@ -1723,6 +1891,21 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             password='Pass12345!',
             email='dashboard-admin@example.com',
         )
+
+    def test_archived_academic_year_records_are_read_only_in_admin(self):
+        data = self.create_base_journal()
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+        data['group'].refresh_from_db()
+
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[StudyGroup]
+
+        self.assertFalse(model_admin.has_change_permission(request, data['group']))
+        self.assertFalse(model_admin.has_delete_permission(request, data['group']))
 
     def test_admin_dashboard_links_recovery_settings_and_related_data(self):
         self.create_base_journal()
@@ -2593,6 +2776,36 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
             'Ученик с таким номером телефона уже зарегистрирован.',
             response.content.decode('utf-8'),
         )
+
+    def test_duplicate_phone_is_checked_inside_academic_year_only(self):
+        first_application = CourseApplication.objects.create(**self.application_payload())
+
+        with self.assertRaisesMessage(ValidationError, 'Ученик с таким номером телефона уже зарегистрирован.'):
+            CourseApplication.objects.create(
+                **self.application_payload(
+                    last_name='Петров',
+                    first_name='Пётр',
+                    student_phone='8 999 123 45 67',
+                ),
+            )
+
+        CourseRegistrationSettings.objects.filter(pk=1).update(
+            course_starts_on=date(2026, 9, 1),
+            course_ends_on=date(2027, 8, 31),
+        )
+        second_application = CourseApplication.objects.create(
+            **self.application_payload(
+                last_name='Петров',
+                first_name='Пётр',
+                student_phone='8 999 123 45 67',
+            ),
+        )
+
+        first_application.refresh_from_db()
+        second_application.refresh_from_db()
+
+        self.assertNotEqual(first_application.academic_year_id, second_application.academic_year_id)
+        self.assertEqual(CourseApplication.objects.count(), 2)
 
     def test_registration_api_creates_credentials_without_returning_password(self):
         with patch(

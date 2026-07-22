@@ -50,6 +50,7 @@ from .models import (
     Teacher,
     TeacherSubject,
     TemporaryCredential,
+    object_is_in_archived_academic_year,
 )
 from .registration_utils import calculate_age
 
@@ -84,6 +85,71 @@ class JournalAdminDescriptionMixin:
         extra_context = extra_context or {}
         extra_context['changelist_description'] = self.changelist_description
         return super().changelist_view(request, extra_context=extra_context)
+
+
+class ArchivedAcademicYearAdminMixin:
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and object_is_in_archived_academic_year(obj):
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and object_is_in_archived_academic_year(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        active_ids = []
+        archived_count = 0
+        for obj in queryset:
+            if object_is_in_archived_academic_year(obj):
+                archived_count += 1
+            else:
+                active_ids.append(obj.pk)
+
+        if archived_count:
+            self.message_user(
+                request,
+                f'Архивные записи пропущены и не удалены: {archived_count}.',
+                level='ERROR',
+            )
+        if active_ids:
+            super().delete_queryset(request, queryset.filter(pk__in=active_ids))
+
+
+class ArchivedAcademicYearInlineMixin:
+    def parent_is_archived(self, obj) -> bool:
+        return obj is not None and object_is_in_archived_academic_year(obj)
+
+    def has_add_permission(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return False
+        return super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_extra(self, request, obj=None, **kwargs):
+        if self.parent_is_archived(obj):
+            return 0
+        return super().get_extra(request, obj, **kwargs)
+
+
+class ActiveAcademicYearGroupSubjectInlineMixin:
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(group__academic_year__is_active=True)
+
+
+class ActiveAcademicYearStudentSubjectInlineMixin:
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(student__group__academic_year__is_active=True)
 
 
 class SpaceFriendlyUsernameFormMixin:
@@ -337,13 +403,19 @@ class GradeAdminForm(forms.ModelForm):
                 Teacher,
                 teacher_id,
             )
+        if 'academic_year' in self.fields:
+            self.fields['academic_year'].queryset = self._include_submitted_choice(
+                AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+                AcademicYear,
+                academic_year_id,
+            )
         dependency_url = reverse('grade_options_api')
         for field_name in ('group', 'student', 'subject', 'teacher'):
             if field_name in self.fields:
                 self.fields[field_name].widget.attrs['data-grade-options-url'] = dependency_url
 
     def _include_submitted_choice(self, queryset, model, raw_value):
-        if not self.is_bound or not raw_value:
+        if not raw_value:
             return queryset
         try:
             return model.objects.filter(
@@ -379,6 +451,19 @@ class GradeAdminForm(forms.ModelForm):
 
         if group and academic_year and group.academic_year_id != academic_year.pk:
             self._add_available_error('academic_year', 'Группа относится к другому учебному году.')
+
+        if academic_year and not academic_year.is_active:
+            self._add_available_error('academic_year', 'Архивный учебный год доступен только для просмотра.')
+
+        grade_date = cleaned_data.get('date')
+        if grade_date and academic_year and not (academic_year.starts_on <= grade_date <= academic_year.ends_on):
+            self._add_available_error(
+                'date',
+                (
+                    'Дата оценки должна попадать в период выбранного учебного года: '
+                    f'{academic_year.starts_on:%d.%m.%Y} - {academic_year.ends_on:%d.%m.%Y}.'
+                ),
+            )
 
         if student and subject and cleaned_data.get('date'):
             duplicate_qs = Grade.objects.filter(
@@ -451,7 +536,11 @@ class SubjectResultAdminForm(forms.ModelForm):
                 self.fields['subject'].widget.attrs['data-grade-options-url'] = reverse('grade_options_api')
 
         if 'academic_year' in self.fields:
-            self.fields['academic_year'].queryset = AcademicYear.objects.order_by('-starts_on')
+            self.fields['academic_year'].queryset = self._include_selected_choice(
+                AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+                AcademicYear,
+                academic_year_id,
+            )
 
     def _raw_value(self, field_name):
         if not self.is_bound:
@@ -484,6 +573,11 @@ class SubjectResultAdminForm(forms.ModelForm):
         student = cleaned_data.get('student')
         subject = cleaned_data.get('subject')
         academic_year = cleaned_data.get('academic_year')
+
+        if academic_year and not academic_year.is_active:
+            self.add_error('academic_year', 'Архивный учебный год доступен только для просмотра.')
+        if student and student.group_id and academic_year and student.group.academic_year_id != academic_year.pk:
+            self.add_error('academic_year', 'Учебный год итога должен совпадать с учебным годом группы ученика.')
 
         if student and subject:
             subject_is_allowed = get_grade_subjects(
@@ -541,6 +635,28 @@ class StudentAdminForm(forms.ModelForm):
             'parent_contacts': forms.Textarea(attrs={'rows': 4}),
             'comments': forms.Textarea(attrs={'rows': 4}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'group' not in self.fields:
+            return
+
+        raw_group_id = None
+        if self.is_bound:
+            raw_group_id = self.data.get(self.add_prefix('group')) or self.data.get('group')
+        elif self.instance and self.instance.pk:
+            raw_group_id = self.instance.group_id
+
+        group_queryset = active_group_queryset()
+        if raw_group_id:
+            try:
+                group_queryset = StudyGroup.objects.filter(
+                    Q(pk__in=group_queryset.values('pk')) | Q(pk=raw_group_id),
+                ).select_related('academic_year').distinct().order_by('academic_year__name', 'name')
+            except (TypeError, ValueError):
+                pass
+
+        self.fields['group'].queryset = group_queryset
 
 
 class GroupSubjectAdminForm(forms.ModelForm):
@@ -615,6 +731,9 @@ class GroupSubjectAdminForm(forms.ModelForm):
 
         if subject and subject.is_specialty:
             self.add_error('subject', 'Индивидуальный предмет нельзя назначить группе.')
+
+        if group and not group.academic_year.is_active:
+            self.add_error('group', 'Архивный учебный год доступен только для просмотра.')
 
         if teacher and not teacher.is_active:
             self.add_error('teacher', 'Выберите активного преподавателя.')
@@ -707,6 +826,9 @@ class StudentSubjectAdminForm(forms.ModelForm):
             if not subject.is_specialty:
                 self.add_error('subject', 'Групповой предмет нельзя назначить индивидуальному ученику.')
 
+        if student and student.group_id and not student.group.academic_year.is_active:
+            self.add_error('student', 'Архивный учебный год доступен только для просмотра.')
+
         if teacher and not teacher.is_active:
             self.add_error('teacher', 'Выберите активного преподавателя.')
 
@@ -757,10 +879,10 @@ class GroupStudentInlineForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         selected_student = self.instance if self.instance and self.instance.pk else None
-        student_queryset = Student.objects.select_related('group').filter(is_active=True)
+        student_queryset = active_student_queryset()
         if selected_student is not None:
-            student_queryset = Student.objects.select_related('group').filter(
-                Q(is_active=True) | Q(pk=selected_student.pk),
+            student_queryset = Student.objects.select_related('group', 'group__academic_year').filter(
+                Q(pk__in=student_queryset.values('pk')) | Q(pk=selected_student.pk),
             )
 
         self.fields['student'].queryset = student_queryset.order_by('full_name', 'pk')
@@ -863,8 +985,9 @@ def fallback_group_for_detached_student(current_group_id=None):
         groups = groups.exclude(pk=current_group_id)
 
     return (
-        groups.filter(is_active=True).order_by('-academic_year__starts_on', 'name').first()
-        or groups.order_by('-academic_year__starts_on', 'name').first()
+        groups.filter(is_active=True, academic_year__is_active=True)
+        .order_by('-academic_year__starts_on', 'name')
+        .first()
     )
 
 
@@ -969,7 +1092,7 @@ class SubjectResultInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInli
 # -----------------------------------------------------------------------------
 
 
-class GroupSubjectInline(admin.TabularInline):
+class GroupSubjectInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = GroupSubject
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
@@ -980,7 +1103,7 @@ class GroupSubjectInline(admin.TabularInline):
     verbose_name_plural = 'Предметы группы'
 
 
-class GroupSubjectForTeacherInline(admin.TabularInline):
+class GroupSubjectForTeacherInline(ActiveAcademicYearGroupSubjectInlineMixin, admin.TabularInline):
     model = GroupSubject
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
@@ -991,7 +1114,7 @@ class GroupSubjectForTeacherInline(admin.TabularInline):
     verbose_name_plural = 'Групповые предметы преподавателя'
 
 
-class GroupSubjectForSubjectInline(admin.TabularInline):
+class GroupSubjectForSubjectInline(ActiveAcademicYearGroupSubjectInlineMixin, admin.TabularInline):
     model = GroupSubject
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
@@ -1003,7 +1126,7 @@ class GroupSubjectForSubjectInline(admin.TabularInline):
     verbose_name_plural = 'Группы, где есть этот предмет'
 
 
-class StudentSubjectInline(admin.TabularInline):
+class StudentSubjectInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = StudentSubject
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
@@ -1014,7 +1137,7 @@ class StudentSubjectInline(admin.TabularInline):
     verbose_name_plural = 'Индивидуальные предметы ученика'
 
 
-class StudentSubjectForTeacherInline(admin.TabularInline):
+class StudentSubjectForTeacherInline(ActiveAcademicYearStudentSubjectInlineMixin, admin.TabularInline):
     model = StudentSubject
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
@@ -1025,7 +1148,7 @@ class StudentSubjectForTeacherInline(admin.TabularInline):
     verbose_name_plural = 'Индивидуальные ученики преподавателя'
 
 
-class StudentSubjectForSubjectInline(admin.TabularInline):
+class StudentSubjectForSubjectInline(ActiveAcademicYearStudentSubjectInlineMixin, admin.TabularInline):
     model = StudentSubject
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
@@ -1037,7 +1160,7 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
     verbose_name_plural = 'Индивидуальные ученики по этому предмету'
 
 
-class StudentInline(admin.TabularInline):
+class StudentInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = Student
     form = GroupStudentInlineForm
     formset = StudentInlineFormSet
@@ -1051,7 +1174,7 @@ class StudentInline(admin.TabularInline):
         js = ('journal/group_student_inline.js',)
 
 
-class GradeInline(admin.TabularInline):
+class GradeInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = Grade
     form = GradeAdminForm
     extra = 0
@@ -1065,7 +1188,7 @@ class GradeInline(admin.TabularInline):
         js = ('journal/grade_dependencies.js',)
 
 
-class SubjectResultInline(admin.TabularInline):
+class SubjectResultInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = SubjectResult
     form = SubjectResultAdminForm
     formset = SubjectResultInlineFormSet
@@ -1118,7 +1241,7 @@ class SubjectResultInline(admin.TabularInline):
 
 
 @admin.register(AcademicYear)
-class AcademicYearAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Учебные годы задают периоды обучения. Активный учебный год используется по умолчанию '
         'для групп, заявок и дат оценок.'
@@ -1259,7 +1382,7 @@ class SubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 
 
 @admin.register(StudyGroup)
-class StudyGroupAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Группы объединяют учеников одного учебного года. В карточке группы можно назначить '
         'групповые предметы и перевести учеников из других групп.'
@@ -1471,7 +1594,7 @@ class TeacherAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 
 
 @admin.register(Student)
-class StudentAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class StudentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Карточки учеников: группа, инструмент, контакты, индивидуальные предметы и итоги. '
         'Обычные оценки удобнее вносить через журнал.'
@@ -1618,7 +1741,7 @@ class TeacherSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 
 
 @admin.register(GroupSubject)
-class GroupSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class GroupSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Групповые предметы связывают группу, предмет и преподавателя. '
         'Сюда нельзя назначать индивидуальные предметы.'
@@ -1642,7 +1765,7 @@ class GroupSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 
 
 @admin.register(StudentSubject)
-class StudentSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Индивидуальные предметы связывают конкретного ученика, предмет и преподавателя. '
         'Сюда нельзя назначать групповые предметы.'
@@ -1672,7 +1795,7 @@ class StudentSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 
 
 @admin.register(Grade)
-class GradeAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Оценки за занятия. В форме доступны только ученики, предметы и преподаватели, '
         'которые состыкованы через групповые или индивидуальные назначения.'
@@ -1782,7 +1905,7 @@ class GradeAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 
 
 @admin.register(SubjectResult)
-class SubjectResultAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class SubjectResultAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Итоги по предметам за учебный год: экзамен и итоговая оценка. '
         'Допустимые значения зависят от типа итоговой оценки предмета.'
@@ -1853,7 +1976,7 @@ class HasJournalStudentFilter(admin.SimpleListFilter):
 
 
 @admin.register(CourseApplication)
-class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Заявки с публичной регистрации. Подтвержденная заявка создает ученика, пользователя '
         'и временный пароль; отклоненная заявка удаляет связанные учебные записи.'
@@ -1862,6 +1985,7 @@ class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
     list_display = (
         'registration_date',
         'full_name_display',
+        'academic_year',
         'status',
         'has_journal_student_display',
         'generated_login',
@@ -1872,6 +1996,7 @@ class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
     )
     list_filter = (
         'status',
+        'academic_year',
         HasJournalStudentFilter,
         'gender',
         'music_education',
@@ -1891,6 +2016,7 @@ class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
     )
     readonly_fields = (
         'registration_date',
+        'academic_year',
         'age_display',
         'has_journal_student_display',
         'student_link',
@@ -1901,7 +2027,7 @@ class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
         'journal_removed_at',
     )
     date_hierarchy = 'registration_date'
-    list_select_related = ('student', 'user')
+    list_select_related = ('student', 'user', 'academic_year')
     actions = ('confirm_applications', 'reject_applications')
     list_per_page = 40
 
@@ -1909,6 +2035,7 @@ class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
         ('Статус заявки', {
             'fields': (
                 'registration_date',
+                'academic_year',
                 'status',
                 'has_journal_student_display',
                 'generated_login',
@@ -1997,20 +2124,32 @@ class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
     @admin.action(description='Подтвердить выбранные заявки и создать учеников')
     def confirm_applications(self, request, queryset):
         processed = 0
+        skipped = 0
         for application in queryset:
+            if object_is_in_archived_academic_year(application):
+                skipped += 1
+                continue
             application.status = CourseApplication.STATUS_CONFIRMED
             application.save()
             processed += 1
         self.message_user(request, f'Подтверждено заявок: {processed}.')
+        if skipped:
+            self.message_user(request, f'Архивные заявки пропущены: {skipped}.', level='ERROR')
 
     @admin.action(description='Отклонить выбранные заявки и удалить учеников из журнала')
     def reject_applications(self, request, queryset):
         processed = 0
+        skipped = 0
         for application in queryset:
+            if object_is_in_archived_academic_year(application):
+                skipped += 1
+                continue
             application.status = CourseApplication.STATUS_REJECTED
             application.save()
             processed += 1
         self.message_user(request, f'Отклонено заявок: {processed}. Ученики удалены из журнала.')
+        if skipped:
+            self.message_user(request, f'Архивные заявки пропущены: {skipped}.', level='ERROR')
 
 
 @admin.register(TemporaryCredential)

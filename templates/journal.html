@@ -1182,7 +1182,7 @@
                 </div>
             </section>
 
-            {% if grade_form and role_mode != 'student' %}
+            {% if grade_form and can_edit_journal %}
                 <section class="quick-entry" aria-labelledby="quick-grade-title">
                     <div class="section-head">
                         <div class="section-title">
@@ -1349,9 +1349,13 @@
                                 </div>
                             {% endif %}
 
-                            <form method="post" class="table-form">
-                                {% csrf_token %}
-                                <input type="hidden" name="action" value="inline_edit">
+                            {% if can_edit_journal %}
+                                <form method="post" class="table-form">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="inline_edit">
+                            {% else %}
+                                <div class="table-form">
+                            {% endif %}
                                 <div class="table-scroll" tabindex="0" role="region" aria-label="{{ table.subject.name }}, {{ table.group.name }}">
                                     <table>
                                         <thead>
@@ -1379,7 +1383,7 @@
                                                 {% for lesson_date in table.dates %}
                                                     {% with cell=row.grades_by_date|get_item:lesson_date %}
                                                         <td class="grade-cell">
-                                                            {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                            {% if can_edit_journal %}
                                                                 {% if cell %}
                                                                     <input
                                                                         type="text"
@@ -1410,7 +1414,7 @@
                                                     {% endif %}
                                                 </td>
                                                 <td class="result-cell">
-                                                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                    {% if can_edit_journal %}
                                                         <select name="exam__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student.full_name }}: экзамен">
                                                             <option value="">-</option>
                                                             {% for option in table.final_grade_options %}
@@ -1426,7 +1430,7 @@
                                                     {% endif %}
                                                 </td>
                                                 <td class="result-cell">
-                                                    {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                                    {% if can_edit_journal %}
                                                         <select name="final__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student.full_name }}: итоговая оценка">
                                                             <option value="">-</option>
                                                             {% for option in table.final_grade_options %}
@@ -1446,7 +1450,7 @@
                                         </tbody>
                                     </table>
                                 </div>
-                                {% if role_mode == 'teacher' or role_mode == 'superuser' %}
+                                {% if can_edit_journal %}
                                     <div class="table-actions">
                                         <span class="save-state" role="status" aria-live="polite">
                                             <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
@@ -1458,7 +1462,11 @@
                                         </button>
                                     </div>
                                 {% endif %}
-                            </form>
+                            {% if can_edit_journal %}
+                                </form>
+                            {% else %}
+                                </div>
+                            {% endif %}
                         </section>
                     {% endfor %}
                 </div>

@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -19,6 +19,55 @@ def default_course_starts_on() -> date:
 def default_course_ends_on() -> date:
     starts_on = default_course_starts_on()
     return date(starts_on.year + 1, 8, 31)
+
+
+ARCHIVED_ACADEMIC_YEAR_ERROR = (
+    'Архивный учебный год доступен только для просмотра. '
+    'Изменения можно вносить только в активном учебном году.'
+)
+
+
+def academic_year_name_for_dates(starts_on: date, ends_on: date) -> str:
+    if starts_on.year == ends_on.year:
+        return str(starts_on.year)
+    return f'{starts_on.year}/{ends_on.year}'
+
+
+def academic_year_is_active(academic_year: 'AcademicYear | None') -> bool:
+    if academic_year is None:
+        return False
+    if getattr(academic_year, 'pk', None):
+        return AcademicYear.objects.filter(pk=academic_year.pk, is_active=True).exists()
+    return bool(academic_year.is_active)
+
+
+def validate_active_academic_year(academic_year: 'AcademicYear | None', field_name: str = 'academic_year') -> None:
+    if academic_year is not None and not academic_year_is_active(academic_year):
+        raise ValidationError({field_name: ARCHIVED_ACADEMIC_YEAR_ERROR})
+
+
+def academic_year_for_object(obj):
+    if obj is None:
+        return None
+    if isinstance(obj, AcademicYear):
+        return obj
+    if isinstance(obj, StudyGroup):
+        return obj.academic_year if obj.academic_year_id else None
+    if isinstance(obj, Student):
+        return obj.group.academic_year if obj.group_id else None
+    if isinstance(obj, GroupSubject):
+        return obj.group.academic_year if obj.group_id else None
+    if isinstance(obj, StudentSubject):
+        student = obj.student if obj.student_id else None
+        return student.group.academic_year if student is not None and student.group_id else None
+    if isinstance(obj, (Grade, SubjectResult, CourseApplication)):
+        return obj.academic_year if obj.academic_year_id else None
+    return None
+
+
+def object_is_in_archived_academic_year(obj) -> bool:
+    academic_year = academic_year_for_object(obj)
+    return academic_year is not None and not academic_year_is_active(academic_year)
 
 
 class AcademicYear(models.Model):
@@ -51,16 +100,58 @@ class AcademicYear(models.Model):
         super().clean()
         if self.starts_on and self.ends_on and self.starts_on >= self.ends_on:
             raise ValidationError({'ends_on': 'Дата окончания должна быть позже даты начала.'})
+        if self.pk:
+            old_value = AcademicYear.objects.filter(pk=self.pk).values('is_active').first()
+            if old_value and not old_value['is_active']:
+                raise ValidationError(ARCHIVED_ACADEMIC_YEAR_ERROR)
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
             self.clean_fields()
             self.clean()
             self.validate_unique()
-            if self.is_active:
-                AcademicYear.objects.exclude(pk=self.pk).update(is_active=False)
+            self.is_active = False
             self.validate_constraints()
             super().save(*args, **kwargs)
+            self.activate_latest()
+            self.is_active = AcademicYear.objects.filter(pk=self.pk, is_active=True).exists()
+
+    @classmethod
+    def latest(cls):
+        return cls.objects.order_by('-starts_on', '-ends_on', '-pk').first()
+
+    @classmethod
+    def activate_latest(cls):
+        latest_year = cls.latest()
+        if latest_year is None:
+            return None
+        cls.objects.exclude(pk=latest_year.pk).update(is_active=False)
+        cls.objects.filter(pk=latest_year.pk).update(is_active=True)
+        return latest_year
+
+    @classmethod
+    def get_or_create_for_dates(cls, starts_on: date, ends_on: date):
+        academic_year = cls.objects.filter(starts_on=starts_on, ends_on=ends_on).first()
+        if academic_year is not None:
+            cls.activate_latest()
+            academic_year.refresh_from_db(fields=['is_active'])
+            return academic_year, False
+
+        base_name = academic_year_name_for_dates(starts_on, ends_on)
+        name = base_name
+        suffix = 2
+        existing_names = set(cls.objects.values_list('name', flat=True))
+        while name in existing_names:
+            name = f'{base_name} {suffix}'
+            suffix += 1
+
+        academic_year = cls.objects.create(
+            name=name,
+            starts_on=starts_on,
+            ends_on=ends_on,
+            is_active=True,
+        )
+        return academic_year, True
 
     @classmethod
     def get_active(cls):
@@ -142,6 +233,29 @@ class Subject(models.Model):
             raise ValidationError({
                 'is_specialty': 'Нельзя сделать предмет групповым, пока он назначен индивидуальным ученикам.'
             })
+        if self.pk:
+            previous = Subject.objects.filter(pk=self.pk).values('final_grade_type').first()
+            if previous and previous['final_grade_type'] != self.final_grade_type:
+                allowed_values = self.get_final_grade_allowed_values()
+                incompatible_results = SubjectResult.objects.filter(subject=self).filter(
+                    (
+                        Q(exam_grade__isnull=False)
+                        & ~Q(exam_grade='')
+                        & ~Q(exam_grade__in=allowed_values)
+                    )
+                    | (
+                        Q(final_grade__isnull=False)
+                        & ~Q(final_grade='')
+                        & ~Q(final_grade__in=allowed_values)
+                    )
+                )
+                if incompatible_results.exists():
+                    raise ValidationError({
+                        'final_grade_type': (
+                            'Нельзя изменить тип итоговой оценки: у предмета уже есть '
+                            'итоги с несовместимыми значениями.'
+                        )
+                    })
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -207,10 +321,16 @@ class StudyGroup(models.Model):
         super().clean()
         if self.name:
             self.name = self.name.strip()
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        validate_active_academic_year(self.academic_year)
+        return super().delete(*args, **kwargs)
 
     @property
     def students_count(self) -> int:
@@ -409,10 +529,17 @@ class Student(models.Model):
             self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
         if self.comments:
             self.comments = self.comments.strip()
+        if self.group_id:
+            validate_active_academic_year(self.group.academic_year, 'group')
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.group_id:
+            validate_active_academic_year(self.group.academic_year, 'group')
+        return super().delete(*args, **kwargs)
 
     @property
     def age(self) -> int | None:
@@ -508,6 +635,8 @@ class GroupSubject(models.Model):
 
     def clean(self) -> None:
         super().clean()
+        if self.group_id:
+            validate_active_academic_year(self.group.academic_year, 'group')
         if self.group_id and self.subject_id and self.subject.is_specialty:
             raise ValidationError({
                 'subject': 'Индивидуальный предмет нельзя назначить группе.'
@@ -549,6 +678,8 @@ class GroupSubject(models.Model):
                 )
 
     def delete(self, *args, **kwargs):
+        if self.group_id:
+            validate_active_academic_year(self.group.academic_year, 'group')
         teacher_id = self.teacher_id
         subject_id = self.subject_id
         with transaction.atomic():
@@ -605,6 +736,8 @@ class StudentSubject(models.Model):
 
     def clean(self) -> None:
         super().clean()
+        if self.student_id and self.student.group_id:
+            validate_active_academic_year(self.student.group.academic_year, 'student')
         if self.subject_id and not self.subject.is_specialty:
             raise ValidationError({
                 'subject': 'Групповой предмет нельзя назначить индивидуальному ученику.'
@@ -646,6 +779,8 @@ class StudentSubject(models.Model):
                 )
 
     def delete(self, *args, **kwargs):
+        if self.student_id and self.student.group_id:
+            validate_active_academic_year(self.student.group.academic_year, 'student')
         teacher_id = self.teacher_id
         subject_id = self.subject_id
         with transaction.atomic():
@@ -805,6 +940,7 @@ class Grade(models.Model):
         self.normalize_value()
 
         super().clean()
+        student = None
 
         if self.value:
             self.value = str(self.value).strip().upper()
@@ -813,6 +949,27 @@ class Grade(models.Model):
 
         if self.date and not self.academic_year_id:
             self.academic_year = AcademicYear.get_for_date(self.date) or AcademicYear.get_active()
+
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+
+        if self.date and self.academic_year_id:
+            if not (self.academic_year.starts_on <= self.date <= self.academic_year.ends_on):
+                raise ValidationError({
+                    'date': (
+                        'Дата оценки должна попадать в период выбранного учебного года: '
+                        f'{self.academic_year.starts_on:%d.%m.%Y} - {self.academic_year.ends_on:%d.%m.%Y}.'
+                    )
+                })
+
+        if self.student_id:
+            student = Student.objects.select_related('group', 'group__academic_year').get(pk=self.student_id)
+
+        if student is not None and student.group_id and self.academic_year_id:
+            if student.group.academic_year_id != self.academic_year_id:
+                raise ValidationError({
+                    'academic_year': 'Учебный год оценки должен совпадать с учебным годом группы ученика.'
+                })
 
         if self.student_id and self.subject_id and self.date:
             duplicate_qs = Grade.objects.filter(
@@ -826,7 +983,8 @@ class Grade(models.Model):
                 raise ValidationError('Нельзя поставить несколько оценок в один день по одному предмету одному ученику.')
 
         if self.student_id and self.subject_id and self.teacher_id:
-            student = Student.objects.select_related('group').get(pk=self.student_id)
+            if student is None:
+                student = Student.objects.select_related('group').get(pk=self.student_id)
 
             group_assignment_exists = GroupSubject.objects.filter(
                 group_id=student.group_id,
@@ -852,6 +1010,11 @@ class Grade(models.Model):
         self.normalize_value()
         self.full_clean()
         return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+        return super().delete(*args, **kwargs)
 
 
 class SubjectResult(models.Model):
@@ -901,9 +1064,17 @@ class SubjectResult(models.Model):
 
     def clean(self) -> None:
         super().clean()
+        student = None
+
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
 
         if self.student_id and self.subject_id:
-            student = Student.objects.select_related('group').get(pk=self.student_id)
+            student = Student.objects.select_related('group', 'group__academic_year').get(pk=self.student_id)
+            if student.group_id and self.academic_year_id and student.group.academic_year_id != self.academic_year_id:
+                raise ValidationError({
+                    'academic_year': 'Учебный год итога должен совпадать с учебным годом группы ученика.'
+                })
             in_group_subjects = GroupSubject.objects.filter(
                 group_id=student.group_id,
                 subject_id=self.subject_id,
@@ -940,6 +1111,11 @@ class SubjectResult(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+        return super().delete(*args, **kwargs)
 
 
 class CourseRegistrationSettings(models.Model):
@@ -1106,7 +1282,6 @@ class CourseRegistrationRateLimit(models.Model):
 
 class CourseApplication(models.Model):
     STUDENT_COURSE_GROUP_NAME = 'Ученики курсов'
-    COURSE_ACADEMIC_YEAR_NAME = 'Курсы'
     DEFAULT_INSTRUMENT_NAME = 'Не указан'
 
     GENDER_MALE = 'male'
@@ -1160,6 +1335,16 @@ class CourseApplication(models.Model):
         default=STATUS_CONFIRMED,
         help_text='Если заявка отклонена, ученик, пользователь и временные учетные данные удаляются из журнала.',
     )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='course_applications',
+        verbose_name='Учебный год',
+        editable=False,
+        help_text='Учебный год, в рамках которого подана заявка.',
+    )
 
     student = models.OneToOneField(
         Student,
@@ -1206,8 +1391,10 @@ class CourseApplication(models.Model):
         indexes = [
             models.Index(fields=['status', '-registration_date'], name='course_app_status_reg_idx'),
             models.Index(fields=['student_phone'], name='course_app_phone_idx'),
+            models.Index(fields=['academic_year', 'student_phone'], name='course_app_year_phone_idx'),
             models.Index(fields=['generated_login'], name='course_app_login_idx'),
         ]
+
     def __str__(self) -> str:
         return self.full_name
 
@@ -1241,7 +1428,25 @@ class CourseApplication(models.Model):
 
         if self.student_phone:
             self.student_phone = normalize_phone_number(self.student_phone)
-            duplicate_qs = CourseApplication.objects.filter(student_phone=self.student_phone)
+
+        if self.academic_year_id is None:
+            settings_obj = CourseRegistrationSettings.load()
+            self.academic_year, _created = AcademicYear.get_or_create_for_dates(
+                settings_obj.course_starts_on,
+                settings_obj.course_ends_on,
+            )
+
+        if self.academic_year_id is None:
+            raise ValidationError('Сначала создайте активный учебный год.')
+
+        if not academic_year_is_active(self.academic_year):
+            raise ValidationError(ARCHIVED_ACADEMIC_YEAR_ERROR)
+
+        if self.student_phone:
+            duplicate_qs = CourseApplication.objects.filter(
+                student_phone=self.student_phone,
+                academic_year=self.academic_year,
+            )
             if self.pk:
                 duplicate_qs = duplicate_qs.exclude(pk=self.pk)
             if duplicate_qs.exists():
@@ -1262,6 +1467,8 @@ class CourseApplication(models.Model):
                 self.remove_student_from_journal()
 
     def delete(self, *args, **kwargs):
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
         with transaction.atomic():
             self.remove_student_from_journal(clear_application_links=False)
             return super().delete(*args, **kwargs)
@@ -1313,21 +1520,29 @@ class CourseApplication(models.Model):
                 last_name=self.last_name,
             )
 
-        today = timezone.localdate()
-        course_year = AcademicYear.get_active()
+        course_year = self.academic_year or AcademicYear.get_active()
         if course_year is None:
+            settings_obj = CourseRegistrationSettings.load()
             course_year, _ = AcademicYear.objects.get_or_create(
-                name=self.COURSE_ACADEMIC_YEAR_NAME,
+                name=academic_year_name_for_dates(settings_obj.course_starts_on, settings_obj.course_ends_on),
                 defaults={
-                    'starts_on': today,
-                    'ends_on': today + timedelta(days=365),
-                    'is_active': False,
+                    'starts_on': settings_obj.course_starts_on,
+                    'ends_on': settings_obj.course_ends_on,
+                    'is_active': True,
                 },
             )
+            AcademicYear.activate_latest()
+            course_year.refresh_from_db(fields=['is_active'])
+        validate_active_academic_year(course_year)
+
         group, _ = StudyGroup.objects.get_or_create(
             name=self.STUDENT_COURSE_GROUP_NAME,
             academic_year=course_year,
+            defaults={'is_active': True},
         )
+        if not group.is_active:
+            group.is_active = True
+            group.save(update_fields=['is_active'])
         instrument_name = self.instrument.strip() or self.DEFAULT_INSTRUMENT_NAME
         instrument, _ = Instrument.objects.get_or_create(name=instrument_name)
 
@@ -1397,6 +1612,7 @@ class CourseApplication(models.Model):
             student=existing_student,
             user=existing_user,
             generated_login=login,
+            academic_year=course_year,
             journal_created_at=timezone.now() if created_user or created_student else self.journal_created_at,
             journal_removed_at=None,
         )
@@ -1404,6 +1620,7 @@ class CourseApplication(models.Model):
         self.student = existing_student
         self.user = existing_user
         self.generated_login = login
+        self.academic_year = course_year
         if created_user or created_student:
             self.journal_created_at = timezone.now()
         self.journal_removed_at = None
@@ -1420,11 +1637,13 @@ class CourseApplication(models.Model):
         student = self._get_existing_student()
         user = self._get_existing_user(get_user_model())
 
-        credential_qs = TemporaryCredential.objects.filter(
-            Q(course_application_id=self.pk)
-            | Q(login=login)
-            | Q(student_phone=self.student_phone)
-        )
+        credential_filter = Q(course_application_id=self.pk) | Q(login=login)
+        if self.student_phone and self.academic_year_id:
+            credential_filter |= Q(
+                student_phone=self.student_phone,
+                course_application__academic_year_id=self.academic_year_id,
+            )
+        credential_qs = TemporaryCredential.objects.filter(credential_filter)
         credential_qs.delete()
 
         if student is not None:
@@ -1484,7 +1703,10 @@ class CourseApplication(models.Model):
             if credential is not None:
                 return credential
 
-        if self.student_phone:
-            return TemporaryCredential.objects.filter(student_phone=self.student_phone).first()
+        if self.student_phone and self.academic_year_id:
+            return TemporaryCredential.objects.filter(
+                student_phone=self.student_phone,
+                course_application__academic_year_id=self.academic_year_id,
+            ).first()
 
         return None

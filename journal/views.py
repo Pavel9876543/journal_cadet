@@ -385,7 +385,32 @@ def _include_selected_option(queryset, model, selected):
 
 
 def _current_academic_year() -> AcademicYear | None:
-    return AcademicYear.get_for_date(timezone.localdate()) or AcademicYear.get_active()
+    return AcademicYear.get_active() or AcademicYear.get_for_date(timezone.localdate())
+
+
+def _can_edit_academic_year(academic_year: AcademicYear | None) -> bool:
+    return academic_year is not None and academic_year.is_active
+
+
+def _reject_archived_academic_year_post(
+    request,
+    selected_academic_year: AcademicYear | None,
+    *,
+    selected_group=None,
+    selected_subject=None,
+):
+    if request.method != 'POST' or _can_edit_academic_year(selected_academic_year):
+        return None
+
+    messages.error(
+        request,
+        'Архивный учебный год доступен только для просмотра. Изменения можно вносить только в активном учебном году.',
+    )
+    return _redirect_journal(
+        group=selected_group,
+        subject=selected_subject,
+        academic_year=selected_academic_year,
+    )
 
 
 def _filter_groups_by_academic_year(groups, selected_academic_year: AcademicYear | None):
@@ -643,6 +668,13 @@ def _save_inline_grades(
     teacher: Teacher | None = None,
     selected_academic_year: AcademicYear | None = None,
 ) -> bool:
+    if not _can_edit_academic_year(selected_academic_year):
+        messages.error(
+            request,
+            'Архивный учебный год доступен только для просмотра. Изменения можно вносить только в активном учебном году.',
+        )
+        return False
+
     changed = 0
     student_map = {
         student.pk: student
@@ -874,6 +906,7 @@ def _journal_view_sync(request):
                 'academic_years': academic_years,
                 'grade_form': None,
                 'role_mode': '',
+                'can_edit_journal': False,
             },
         )
 
@@ -914,6 +947,7 @@ def _journal_for_admin(
     )
     groups = _filter_groups_by_academic_year(groups, selected_academic_year)
     subjects = Subject.objects.filter(is_active=True).order_by('name')
+    can_edit_journal = _can_edit_academic_year(selected_academic_year)
 
     selected_group = _get_selected_object(groups, selected_group_id)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
@@ -941,7 +975,7 @@ def _journal_for_admin(
         .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
     )
     if selected_academic_year is not None:
-        grade_qs = grade_qs.filter(Q(academic_year=selected_academic_year) | Q(academic_year__isnull=True))
+        grade_qs = grade_qs.filter(academic_year=selected_academic_year)
 
     result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
     results_qs = (
@@ -959,15 +993,26 @@ def _journal_for_admin(
         selected_academic_year=selected_academic_year,
     )
 
-    grade_form = _handle_grade_form(
+    archived_post_response = _reject_archived_academic_year_post(
         request,
-        role_mode=role_mode,
-        groups=groups,
-        subjects=subjects,
+        selected_academic_year,
         selected_group=selected_group,
         selected_subject=selected_subject,
-        selected_academic_year=selected_academic_year,
     )
+    if archived_post_response is not None:
+        return archived_post_response
+
+    grade_form = None
+    if can_edit_journal:
+        grade_form = _handle_grade_form(
+            request,
+            role_mode=role_mode,
+            groups=groups,
+            subjects=subjects,
+            selected_group=selected_group,
+            selected_subject=selected_subject,
+            selected_academic_year=selected_academic_year,
+        )
 
     if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
         if _save_inline_grades(
@@ -1001,6 +1046,7 @@ def _journal_for_admin(
             academic_years=academic_years,
             selected_academic_year=selected_academic_year,
             grade_form=grade_form,
+            can_edit_journal=can_edit_journal,
         ),
     )
 
@@ -1016,10 +1062,10 @@ def _journal_for_teacher(
 ):
     role_mode = 'teacher'
 
-    groups = get_teacher_groups(teacher).filter(is_active=True).select_related('academic_year')
-    groups = _filter_groups_by_academic_year(groups, selected_academic_year)
+    groups = get_grade_groups(teacher=teacher, academic_year=selected_academic_year).select_related('academic_year')
     selected_group = _get_selected_object(groups, selected_group_id)
     groups_to_show = [selected_group] if selected_group else list(groups)
+    can_edit_journal = _can_edit_academic_year(selected_academic_year)
 
     subjects = get_teacher_subjects(teacher, selected_group) if selected_group else _subjects_for_groups(groups_to_show, teacher=teacher)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
@@ -1044,7 +1090,7 @@ def _journal_for_teacher(
         .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
     )
     if selected_academic_year is not None:
-        grade_qs = grade_qs.filter(Q(academic_year=selected_academic_year) | Q(academic_year__isnull=True))
+        grade_qs = grade_qs.filter(academic_year=selected_academic_year)
 
     result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
     results_qs = (
@@ -1063,16 +1109,27 @@ def _journal_for_teacher(
         teacher=teacher,
     )
 
-    grade_form = _handle_grade_form(
+    archived_post_response = _reject_archived_academic_year_post(
         request,
-        role_mode=role_mode,
-        groups=groups,
-        subjects=subjects,
+        selected_academic_year,
         selected_group=selected_group,
         selected_subject=selected_subject,
-        selected_academic_year=selected_academic_year,
-        teacher=teacher,
     )
+    if archived_post_response is not None:
+        return archived_post_response
+
+    grade_form = None
+    if can_edit_journal:
+        grade_form = _handle_grade_form(
+            request,
+            role_mode=role_mode,
+            groups=groups,
+            subjects=subjects,
+            selected_group=selected_group,
+            selected_subject=selected_subject,
+            selected_academic_year=selected_academic_year,
+            teacher=teacher,
+        )
 
     if request.method == 'POST' and request.POST.get('action') == 'inline_edit':
         if _save_inline_grades(
@@ -1107,6 +1164,7 @@ def _journal_for_teacher(
             academic_years=academic_years,
             selected_academic_year=selected_academic_year,
             grade_form=grade_form,
+            can_edit_journal=can_edit_journal,
         ),
     )
 
@@ -1122,6 +1180,9 @@ def _journal_for_student(
     role_mode = 'student'
     selected_group = student.group if student.group_id else None
     groups = [selected_group] if selected_group is not None else []
+    if selected_academic_year is not None and selected_group is not None:
+        if selected_group.academic_year_id != selected_academic_year.pk:
+            groups = []
     students = [student]
 
     subjects = get_student_allowed_subjects(student)
@@ -1138,7 +1199,7 @@ def _journal_for_student(
         .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
     )
     if selected_academic_year is not None:
-        grade_qs = grade_qs.filter(Q(academic_year=selected_academic_year) | Q(academic_year__isnull=True))
+        grade_qs = grade_qs.filter(academic_year=selected_academic_year)
 
     result_year_ids = _result_year_ids(groups, selected_academic_year)
     results_qs = (
@@ -1171,6 +1232,7 @@ def _journal_for_student(
             academic_years=academic_years,
             selected_academic_year=selected_academic_year,
             grade_form=None,
+            can_edit_journal=False,
         ),
     )
 
@@ -1270,6 +1332,7 @@ def _journal_context(
     academic_years,
     selected_academic_year,
     grade_form,
+    can_edit_journal=False,
 ):
     return {
         'role_mode': role_mode,
@@ -1284,6 +1347,7 @@ def _journal_context(
         'selected_academic_year': selected_academic_year,
         'selected_academic_year_id': str(selected_academic_year.pk) if selected_academic_year else '',
         'grade_form': grade_form,
+        'can_edit_journal': can_edit_journal,
     }
 
 
