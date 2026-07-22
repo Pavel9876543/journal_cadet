@@ -8,8 +8,9 @@ from random import Random
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Count, Q
 
 from journal.account_utils import (
     build_username_from_full_name,
@@ -111,6 +112,7 @@ class Command(BaseCommand):
             .order_by('id')
         )
         self._create_grades_and_results(students, academic_year)
+        self._validate_demo_data()
 
         credentials_path = self._write_credentials(options['credentials_output'])
 
@@ -841,6 +843,97 @@ class Command(BaseCommand):
 
         Grade.objects.bulk_create(grades_to_create, batch_size=500)
         SubjectResult.objects.bulk_create(results_to_create, batch_size=500)
+
+    def _validate_demo_data(self) -> None:
+        errors: list[str] = []
+
+        if GroupSubject.objects.filter(subject__is_specialty=True).exists():
+            errors.append('Индивидуальные предметы назначены группам.')
+
+        if StudentSubject.objects.filter(subject__is_specialty=False).exists():
+            errors.append('Групповые предметы назначены индивидуальным ученикам.')
+
+        if StudentSubject.objects.filter(is_specialty=True).exclude(subject__name='Специальность').exists():
+            errors.append('Флаг Специальность стоит не только у предмета Специальность.')
+
+        if StudentSubject.objects.filter(is_specialty=False, subject__name='Специальность').exists():
+            errors.append('Предмет Специальность создан как дополнительный индивидуальный предмет.')
+
+        students_with_wrong_specialty_count = (
+            Student.objects
+            .filter(is_active=True)
+            .annotate(
+                active_specialties=Count(
+                    'individual_subjects',
+                    filter=Q(individual_subjects__is_active=True, individual_subjects__is_specialty=True),
+                ),
+            )
+            .exclude(active_specialties=1)
+        )
+        if students_with_wrong_specialty_count.exists():
+            errors.append('Не у каждого активного ученика ровно одна активная специальность.')
+
+        if Grade.objects.exclude(value__in=Grade.ALLOWED_VALUES).exists():
+            errors.append('Есть оценки с недопустимыми значениями.')
+
+        group_grade_keys = set(
+            GroupSubject.objects
+            .filter(is_active=True)
+            .values_list('group_id', 'subject_id', 'teacher_id')
+        )
+        individual_grade_keys = set(
+            StudentSubject.objects
+            .filter(is_active=True)
+            .values_list('student_id', 'subject_id', 'teacher_id')
+        )
+        for grade_id, student_id, group_id, subject_id, teacher_id in Grade.objects.values_list(
+            'pk',
+            'student_id',
+            'student__group_id',
+            'subject_id',
+            'teacher_id',
+        ):
+            if (
+                (group_id, subject_id, teacher_id) not in group_grade_keys
+                and (student_id, subject_id, teacher_id) not in individual_grade_keys
+            ):
+                errors.append(f'Оценка без назначения: #{grade_id}.')
+                break
+
+        group_result_keys = set(
+            GroupSubject.objects
+            .filter(is_active=True)
+            .values_list('group_id', 'subject_id')
+        )
+        individual_result_keys = set(
+            StudentSubject.objects
+            .filter(is_active=True)
+            .values_list('student_id', 'subject_id')
+        )
+        allowed_values_by_subject = {
+            subject.pk: subject.get_final_grade_allowed_values()
+            for subject in Subject.objects.all()
+        }
+        for result_id, student_id, group_id, subject_id, exam_grade, final_grade in SubjectResult.objects.values_list(
+            'pk',
+            'student_id',
+            'student__group_id',
+            'subject_id',
+            'exam_grade',
+            'final_grade',
+        ):
+            if (group_id, subject_id) not in group_result_keys and (student_id, subject_id) not in individual_result_keys:
+                errors.append(f'Итог без назначения: #{result_id}.')
+                break
+
+            allowed_values = allowed_values_by_subject.get(subject_id, set())
+            for value in (exam_grade, final_grade):
+                if value and value not in allowed_values:
+                    errors.append(f'Итог с недопустимым значением: #{result_id}.')
+                    break
+
+        if errors:
+            raise CommandError('Тестовые данные созданы с противоречиями: ' + ' '.join(errors))
 
     def _create_course_applications(self) -> None:
         application_specs = [

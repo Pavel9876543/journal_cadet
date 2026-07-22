@@ -75,6 +75,16 @@ USERNAME_WITH_SPACES_HELP_TEXT = (
 )
 
 
+class JournalAdminDescriptionMixin:
+    change_list_template = 'admin/journal/change_list_with_description.html'
+    changelist_description = ''
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context['changelist_description'] = self.changelist_description
+        return super().changelist_view(request, extra_context=extra_context)
+
+
 class SpaceFriendlyUsernameFormMixin:
     username = forms.CharField(
         label='Логин',
@@ -96,7 +106,11 @@ class SpaceFriendlyUserChangeForm(SpaceFriendlyUsernameFormMixin, UserChangeForm
 
 
 @admin.register(AuthUser)
-class UserAdmin(BaseUserAdmin):
+class UserAdmin(JournalAdminDescriptionMixin, BaseUserAdmin):
+    changelist_description = (
+        'Учетные записи для входа в систему. Здесь видны администраторы, преподаватели '
+        'и ученики, а учебные профили открываются по ссылкам в строках таблицы.'
+    )
     form = SpaceFriendlyUserChangeForm
     add_form = SpaceFriendlyUserCreationForm
     list_display = (
@@ -165,7 +179,11 @@ class UserAdmin(BaseUserAdmin):
 
 
 @admin.register(AuthGroup)
-class AuthGroupAdmin(BaseGroupAdmin):
+class AuthGroupAdmin(JournalAdminDescriptionMixin, BaseGroupAdmin):
+    changelist_description = (
+        'Роли пользователей и наборы прав. Обычно используются роли Администратор, '
+        'Преподаватель и Ученик.'
+    )
     search_fields = ('name',)
     list_per_page = 40
 
@@ -1099,7 +1117,11 @@ class SubjectResultInline(admin.TabularInline):
 
 
 @admin.register(AcademicYear)
-class AcademicYearAdmin(admin.ModelAdmin):
+class AcademicYearAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Учебные годы задают периоды обучения. Активный учебный год используется по умолчанию '
+        'для групп, заявок и дат оценок.'
+    )
     list_display = ('name', 'starts_on', 'ends_on', 'is_active', 'groups_count')
     list_filter = ('is_active',)
     search_fields = ('name',)
@@ -1122,7 +1144,11 @@ class AcademicYearAdmin(admin.ModelAdmin):
 
 
 @admin.register(Instrument)
-class InstrumentAdmin(admin.ModelAdmin):
+class InstrumentAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Справочник инструментов и партий. Значение выбирается в карточке ученика '
+        'и используется для поиска и отчетов.'
+    )
     list_display = ('name', 'students_count')
     search_fields = ('name',)
     ordering = ('name',)
@@ -1138,7 +1164,11 @@ class InstrumentAdmin(admin.ModelAdmin):
 
 
 @admin.register(Subject)
-class SubjectAdmin(admin.ModelAdmin):
+class SubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Справочник предметов. Поле Индивидуальный предмет определяет, куда можно назначать предмет: '
+        'в группу или конкретному ученику.'
+    )
     list_display = (
         'name',
         'final_grade_type',
@@ -1228,7 +1258,11 @@ class SubjectAdmin(admin.ModelAdmin):
 
 
 @admin.register(StudyGroup)
-class StudyGroupAdmin(admin.ModelAdmin):
+class StudyGroupAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Группы объединяют учеников одного учебного года. В карточке группы можно назначить '
+        'групповые предметы и перевести учеников из других групп.'
+    )
     list_display = (
         'name',
         'academic_year',
@@ -1302,7 +1336,11 @@ class StudyGroupAdmin(admin.ModelAdmin):
 
 
 @admin.register(Teacher)
-class TeacherAdmin(admin.ModelAdmin):
+class TeacherAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Карточки преподавателей и их учетные записи. Назначения на групповые и индивидуальные '
+        'предметы редактируются во вкладках карточки.'
+    )
     form = TeacherAdminForm
     list_display = (
         'full_name',
@@ -1432,7 +1470,11 @@ class TeacherAdmin(admin.ModelAdmin):
 
 
 @admin.register(Student)
-class StudentAdmin(admin.ModelAdmin):
+class StudentAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Карточки учеников: группа, инструмент, контакты, индивидуальные предметы и итоги. '
+        'Обычные оценки удобнее вносить через журнал.'
+    )
     form = StudentAdminForm
     list_display = (
         'full_name',
@@ -1551,7 +1593,11 @@ class StudentAdmin(admin.ModelAdmin):
 
 
 @admin.register(TeacherSubject)
-class TeacherSubjectAdmin(admin.ModelAdmin):
+class TeacherSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Квалификации показывают, какие предметы преподаватель может вести. '
+        'При назначении предмета преподавателю запись создается автоматически.'
+    )
     list_display = ('teacher', 'subject')
     list_filter = ('subject', 'teacher')
     search_fields = ('teacher__full_name', 'subject__name')
@@ -1571,7 +1617,11 @@ class TeacherSubjectAdmin(admin.ModelAdmin):
 
 
 @admin.register(GroupSubject)
-class GroupSubjectAdmin(admin.ModelAdmin):
+class GroupSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Групповые предметы связывают группу, предмет и преподавателя. '
+        'Сюда нельзя назначать индивидуальные предметы.'
+    )
     form = GroupSubjectAdminForm
     list_display = ('group', 'subject', 'teacher', 'sort_order', 'is_active')
     list_filter = ('is_active', 'group__academic_year', 'group', 'subject', 'teacher')
@@ -1591,7 +1641,11 @@ class GroupSubjectAdmin(admin.ModelAdmin):
 
 
 @admin.register(StudentSubject)
-class StudentSubjectAdmin(admin.ModelAdmin):
+class StudentSubjectAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Индивидуальные предметы связывают конкретного ученика, предмет и преподавателя. '
+        'Сюда нельзя назначать групповые предметы.'
+    )
     form = StudentSubjectAdminForm
     list_display = ('student', 'student_group_display', 'subject', 'teacher', 'is_specialty', 'is_active')
     list_filter = ('is_active', 'is_specialty', 'subject', 'teacher', 'student__group')
@@ -1617,7 +1671,11 @@ class StudentSubjectAdmin(admin.ModelAdmin):
 
 
 @admin.register(Grade)
-class GradeAdmin(admin.ModelAdmin):
+class GradeAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Оценки за занятия. В форме доступны только ученики, предметы и преподаватели, '
+        'которые состыкованы через групповые или индивидуальные назначения.'
+    )
     form = GradeAdminForm
     list_display = (
         'date',
@@ -1723,7 +1781,11 @@ class GradeAdmin(admin.ModelAdmin):
 
 
 @admin.register(SubjectResult)
-class SubjectResultAdmin(admin.ModelAdmin):
+class SubjectResultAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Итоги по предметам за учебный год: экзамен и итоговая оценка. '
+        'Допустимые значения зависят от типа итоговой оценки предмета.'
+    )
     form = SubjectResultAdminForm
     list_display = (
         'student',
@@ -1790,7 +1852,11 @@ class HasJournalStudentFilter(admin.SimpleListFilter):
 
 
 @admin.register(CourseApplication)
-class CourseApplicationAdmin(admin.ModelAdmin):
+class CourseApplicationAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Заявки с публичной регистрации. Подтвержденная заявка создает ученика, пользователя '
+        'и временный пароль; отклоненная заявка удаляет связанные учебные записи.'
+    )
     form = CourseApplicationAdminForm
     list_display = (
         'registration_date',
@@ -1947,7 +2013,11 @@ class CourseApplicationAdmin(admin.ModelAdmin):
 
 
 @admin.register(TemporaryCredential)
-class TemporaryCredentialAdmin(admin.ModelAdmin):
+class TemporaryCredentialAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Временные логины и пароли для выдачи пользователям: ученикам, преподавателям '
+        'и администраторам. После смены пароля запись больше не нужна.'
+    )
     list_display = (
         'login',
         'user_link',
@@ -2042,7 +2112,11 @@ class TemporaryCredentialAdmin(admin.ModelAdmin):
 
 
 @admin.register(CourseRegistrationSettings)
-class CourseRegistrationSettingsAdmin(admin.ModelAdmin):
+class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Единая таблица настроек публичной регистрации: возраст, даты начала и окончания курсов, '
+        'ссылка на Telegram-группу.'
+    )
     form = CourseRegistrationSettingsForm
     list_display = (
         'telegram_group_url',
@@ -2076,7 +2150,10 @@ class CourseRegistrationSettingsAdmin(admin.ModelAdmin):
 
 
 @admin.register(PasswordRecoveryContact)
-class PasswordRecoveryContactAdmin(admin.ModelAdmin):
+class PasswordRecoveryContactAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Контакты администраторов, которые показываются пользователям на странице восстановления доступа.'
+    )
     list_display = (
         'name',
         'phone',

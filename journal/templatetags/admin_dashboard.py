@@ -212,6 +212,14 @@ def journal_admin_dashboard(context):
             user,
             'journal.add_passwordrecoverycontact',
         ),
+        _item(
+            'Инструкция',
+            _reverse('admin_guide'),
+            'fas fa-question-circle',
+            'Простая инструкция по работе администратора.',
+            user,
+            'superuser',
+        ),
     ]
 
     sections = [
@@ -376,6 +384,14 @@ def journal_admin_dashboard(context):
                     _reverse('admin_seed_test_data'),
                     'fas fa-play-circle',
                     'Пересоздать максимальный демо-набор через страницу подтверждения.',
+                    user,
+                    'superuser',
+                ),
+                _item(
+                    'Инструкция администратора',
+                    _reverse('admin_guide'),
+                    'fas fa-question-circle',
+                    'Пошаговая памятка по настройке и ежедневной работе.',
                     user,
                     'superuser',
                 ),

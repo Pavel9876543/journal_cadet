@@ -14,7 +14,7 @@ from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.test import Client, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -1737,6 +1737,27 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, reverse('admin:journal_studentsubject_changelist'))
         self.assertContains(response, 'Квалификации преподавателей')
         self.assertContains(response, reverse('admin:journal_teachersubject_changelist'))
+        self.assertContains(response, 'Инструкция')
+        self.assertContains(response, reverse('admin_guide'))
+
+    def test_admin_guide_is_visible_only_for_superuser(self):
+        staff_user = User.objects.create_user(
+            username='guide_staff',
+            password='Pass12345!',
+            is_staff=True,
+        )
+
+        self.client.login(username='guide_staff', password='Pass12345!')
+        staff_response = self.client.get(reverse('admin_guide'))
+        self.assertEqual(staff_response.status_code, 302)
+
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+        admin_response = self.client.get(reverse('admin_guide'))
+
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(admin_response, 'Как работать с журналом')
+        self.assertContains(admin_response, reverse('admin:journal_student_changelist'))
+        self.assertContains(admin_response, reverse('admin_data_tools'))
 
     def test_admin_changelist_add_button_is_ordered_before_search(self):
         css = Path('journal/static/journal/admin_dashboard.css').read_text(encoding='utf-8')
@@ -1745,6 +1766,43 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertIn('order: 1;', css)
         self.assertIn('body.change-list #changelist-search', css)
         self.assertIn('order: 2;', css)
+
+    def test_admin_changelists_show_table_descriptions(self):
+        models = (
+            User,
+            Group,
+            AcademicYear,
+            Instrument,
+            Subject,
+            StudyGroup,
+            Teacher,
+            Student,
+            TeacherSubject,
+            GroupSubject,
+            StudentSubject,
+            Grade,
+            SubjectResult,
+            CourseApplication,
+            TemporaryCredential,
+            CourseRegistrationSettings,
+            PasswordRecoveryContact,
+        )
+
+        for model in models:
+            with self.subTest(model=model.__name__):
+                model_admin = django_admin.site._registry[model]
+                self.assertTrue(model_admin.changelist_description)
+                self.assertEqual(
+                    model_admin.change_list_template,
+                    'admin/journal/change_list_with_description.html',
+                )
+
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+        response = self.client.get(reverse('admin:journal_studygroup_changelist'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, django_admin.site._registry[StudyGroup].changelist_description)
+        self.assertContains(response, 'journal-changelist-description')
 
     def test_related_models_are_visible_in_admin_without_teacher_qualification_inlines(self):
         request = type('Request', (), {'user': self.admin_user})()
@@ -2627,6 +2685,7 @@ class AsyncDatabaseViewTests(TestCase):
             views.export_student_credentials_xlsx,
             views.export_all_data_excel,
             admin_tools.admin_data_tools_view,
+            admin_tools.admin_guide_view,
             admin_tools.admin_seed_test_data_view,
             admin_tools.admin_delete_database_view,
             admin_tools.admin_export_test_credentials_excel_view,
@@ -2728,6 +2787,7 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Удалить базу данных')
         self.assertContains(response, 'name="pas_key_data"')
+        self.assertContains(response, reverse('admin_guide'))
 
     def test_staff_user_cannot_open_seed_test_data_tool(self):
         self.client.login(username='staff_xlsx', password='Pass12345!')
@@ -3091,6 +3151,81 @@ class SeedDataCommandTests(TestCase):
 
         self.assertEqual(credential_logins, user_logins)
         self.assertEqual(credential_user_ids, set(User.objects.values_list('id', flat=True)))
+
+    def test_seed_data_has_no_assignment_or_grade_contradictions(self):
+        self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
+        self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
+        self.assertFalse(
+            StudentSubject.objects
+            .filter(is_specialty=True)
+            .exclude(subject__name='Специальность')
+            .exists(),
+        )
+        self.assertFalse(
+            StudentSubject.objects
+            .filter(is_specialty=False, subject__name='Специальность')
+            .exists(),
+        )
+        self.assertFalse(
+            Student.objects
+            .filter(is_active=True)
+            .annotate(
+                active_specialties=Count(
+                    'individual_subjects',
+                    filter=Q(individual_subjects__is_active=True, individual_subjects__is_specialty=True),
+                ),
+            )
+            .exclude(active_specialties=1)
+            .exists(),
+        )
+
+        group_grade_keys = set(
+            GroupSubject.objects
+            .filter(is_active=True)
+            .values_list('group_id', 'subject_id', 'teacher_id')
+        )
+        individual_grade_keys = set(
+            StudentSubject.objects
+            .filter(is_active=True)
+            .values_list('student_id', 'subject_id', 'teacher_id')
+        )
+        invalid_grade_ids = [
+            grade_id
+            for grade_id, student_id, group_id, subject_id, teacher_id in Grade.objects.values_list(
+                'pk',
+                'student_id',
+                'student__group_id',
+                'subject_id',
+                'teacher_id',
+            )
+            if (
+                (group_id, subject_id, teacher_id) not in group_grade_keys
+                and (student_id, subject_id, teacher_id) not in individual_grade_keys
+            )
+        ]
+        self.assertEqual(invalid_grade_ids, [])
+
+        group_result_keys = set(
+            GroupSubject.objects
+            .filter(is_active=True)
+            .values_list('group_id', 'subject_id')
+        )
+        individual_result_keys = set(
+            StudentSubject.objects
+            .filter(is_active=True)
+            .values_list('student_id', 'subject_id')
+        )
+        invalid_result_ids = [
+            result_id
+            for result_id, student_id, group_id, subject_id in SubjectResult.objects.values_list(
+                'pk',
+                'student_id',
+                'student__group_id',
+                'subject_id',
+            )
+            if (group_id, subject_id) not in group_result_keys and (student_id, subject_id) not in individual_result_keys
+        ]
+        self.assertEqual(invalid_result_ids, [])
 
     def test_seed_data_can_be_run_twice_without_duplicate_settings_error(self):
         self.run_seed_data()

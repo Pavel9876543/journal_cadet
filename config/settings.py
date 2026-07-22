@@ -118,6 +118,12 @@ JAZZMIN_SETTINGS = {
             'permissions': ['journal.view_temporarycredential'],
         },
         {
+            'name': 'Инструкция',
+            'url': 'admin_guide',
+            'icon': 'fas fa-question-circle',
+            'permissions': ['auth.view_user'],
+        },
+        {
             'name': 'Тестовые данные',
             'url': 'admin_seed_test_data',
             'icon': 'fas fa-play-circle',
@@ -182,6 +188,12 @@ JAZZMIN_SETTINGS = {
                 'url': 'admin_data_tools',
                 'icon': 'fas fa-database',
                 'permissions': ['journal.view_temporarycredential'],
+            },
+            {
+                'name': 'Инструкция администратора',
+                'url': 'admin_guide',
+                'icon': 'fas fa-question-circle',
+                'permissions': ['auth.view_user'],
             },
             {
                 'name': 'Запуск тестовых данных',

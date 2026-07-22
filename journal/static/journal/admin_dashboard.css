@@ -320,6 +320,25 @@ body:not(.login-page) .app-main {
     line-height: 1.25;
 }
 
+.journal-guide-list {
+    margin: 0;
+    padding-left: 22px;
+    color: var(--journal-admin-text);
+}
+
+.journal-guide-list li {
+    margin-bottom: 10px;
+    line-height: 1.5;
+}
+
+.journal-guide-list li:last-child {
+    margin-bottom: 0;
+}
+
+.journal-guide-list a {
+    font-weight: 700;
+}
+
 .journal-dashboard-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 330px;
@@ -644,6 +663,29 @@ body.change-list #change-list-filters > .d-flex > a.btn {
 
 html[data-bs-theme="dark"] .journal-admin-field-status--error {
     color: #ffb4ab;
+}
+
+.journal-changelist-description {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--journal-admin-border);
+    border-radius: 8px;
+    background: var(--journal-admin-surface);
+    box-shadow: var(--journal-admin-shadow);
+    color: var(--journal-admin-text);
+}
+
+.journal-changelist-description i {
+    margin-top: 2px;
+    color: var(--journal-admin-blue);
+}
+
+.journal-changelist-description p {
+    margin: 0;
+    overflow-wrap: anywhere;
 }
 
 body.change-list #changelist {

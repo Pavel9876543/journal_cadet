@@ -9,6 +9,7 @@ from journal.admin_tools import (
     admin_delete_database_view,
     admin_data_tools_view,
     admin_export_test_credentials_excel_view,
+    admin_guide_view,
     admin_seed_test_data_view,
 )
 
@@ -17,6 +18,11 @@ urlpatterns = [
         'admin/journal/data-tools/',
         admin_data_tools_view,
         name='admin_data_tools',
+    ),
+    path(
+        'admin/journal/guide/',
+        admin_guide_view,
+        name='admin_guide',
     ),
     path(
         'admin/journal/data-tools/seed/',

@@ -60,6 +60,30 @@ async def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
     return await _run_db_sync(_admin_data_tools_view_sync, request)
 
 
+@superuser_required
+async def admin_guide_view(request: HttpRequest) -> HttpResponse:
+    return await _run_db_sync(_admin_guide_view_sync, request)
+
+
+def _admin_guide_view_sync(request: HttpRequest) -> HttpResponse:
+    context = {
+        'title': 'Инструкция администратора',
+        'journal_url': reverse('journal'),
+        'students_url': reverse('admin:journal_student_changelist'),
+        'groups_url': reverse('admin:journal_studygroup_changelist'),
+        'teachers_url': reverse('admin:journal_teacher_changelist'),
+        'subjects_url': reverse('admin:journal_subject_changelist'),
+        'grades_url': reverse('admin:journal_grade_changelist'),
+        'results_url': reverse('admin:journal_subjectresult_changelist'),
+        'applications_url': reverse('admin:journal_courseapplication_changelist'),
+        'temporary_credentials_url': reverse('admin:journal_temporarycredential_changelist'),
+        'settings_url': reverse('admin:journal_courseregistrationsettings_changelist'),
+        'password_contacts_url': reverse('admin:journal_passwordrecoverycontact_changelist'),
+        'data_tools_url': reverse('admin_data_tools'),
+    }
+    return render(request, 'admin/journal/admin_guide.html', context)
+
+
 def _admin_data_tools_view_sync(request: HttpRequest) -> HttpResponse:
     """
     Страница инструментов данных в Django Admin.
@@ -75,6 +99,7 @@ def _admin_data_tools_view_sync(request: HttpRequest) -> HttpResponse:
     context = {
         'title': 'Инструменты данных',
         'temporary_credentials_count': temporary_credentials_count,
+        'admin_guide_url': reverse('admin_guide'),
         'temporary_credentials_admin_url': get_admin_url(
             'admin:journal_temporarycredential_changelist',
             fallback='/admin/',
