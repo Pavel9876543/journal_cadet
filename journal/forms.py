@@ -19,6 +19,7 @@ from .models import (
     CourseRegistrationSettings,
     Grade,
     GroupSubject,
+    Instrument,
     Student,
     StudentSubject,
     StudyGroup,
@@ -554,9 +555,15 @@ class BaseCourseApplicationForm(forms.ModelForm):
             'Укажите музыкальный инструмент или партию в оркестре. '
             'Если ранее не играли, укажите инструмент, на котором планируете обучаться.'
         )
-        self.fields['instrument'].widget.attrs.update({
-            'placeholder': 'Например: Баян, Домра малая II, Фортепиано',
-        })
+        instrument_choices = self._instrument_choices()
+        if instrument_choices:
+            self.fields['instrument'].widget = forms.Select(
+                choices=[('', 'Выберите инструмент')] + instrument_choices,
+            )
+        else:
+            self.fields['instrument'].widget.attrs.update({
+                'placeholder': 'Например: Баян, Домра малая II, Фортепиано',
+            })
         self.fields['music_education'].widget = forms.Select(choices=CourseApplication.MUSIC_EDUCATION_CHOICES)
         self.fields['student_phone'].widget = forms.TextInput(attrs={
             'type': 'tel',
@@ -594,6 +601,25 @@ class BaseCourseApplicationForm(forms.ModelForm):
                 f'Возраст считается на {self.age_reference_date:%d.%m.%Y}.'
             )
 
+    def _instrument_choices(self):
+        names = list(Instrument.objects.order_by('name').values_list('name', flat=True))
+        extra_values = []
+
+        if self.is_bound:
+            raw_value = self.data.get(self.add_prefix('instrument')) or self.data.get('instrument')
+            if raw_value:
+                extra_values.append(str(raw_value).strip())
+        elif self.instance and self.instance.pk and self.instance.instrument:
+            extra_values.append(self.instance.instrument.strip())
+        elif self.initial.get('instrument'):
+            extra_values.append(str(self.initial['instrument']).strip())
+
+        for value in extra_values:
+            if value and value not in names:
+                names.append(value)
+
+        return [(name, name) for name in names]
+
     class Meta:
         model = CourseApplication
         fields = [
@@ -627,7 +653,16 @@ class BaseCourseApplicationForm(forms.ModelForm):
         return self.cleaned_data['city_church'].strip()
 
     def clean_instrument(self):
-        return self.cleaned_data['instrument'].strip()
+        value = self.cleaned_data['instrument'].strip()
+        available_names = set(Instrument.objects.values_list('name', flat=True))
+        current_value = ''
+        if self.instance and self.instance.pk:
+            current_value = self.instance.instrument.strip()
+
+        if available_names and value not in available_names and value != current_value:
+            raise forms.ValidationError('Выберите инструмент из списка.')
+
+        return value
 
     def clean_student_phone(self):
         return normalize_phone_number(self.cleaned_data['student_phone'])

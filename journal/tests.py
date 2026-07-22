@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -839,6 +840,22 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIn('Фортепиано', str(form['instrument']))
         self.assertIn('value="basic" selected', str(form['music_education']))
         self.assertIn('Нужен вечерний поток', str(form['comments']))
+
+    def test_course_application_form_uses_instrument_directory_when_available(self):
+        self.create_instrument(name='Баян')
+        self.create_instrument(name='Фортепиано')
+
+        valid_form = CourseApplicationPublicForm(
+            data=self.application_form_payload(instrument='Баян'),
+        )
+        invalid_form = CourseApplicationPublicForm(
+            data=self.application_form_payload(instrument='Случайный инструмент'),
+        )
+
+        self.assertIn('<select', str(valid_form['instrument']))
+        self.assertTrue(valid_form.is_valid(), valid_form.errors)
+        self.assertFalse(invalid_form.is_valid())
+        self.assertIn('instrument', invalid_form.errors)
 
     def test_parent_contacts_accepts_dash_from_form_placeholder(self):
         normalized_contacts = normalize_parent_contacts(
@@ -1710,12 +1727,24 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
     def test_group_admin_allows_adding_students_inline(self):
         year = self.create_academic_year()
         group = StudyGroup.objects.create(name='Группа с учениками', academic_year=year)
+        source_group = StudyGroup.objects.create(name='Исходная группа', academic_year=year)
         instrument = self.create_instrument()
+        student = Student.objects.create(
+            full_name='Готовый Ученик',
+            group=source_group,
+            instrument=instrument,
+            city_church='Тамбов / Центр',
+            is_active=True,
+        )
         self.client.login(username='dashboard_admin', password='Pass12345!')
 
         get_response = self.client.get(reverse('admin:journal_studygroup_change', args=[group.pk]))
-        self.assertContains(get_response, 'name="students-0-full_name"')
-        self.assertContains(get_response, 'name="students-0-instrument"')
+        self.assertContains(get_response, 'name="students-0-student"')
+        self.assertContains(get_response, 'name="students-0-city_church"')
+        self.assertContains(get_response, f'value="{student.pk}"')
+        self.assertContains(get_response, 'data-city-church="Тамбов / Центр"')
+        self.assertNotContains(get_response, 'name="students-0-full_name"')
+        self.assertNotContains(get_response, 'name="students-0-instrument"')
 
         response = self.client.post(
             reverse('admin:journal_studygroup_change', args=[group.pk]),
@@ -1733,21 +1762,65 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'students-MAX_NUM_FORMS': '1000',
                 'students-0-id': '',
                 'students-0-group': group.pk,
-                'students-0-full_name': 'Новый Ученик',
-                'students-0-instrument': instrument.pk,
-                'students-0-user': '',
-                'students-0-is_active': 'on',
+                'students-0-student': student.pk,
+                'students-0-city_church': 'Воронеж / Север',
                 '_save': 'Save',
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(
-            Student.objects.filter(
-                group=group,
-                full_name='Новый Ученик',
-                instrument=instrument,
-            ).exists(),
+        student.refresh_from_db()
+        self.assertEqual(Student.objects.count(), 1)
+        self.assertEqual(student.group, group)
+        self.assertEqual(student.city_church, 'Воронеж / Север')
+
+    def test_group_admin_shows_inline_error_for_duplicate_group_subject(self):
+        year = self.create_academic_year()
+        group = StudyGroup.objects.create(name='Группа с дублем предмета', academic_year=year)
+        subject = self.create_subject(name='Групповой дубль')
+        teacher = self.create_teacher(username='duplicate_group_teacher')
+        assignment = GroupSubject.objects.create(
+            group=group,
+            subject=subject,
+            teacher=teacher,
+            sort_order=10,
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_studygroup_change', args=[group.pk]),
+            data={
+                'name': group.name,
+                'academic_year': year.pk,
+                'is_active': 'on',
+                'group_subjects-TOTAL_FORMS': '2',
+                'group_subjects-INITIAL_FORMS': '1',
+                'group_subjects-MIN_NUM_FORMS': '0',
+                'group_subjects-MAX_NUM_FORMS': '1000',
+                'group_subjects-0-id': assignment.pk,
+                'group_subjects-0-group': group.pk,
+                'group_subjects-0-subject': subject.pk,
+                'group_subjects-0-teacher': teacher.pk,
+                'group_subjects-0-sort_order': '10',
+                'group_subjects-0-is_active': 'on',
+                'group_subjects-1-id': '',
+                'group_subjects-1-group': group.pk,
+                'group_subjects-1-subject': subject.pk,
+                'group_subjects-1-teacher': teacher.pk,
+                'group_subjects-1-sort_order': '20',
+                'group_subjects-1-is_active': 'on',
+                'students-TOTAL_FORMS': '0',
+                'students-INITIAL_FORMS': '0',
+                'students-MIN_NUM_FORMS': '0',
+                'students-MAX_NUM_FORMS': '1000',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            'Предмет группы с такими значениями полей Группа и Предмет уже существует.',
         )
 
     def test_group_admin_allows_editing_and_deleting_students_inline(self):
@@ -1788,26 +1861,12 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'students-MAX_NUM_FORMS': '1000',
                 'students-0-id': student_to_edit.pk,
                 'students-0-group': group.pk,
-                'students-0-full_name': 'Новое Имя',
-                'students-0-gender': Student.GENDER_MALE,
-                'students-0-birth_date': '',
-                'students-0-instrument': instrument.pk,
-                'students-0-student_phone': '',
-                'students-0-city_church': '',
-                'students-0-music_education': '',
-                'students-0-user': '',
-                'students-0-is_active': 'on',
+                'students-0-student': student_to_edit.pk,
+                'students-0-city_church': 'Новый город / церковь',
                 'students-1-id': student_to_delete.pk,
                 'students-1-group': group.pk,
-                'students-1-full_name': student_to_delete.full_name,
-                'students-1-gender': '',
-                'students-1-birth_date': '',
-                'students-1-instrument': instrument.pk,
-                'students-1-student_phone': '',
-                'students-1-city_church': '',
-                'students-1-music_education': '',
-                'students-1-user': '',
-                'students-1-is_active': 'on',
+                'students-1-student': student_to_delete.pk,
+                'students-1-city_church': student_to_delete.city_church,
                 'students-1-DELETE': 'on',
                 '_save': 'Save',
             },
@@ -1816,7 +1875,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         student_to_edit.refresh_from_db()
         student_to_delete.refresh_from_db()
-        self.assertEqual(student_to_edit.full_name, 'Новое Имя')
+        self.assertEqual(student_to_edit.city_church, 'Новый город / церковь')
         self.assertEqual(student_to_delete.group, fallback_group)
 
     def test_group_admin_detaches_student_when_no_fallback_group_exists(self):
@@ -1847,15 +1906,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'students-MAX_NUM_FORMS': '1000',
                 'students-0-id': student.pk,
                 'students-0-group': group.pk,
-                'students-0-full_name': student.full_name,
-                'students-0-gender': '',
-                'students-0-birth_date': '',
-                'students-0-instrument': instrument.pk,
-                'students-0-student_phone': '',
-                'students-0-city_church': '',
-                'students-0-music_education': '',
-                'students-0-user': '',
-                'students-0-is_active': 'on',
+                'students-0-student': student.pk,
+                'students-0-city_church': student.city_church,
                 'students-0-DELETE': 'on',
                 '_save': 'Save',
             },
@@ -1864,6 +1916,59 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         student.refresh_from_db()
         self.assertIsNone(student.group)
+
+    def test_student_admin_shows_inline_error_for_duplicate_individual_subject(self):
+        data = self.create_base_journal()
+        student = data['student']
+        assignment = StudentSubject.objects.get(
+            student=student,
+            subject=data['specialty'],
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_student_change', args=[student.pk]),
+            data={
+                'full_name': student.full_name,
+                'gender': student.gender,
+                'birth_date': student.birth_date.isoformat() if student.birth_date else '',
+                'group': student.group_id,
+                'instrument': student.instrument_id,
+                'is_active': 'on',
+                'student_phone': student.student_phone,
+                'parent_contacts': student.parent_contacts,
+                'city_church': student.city_church,
+                'music_education': student.music_education,
+                'comments': student.comments,
+                'user': student.user_id,
+                'individual_subjects-TOTAL_FORMS': '2',
+                'individual_subjects-INITIAL_FORMS': '1',
+                'individual_subjects-MIN_NUM_FORMS': '0',
+                'individual_subjects-MAX_NUM_FORMS': '1000',
+                'individual_subjects-0-id': assignment.pk,
+                'individual_subjects-0-student': student.pk,
+                'individual_subjects-0-subject': data['specialty'].pk,
+                'individual_subjects-0-teacher': data['other_teacher'].pk,
+                'individual_subjects-0-is_specialty': 'on',
+                'individual_subjects-0-is_active': 'on',
+                'individual_subjects-1-id': '',
+                'individual_subjects-1-student': student.pk,
+                'individual_subjects-1-subject': data['specialty'].pk,
+                'individual_subjects-1-teacher': data['other_teacher'].pk,
+                'individual_subjects-1-is_active': 'on',
+                'subject_results-TOTAL_FORMS': '0',
+                'subject_results-INITIAL_FORMS': '0',
+                'subject_results-MIN_NUM_FORMS': '0',
+                'subject_results-MAX_NUM_FORMS': '1000',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            'Индивидуальный предмет ученика с такими значениями полей Ученик и Предмет уже существует.',
+        )
 
     def test_student_admin_uses_prefetched_specialty_without_row_queries(self):
         data = self.create_base_journal()
@@ -2588,6 +2693,21 @@ class AccountUtilityTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(display_name_for_user(user), 'Петров Пётр')
 
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_user_creation_form_accepts_username_with_space(self):
+        form = UserCreationForm(
+            data={
+                'username': 'Админ Тест',
+                'password1': 'Pass12345!',
+                'password2': 'Pass12345!',
+            },
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save()
+        user.full_clean()
+        self.assertEqual(user.username, 'Админ Тест')
+
 
 class AccountCommandTests(JournalTestDataMixin, TestCase):
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
@@ -2651,13 +2771,13 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
             call_command(
                 'createsuperuser',
                 interactive=False,
-                username='created_admin',
+                username='created admin',
                 email='created-admin@example.com',
                 stdout=StringIO(),
             )
 
-        user = User.objects.get(username='created_admin')
-        credential = TemporaryCredential.objects.get(login='created_admin')
+        user = User.objects.get(username='created admin')
+        credential = TemporaryCredential.objects.get(login='created admin')
 
         self.assertTrue(user.is_superuser)
         self.assertTrue(user.groups.filter(name='Администратор').exists())

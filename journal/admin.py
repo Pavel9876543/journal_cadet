@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
+from django.contrib.auth.forms import UserChangeForm, UserCreationForm
 from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.urls import reverse
@@ -61,8 +62,35 @@ except admin.sites.NotRegistered:
     pass
 
 
+USERNAME_WITH_SPACES_HELP_TEXT = (
+    'Обязательное поле. Не больше 150 символов. Можно использовать буквы, цифры и пробелы.'
+)
+
+
+class SpaceFriendlyUsernameFormMixin:
+    username = forms.CharField(
+        label='Логин',
+        max_length=150,
+        help_text=USERNAME_WITH_SPACES_HELP_TEXT,
+    )
+
+
+class SpaceFriendlyUserCreationForm(SpaceFriendlyUsernameFormMixin, UserCreationForm):
+    class Meta(UserCreationForm.Meta):
+        model = AuthUser
+        fields = ('username',)
+
+
+class SpaceFriendlyUserChangeForm(SpaceFriendlyUsernameFormMixin, UserChangeForm):
+    class Meta(UserChangeForm.Meta):
+        model = AuthUser
+        fields = '__all__'
+
+
 @admin.register(AuthUser)
 class UserAdmin(BaseUserAdmin):
+    form = SpaceFriendlyUserChangeForm
+    add_form = SpaceFriendlyUserCreationForm
     list_display = (
         'username',
         'last_name',
@@ -432,6 +460,125 @@ class StudentSubjectAdminForm(forms.ModelForm):
             self.fields['subject'].queryset = Subject.objects.filter(is_specialty=True)
 
 
+class StudentChoiceWithCityWidget(forms.Select):
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex=subindex, attrs=attrs)
+        student = getattr(value, 'instance', None)
+        if student is not None:
+            option['attrs']['data-city-church'] = student.city_church or ''
+        return option
+
+
+class GroupStudentInlineForm(forms.ModelForm):
+    student = forms.ModelChoiceField(
+        label='ФИО ученика',
+        queryset=Student.objects.none(),
+        required=False,
+        empty_label='Выберите ученика',
+        widget=StudentChoiceWithCityWidget(attrs={'data-student-city-source': '1'}),
+    )
+
+    class Meta:
+        model = Student
+        fields = ('city_church',)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        selected_student = self.instance if self.instance and self.instance.pk else None
+        student_queryset = Student.objects.select_related('group').filter(is_active=True)
+        if selected_student is not None:
+            student_queryset = Student.objects.select_related('group').filter(
+                Q(is_active=True) | Q(pk=selected_student.pk),
+            )
+
+        self.fields['student'].queryset = student_queryset.order_by('full_name', 'pk')
+        self.fields['student'].initial = selected_student
+        self.fields['city_church'].widget.attrs['data-student-city-target'] = '1'
+
+
+class UniqueInlineFormSetMixin:
+    unique_checks = ()
+    unique_error_message = 'Такая запись уже существует.'
+    unique_formset_error_message = 'Исправьте ошибки в строках таблицы.'
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+
+        has_errors = False
+        for check in self.unique_checks:
+            if self._validate_unique_check(check):
+                has_errors = True
+
+        if has_errors:
+            raise forms.ValidationError(self.unique_formset_error_message)
+
+    def _validate_unique_check(self, check):
+        fields = check['fields']
+        condition = check.get('condition')
+        extra_filters = check.get('filters', {})
+        message = check.get('message', self.unique_error_message)
+        seen = {}
+        has_errors = False
+
+        for form in self.forms:
+            if not hasattr(form, 'cleaned_data') or not form.cleaned_data:
+                continue
+            if form.cleaned_data.get('DELETE'):
+                continue
+            if condition is not None and not condition(form.cleaned_data):
+                continue
+
+            key, filters = self._unique_key_and_filters(form, fields)
+            if key is None:
+                continue
+
+            duplicate_form = seen.get(key)
+            if duplicate_form is not None:
+                duplicate_form.add_error(None, message)
+                form.add_error(None, message)
+                has_errors = True
+            else:
+                seen[key] = form
+
+            queryset = self.model.objects.filter(**filters, **extra_filters)
+            if form.instance.pk:
+                queryset = queryset.exclude(pk=form.instance.pk)
+            if queryset.exists():
+                form.add_error(None, message)
+                has_errors = True
+
+        return has_errors
+
+    def _unique_key_and_filters(self, form, fields):
+        key = []
+        filters = {}
+        for field_name in fields:
+            value = self._unique_field_value(form, field_name)
+            if value in (None, ''):
+                return None, None
+
+            model_field = self.model._meta.get_field(field_name)
+            if getattr(model_field, 'remote_field', None):
+                value_id = value.pk if hasattr(value, 'pk') else value
+                key.append((field_name, value_id))
+                filters[f'{field_name}_id'] = value_id
+            else:
+                key.append((field_name, value))
+                filters[field_name] = value
+
+        return tuple(key), filters
+
+    def _unique_field_value(self, form, field_name):
+        if field_name in form.cleaned_data:
+            return form.cleaned_data[field_name]
+        if getattr(self, 'fk', None) is not None and field_name == self.fk.name:
+            return self.instance
+        return getattr(form.instance, field_name, None)
+
+
 def fallback_group_for_detached_student(current_group_id=None):
     groups = (
         StudyGroup.objects
@@ -448,6 +595,32 @@ def fallback_group_for_detached_student(current_group_id=None):
 
 
 class StudentInlineFormSet(forms.models.BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+
+        selected_student_ids = set()
+        has_errors = False
+        for form in self.forms:
+            if not hasattr(form, 'cleaned_data') or not form.cleaned_data:
+                continue
+            if form.cleaned_data.get('DELETE'):
+                continue
+
+            selected_student = form.cleaned_data.get('student')
+            if selected_student is None:
+                if form.has_changed():
+                    form.add_error('student', 'Выберите ученика из списка.')
+                    has_errors = True
+                continue
+
+            if selected_student.pk in selected_student_ids:
+                form.add_error('student', 'Этот ученик уже выбран в таблице.')
+                has_errors = True
+            selected_student_ids.add(selected_student.pk)
+
+        if has_errors:
+            raise forms.ValidationError('Исправьте ошибки в строках таблицы.')
+
     def delete_existing(self, obj, commit=True):
         target_group = fallback_group_for_detached_student(
             current_group_id=getattr(self.instance, 'pk', None),
@@ -455,6 +628,84 @@ class StudentInlineFormSet(forms.models.BaseInlineFormSet):
         obj.group = target_group
         if commit:
             obj.save(update_fields=['group'])
+
+    def save_existing(self, form, obj, commit=True):
+        selected_student = form.cleaned_data.get('student') or obj
+        city_church = self._city_church_for_form(form, selected_student)
+
+        if selected_student.pk != obj.pk:
+            self.delete_existing(obj, commit=commit)
+            selected_student.group = self.instance
+            selected_student.city_church = city_church
+            if commit:
+                selected_student.save(update_fields=['group', 'city_church'])
+            return selected_student
+
+        obj.group = self.instance
+        obj.city_church = city_church
+        if commit:
+            obj.save(update_fields=['group', 'city_church'])
+        return obj
+
+    def save_new(self, form, commit=True):
+        selected_student = form.cleaned_data.get('student')
+        if selected_student is None:
+            return super().save_new(form, commit=commit)
+
+        selected_student.group = self.instance
+        selected_student.city_church = self._city_church_for_form(form, selected_student)
+        if commit:
+            selected_student.save(update_fields=['group', 'city_church'])
+        return selected_student
+
+    def _city_church_for_form(self, form, student):
+        city_church = form.cleaned_data.get('city_church', '')
+        selected_student = form.cleaned_data.get('student')
+        if (
+            selected_student is not None
+            and form.instance.pk
+            and selected_student.pk != form.instance.pk
+            and 'city_church' not in form.changed_data
+        ):
+            return student.city_church
+        if form.instance.pk or 'city_church' in form.changed_data:
+            return city_church
+        return city_church or student.city_church
+
+
+class GroupSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
+    unique_checks = (
+        {
+            'fields': ('group', 'subject'),
+            'message': 'В этой группе уже есть такой предмет.',
+        },
+    )
+
+
+class StudentSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
+    unique_checks = (
+        {
+            'fields': ('student', 'subject'),
+            'message': 'У ученика уже есть такой индивидуальный предмет.',
+        },
+        {
+            'fields': ('student',),
+            'condition': lambda cleaned_data: (
+                cleaned_data.get('is_specialty') and cleaned_data.get('is_active')
+            ),
+            'filters': {'is_specialty': True, 'is_active': True},
+            'message': 'У ученика уже есть активная специальность.',
+        },
+    )
+
+
+class SubjectResultInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
+    unique_checks = (
+        {
+            'fields': ('student', 'subject', 'academic_year'),
+            'message': 'Итог по этому предмету и учебному году уже есть у ученика.',
+        },
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -465,6 +716,7 @@ class StudentInlineFormSet(forms.models.BaseInlineFormSet):
 class GroupSubjectInline(admin.TabularInline):
     model = GroupSubject
     form = GroupSubjectAdminForm
+    formset = GroupSubjectInlineFormSet
     extra = 0
     autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'sort_order', 'is_active')
@@ -476,6 +728,7 @@ class GroupSubjectInline(admin.TabularInline):
 class GroupSubjectForTeacherInline(admin.TabularInline):
     model = GroupSubject
     form = GroupSubjectAdminForm
+    formset = GroupSubjectInlineFormSet
     extra = 1
     autocomplete_fields = ('group', 'subject')
     fields = ('group', 'subject', 'sort_order', 'is_active')
@@ -487,6 +740,7 @@ class GroupSubjectForTeacherInline(admin.TabularInline):
 class GroupSubjectForSubjectInline(admin.TabularInline):
     model = GroupSubject
     form = GroupSubjectAdminForm
+    formset = GroupSubjectInlineFormSet
     extra = 0
     autocomplete_fields = ('group', 'teacher')
     fields = ('group', 'teacher', 'sort_order', 'is_active')
@@ -499,6 +753,7 @@ class GroupSubjectForSubjectInline(admin.TabularInline):
 class StudentSubjectInline(admin.TabularInline):
     model = StudentSubject
     form = StudentSubjectAdminForm
+    formset = StudentSubjectInlineFormSet
     extra = 0
     autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'is_specialty', 'is_active')
@@ -510,6 +765,7 @@ class StudentSubjectInline(admin.TabularInline):
 class StudentSubjectForTeacherInline(admin.TabularInline):
     model = StudentSubject
     form = StudentSubjectAdminForm
+    formset = StudentSubjectInlineFormSet
     extra = 1
     autocomplete_fields = ('student', 'subject')
     fields = ('student', 'subject', 'is_specialty', 'is_active')
@@ -521,6 +777,7 @@ class StudentSubjectForTeacherInline(admin.TabularInline):
 class StudentSubjectForSubjectInline(admin.TabularInline):
     model = StudentSubject
     form = StudentSubjectAdminForm
+    formset = StudentSubjectInlineFormSet
     extra = 0
     autocomplete_fields = ('student', 'teacher')
     fields = ('student', 'teacher', 'is_specialty', 'is_active')
@@ -532,33 +789,16 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
 
 class StudentInline(admin.TabularInline):
     model = Student
-    form = StudentAdminForm
+    form = GroupStudentInlineForm
     formset = StudentInlineFormSet
     extra = 1
-    autocomplete_fields = ('user', 'instrument')
-    fields = (
-        'full_name',
-        'gender',
-        'birth_date',
-        'instrument',
-        'student_phone',
-        'city_church',
-        'music_education',
-        'specialty_teacher_inline',
-        'user',
-        'is_active',
-    )
-    readonly_fields = ('specialty_teacher_inline',)
+    fields = ('student', 'city_church')
     show_change_link = True
     verbose_name = 'Ученик'
     verbose_name_plural = 'Ученики группы'
 
-    @admin.display(description='Преподаватель по специальности')
-    def specialty_teacher_inline(self, obj):
-        if not obj or not obj.pk:
-            return '—'
-        teacher = obj.specialty_teacher
-        return teacher or '—'
+    class Media:
+        js = ('journal/group_student_inline.js',)
 
 
 class GradeInline(admin.TabularInline):
@@ -575,6 +815,7 @@ class GradeInline(admin.TabularInline):
 class SubjectResultInline(admin.TabularInline):
     model = SubjectResult
     form = SubjectResultAdminForm
+    formset = SubjectResultInlineFormSet
     extra = 0
     autocomplete_fields = ('subject', 'academic_year')
     fields = ('academic_year', 'subject', 'exam_grade', 'final_grade')

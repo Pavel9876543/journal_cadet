@@ -52,6 +52,7 @@
                 var option = fields.student.options[fields.student.selectedIndex];
                 if (option && option.dataset.groupId && fields.group && !fields.group.value) {
                     fields.group.value = option.dataset.groupId;
+                    syncSelectWidget(fields.group);
                 }
             }
             loadOptions();
@@ -93,35 +94,74 @@
             }
         }
 
+        function selectedOption(select) {
+            if (!select || select.selectedIndex < 0) {
+                return null;
+            }
+            return select.options[select.selectedIndex] || null;
+        }
+
+        function syncSelectWidget(select) {
+            if (
+                window.django
+                && window.django.jQuery
+                && select
+                && select.classList.contains('admin-autocomplete')
+            ) {
+                window.django.jQuery(select).trigger('change.select2');
+            }
+        }
+
         function replaceOptions(name, items) {
             var select = fields[name];
             if (!select) {
-                return false;
+                return;
             }
 
             var previousValue = select.value;
+            var previousOption = selectedOption(select);
+            var previousLabel = previousOption ? previousOption.textContent : previousValue;
+            var previousGroupId = previousOption && previousOption.dataset.groupId
+                ? previousOption.dataset.groupId
+                : '';
             var fragment = document.createDocumentFragment();
             var emptyOption = new Option(
-                items.length ? placeholders[name] : 'Нет допустимых вариантов',
+                items.length || previousValue ? placeholders[name] : 'Нет допустимых вариантов',
                 ''
             );
             fragment.appendChild(emptyOption);
 
+            var canKeepValue = false;
             items.forEach(function (item) {
-                var option = new Option(item.label, String(item.id));
+                var itemValue = String(item.id);
+                var option = new Option(
+                    item.label,
+                    itemValue,
+                    false,
+                    itemValue === previousValue
+                );
                 if (item.group_id) {
                     option.dataset.groupId = String(item.group_id);
                 }
                 fragment.appendChild(option);
+                if (itemValue === previousValue) {
+                    canKeepValue = true;
+                }
             });
 
+            if (previousValue && !canKeepValue) {
+                var preservedOption = new Option(previousLabel || previousValue, previousValue, false, true);
+                if (previousGroupId) {
+                    preservedOption.dataset.groupId = previousGroupId;
+                }
+                fragment.appendChild(preservedOption);
+                canKeepValue = true;
+            }
+
             select.replaceChildren(fragment);
-            var canKeepValue = items.some(function (item) {
-                return String(item.id) === previousValue;
-            });
             select.value = canKeepValue ? previousValue : '';
-            select.disabled = items.length === 0;
-            return Boolean(previousValue && !canKeepValue);
+            select.disabled = items.length === 0 && !previousValue;
+            syncSelectWidget(select);
         }
 
         function loadOptions() {
@@ -148,16 +188,10 @@
                     if (sequence !== requestSequence) {
                         return;
                     }
-                    var selectionWasCleared = false;
                     FIELD_NAMES.forEach(function (name) {
-                        if (replaceOptions(name, payload[name + 's'] || [])) {
-                            selectionWasCleared = true;
-                        }
+                        replaceOptions(name, payload[name + 's'] || []);
                     });
                     setLoading(false);
-                    if (selectionWasCleared) {
-                        loadOptions();
-                    }
                 })
                 .catch(function (error) {
                     if (error.name === 'AbortError') {
