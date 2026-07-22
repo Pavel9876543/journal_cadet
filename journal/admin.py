@@ -18,6 +18,14 @@ from .account_utils import (
     generate_temporary_password,
     split_user_name,
 )
+from .assignment_options import (
+    active_group_queryset,
+    active_student_queryset,
+    assignment_teacher_queryset,
+    group_subject_queryset,
+    is_default_specialty_assignment,
+    student_subject_queryset,
+)
 from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
 from .grade_options import (
     get_grade_groups,
@@ -264,51 +272,56 @@ class GradeAdminForm(forms.ModelForm):
             except (StudyGroup.DoesNotExist, ValueError, TypeError):
                 group = None
 
-        self.fields['group'].queryset = self._include_submitted_choice(
-            get_grade_groups(
-                student=student,
-                subject=subject,
-                teacher=teacher,
-                academic_year=academic_year,
-            ),
-            StudyGroup,
-            group_id,
-        )
-        self.fields['student'].queryset = self._include_submitted_choice(
-            get_grade_students(
-                group=group,
-                subject=subject,
-                teacher=teacher,
-                academic_year=academic_year,
-            ),
-            Student,
-            student_id,
-        )
-        self.fields['subject'].queryset = self._include_submitted_choice(
-            get_grade_subjects(
-                group=group,
-                student=student,
-                teacher=teacher,
-                academic_year=academic_year,
-            ),
-            Subject,
-            subject_id,
-        )
-        self.fields['teacher'].queryset = self._include_submitted_choice(
-            get_grade_teachers(
-                group=group,
-                student=student,
-                subject=subject,
-                academic_year=academic_year,
-            ),
-            Teacher,
-            teacher_id,
-        )
-        self.fields['group'].initial = group
-        self.fields['group'].widget.attrs.update({
-            'required': True,
-            'data-grade-options-url': reverse('grade_options_api'),
-        })
+        if 'group' in self.fields:
+            self.fields['group'].queryset = self._include_submitted_choice(
+                get_grade_groups(
+                    student=student,
+                    subject=subject,
+                    teacher=teacher,
+                    academic_year=academic_year,
+                ),
+                StudyGroup,
+                group_id,
+            )
+            self.fields['group'].initial = group
+            self.fields['group'].widget.attrs['required'] = True
+        if 'student' in self.fields:
+            self.fields['student'].queryset = self._include_submitted_choice(
+                get_grade_students(
+                    group=group,
+                    subject=subject,
+                    teacher=teacher,
+                    academic_year=academic_year,
+                ),
+                Student,
+                student_id,
+            )
+        if 'subject' in self.fields:
+            self.fields['subject'].queryset = self._include_submitted_choice(
+                get_grade_subjects(
+                    group=group,
+                    student=student,
+                    teacher=teacher,
+                    academic_year=academic_year,
+                ),
+                Subject,
+                subject_id,
+            )
+        if 'teacher' in self.fields:
+            self.fields['teacher'].queryset = self._include_submitted_choice(
+                get_grade_teachers(
+                    group=group,
+                    student=student,
+                    subject=subject,
+                    academic_year=academic_year,
+                ),
+                Teacher,
+                teacher_id,
+            )
+        dependency_url = reverse('grade_options_api')
+        for field_name in ('group', 'student', 'subject', 'teacher'):
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs['data-grade-options-url'] = dependency_url
 
     def _include_submitted_choice(self, queryset, model, raw_value):
         if not self.is_bound or not raw_value:
@@ -319,6 +332,9 @@ class GradeAdminForm(forms.ModelForm):
             ).distinct()
         except (TypeError, ValueError):
             return queryset
+
+    def _add_available_error(self, field_name, message):
+        self.add_error(field_name if field_name in self.fields else None, message)
 
     def clean(self):
         cleaned_data = super().clean()
@@ -332,11 +348,32 @@ class GradeAdminForm(forms.ModelForm):
             group = student.group
             cleaned_data['group'] = group
 
+        if academic_year is None and group is not None:
+            academic_year = group.academic_year
+            cleaned_data['academic_year'] = academic_year
+
+        if group is None:
+            self._add_available_error('group', 'Выберите группу или ученика с указанной группой.')
+
         if group and student and student.group_id != group.pk:
-            self.add_error('student', 'Ученик не состоит в выбранной группе.')
+            self._add_available_error('student', 'Ученик не состоит в выбранной группе.')
 
         if group and academic_year and group.academic_year_id != academic_year.pk:
-            self.add_error('academic_year', 'Группа относится к другому учебному году.')
+            self._add_available_error('academic_year', 'Группа относится к другому учебному году.')
+
+        if student and subject and cleaned_data.get('date'):
+            duplicate_qs = Grade.objects.filter(
+                student=student,
+                subject=subject,
+                date=cleaned_data['date'],
+            )
+            if self.instance.pk:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                self._add_available_error(
+                    'date',
+                    'У этого ученика уже есть оценка по выбранному предмету за эту дату.',
+                )
 
         if group and student and subject and teacher:
             teacher_is_allowed = get_grade_teachers(
@@ -346,7 +383,7 @@ class GradeAdminForm(forms.ModelForm):
                 academic_year=academic_year,
             ).filter(pk=teacher.pk).exists()
             if not teacher_is_allowed:
-                self.add_error(
+                self._add_available_error(
                     'teacher',
                     'Преподаватель не ведёт выбранный предмет у этого ученика.',
                 )
@@ -420,15 +457,48 @@ class SubjectResultAdminForm(forms.ModelForm):
         except (TypeError, ValueError):
             return queryset
 
-    def _post_clean(self):
-        if (
+    def clean(self):
+        cleaned_data = super().clean()
+        if self._is_unchanged_existing_inline():
+            return cleaned_data
+
+        student = cleaned_data.get('student')
+        subject = cleaned_data.get('subject')
+        academic_year = cleaned_data.get('academic_year')
+
+        if student and subject:
+            subject_is_allowed = get_grade_subjects(
+                student=student,
+                academic_year=academic_year,
+            ).filter(pk=subject.pk).exists()
+            if not subject_is_allowed:
+                self.add_error('subject', 'Этот предмет не назначен выбранному ученику.')
+
+        if student and subject and academic_year:
+            duplicate_qs = SubjectResult.objects.filter(
+                student=student,
+                subject=subject,
+                academic_year=academic_year,
+            )
+            if self.instance.pk:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                self.add_error('subject', 'У ученика уже есть итог по этому предмету за выбранный учебный год.')
+
+        return cleaned_data
+
+    def _is_unchanged_existing_inline(self):
+        return (
             self.is_bound
             and self.prefix
             and self.prefix.startswith('subject_results-')
             and self.instance
             and self.instance.pk
             and not self.has_changed()
-        ):
+        )
+
+    def _post_clean(self):
+        if self._is_unchanged_existing_inline():
             return
         super()._post_clean()
 
@@ -459,31 +529,46 @@ class GroupSubjectAdminForm(forms.ModelForm):
         model = GroupSubject
         fields = '__all__'
 
+    class Media:
+        js = ('journal/admin_assignment_dependencies.js',)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        subject_id = self._raw_value('subject')
+        subject = self._selected_object(Subject.objects.all(), subject_id)
+
         if 'group' in self.fields:
             self.fields['group'].queryset = self._include_selected_choice(
-                StudyGroup.objects.filter(is_active=True).select_related('academic_year'),
+                active_group_queryset(),
                 StudyGroup,
                 'group',
             )
         if 'subject' in self.fields:
             self.fields['subject'].queryset = self._include_selected_choice(
-                Subject.objects.filter(is_specialty=False, is_active=True),
+                group_subject_queryset(),
                 Subject,
                 'subject',
             )
         if 'teacher' in self.fields:
             self.fields['teacher'].queryset = self._include_selected_choice(
-                Teacher.objects.filter(is_active=True),
+                assignment_teacher_queryset(subject),
                 Teacher,
                 'teacher',
             )
+        self._attach_dependency_attrs('group_subject')
 
     def _raw_value(self, field_name):
         if self.is_bound:
             return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
         return getattr(self.instance, f'{field_name}_id', None)
+
+    def _selected_object(self, queryset, raw_value):
+        if not raw_value:
+            return None
+        try:
+            return queryset.filter(pk=raw_value).first()
+        except (TypeError, ValueError):
+            return None
 
     def _include_selected_choice(self, queryset, model, field_name):
         raw_value = self._raw_value(field_name)
@@ -493,6 +578,36 @@ class GroupSubjectAdminForm(forms.ModelForm):
             return model.objects.filter(Q(pk__in=queryset.values('pk')) | Q(pk=raw_value)).distinct()
         except (TypeError, ValueError):
             return queryset
+
+    def _attach_dependency_attrs(self, assignment_type):
+        url = reverse('assignment_options_api')
+        for field_name in ('group', 'subject', 'teacher'):
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs.update({
+                    'data-assignment-options-url': url,
+                    'data-assignment-type': assignment_type,
+                })
+
+    def clean(self):
+        cleaned_data = super().clean()
+        group = cleaned_data.get('group')
+        subject = cleaned_data.get('subject')
+        teacher = cleaned_data.get('teacher')
+
+        if subject and subject.is_specialty:
+            self.add_error('subject', 'Индивидуальный предмет нельзя назначить группе.')
+
+        if teacher and not teacher.is_active:
+            self.add_error('teacher', 'Выберите активного преподавателя.')
+
+        if group and subject:
+            duplicate_qs = GroupSubject.objects.filter(group=group, subject=subject)
+            if self.instance.pk:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                self.add_error('subject', 'В этой группе уже есть такой предмет.')
+
+        return cleaned_data
 
 
 class StudentSubjectAdminForm(forms.ModelForm):
@@ -500,31 +615,46 @@ class StudentSubjectAdminForm(forms.ModelForm):
         model = StudentSubject
         fields = '__all__'
 
+    class Media:
+        js = ('journal/admin_assignment_dependencies.js',)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        subject_id = self._raw_value('subject')
+        subject = self._selected_object(Subject.objects.all(), subject_id)
+
         if 'student' in self.fields:
             self.fields['student'].queryset = self._include_selected_choice(
-                Student.objects.filter(is_active=True).select_related('group'),
+                active_student_queryset(),
                 Student,
                 'student',
             )
         if 'subject' in self.fields:
             self.fields['subject'].queryset = self._include_selected_choice(
-                Subject.objects.filter(is_specialty=True, is_active=True),
+                student_subject_queryset(),
                 Subject,
                 'subject',
             )
         if 'teacher' in self.fields:
             self.fields['teacher'].queryset = self._include_selected_choice(
-                Teacher.objects.filter(is_active=True),
+                assignment_teacher_queryset(subject),
                 Teacher,
                 'teacher',
             )
+        self._attach_dependency_attrs('student_subject')
 
     def _raw_value(self, field_name):
         if self.is_bound:
             return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
         return getattr(self.instance, f'{field_name}_id', None)
+
+    def _selected_object(self, queryset, raw_value):
+        if not raw_value:
+            return None
+        try:
+            return queryset.filter(pk=raw_value).first()
+        except (TypeError, ValueError):
+            return None
 
     def _include_selected_choice(self, queryset, model, field_name):
         raw_value = self._raw_value(field_name)
@@ -534,6 +664,52 @@ class StudentSubjectAdminForm(forms.ModelForm):
             return model.objects.filter(Q(pk__in=queryset.values('pk')) | Q(pk=raw_value)).distinct()
         except (TypeError, ValueError):
             return queryset
+
+    def _attach_dependency_attrs(self, assignment_type):
+        url = reverse('assignment_options_api')
+        for field_name in ('student', 'subject', 'teacher'):
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs.update({
+                    'data-assignment-options-url': url,
+                    'data-assignment-type': assignment_type,
+                })
+        if 'is_specialty' in self.fields:
+            self.fields['is_specialty'].widget.attrs['data-assignment-specialty-target'] = '1'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        student = cleaned_data.get('student')
+        subject = cleaned_data.get('subject')
+        teacher = cleaned_data.get('teacher')
+        is_active = cleaned_data.get('is_active')
+
+        if subject:
+            cleaned_data['is_specialty'] = is_default_specialty_assignment(subject)
+            if not subject.is_specialty:
+                self.add_error('subject', 'Групповой предмет нельзя назначить индивидуальному ученику.')
+
+        if teacher and not teacher.is_active:
+            self.add_error('teacher', 'Выберите активного преподавателя.')
+
+        if student and subject:
+            duplicate_qs = StudentSubject.objects.filter(student=student, subject=subject)
+            if self.instance.pk:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                self.add_error('subject', 'У ученика уже есть такой индивидуальный предмет.')
+
+        if student and cleaned_data.get('is_specialty') and is_active:
+            specialty_qs = StudentSubject.objects.filter(
+                student=student,
+                is_specialty=True,
+                is_active=True,
+            )
+            if self.instance.pk:
+                specialty_qs = specialty_qs.exclude(pk=self.instance.pk)
+            if specialty_qs.exists():
+                self.add_error('is_specialty', 'У ученика уже есть активная специальность.')
+
+        return cleaned_data
 
 
 class StudentChoiceWithCityWidget(forms.Select):
@@ -860,11 +1036,14 @@ class GradeInline(admin.TabularInline):
     model = Grade
     form = GradeAdminForm
     extra = 0
-    autocomplete_fields = ('subject', 'teacher', 'academic_year')
+    autocomplete_fields = ('academic_year',)
     fields = ('date', 'subject', 'teacher', 'value', 'academic_year', 'comment')
     ordering = ('-date',)
     show_change_link = True
     classes = ('collapse',)
+
+    class Media:
+        js = ('journal/grade_dependencies.js',)
 
 
 class SubjectResultInline(admin.TabularInline):

@@ -71,9 +71,20 @@
         function handleChange(name) {
             if (name === 'student') {
                 var option = fields.student.options[fields.student.selectedIndex];
-                if (option && option.dataset.groupId && fields.group && !fields.group.value) {
+                if (option && option.dataset.groupId && fields.group) {
                     fields.group.value = option.dataset.groupId;
                     syncSelectWidget(fields.group);
+                }
+                if (option && option.dataset.academicYearId && fields.academic_year) {
+                    fields.academic_year.value = option.dataset.academicYearId;
+                    syncSelectWidget(fields.academic_year);
+                }
+            }
+            if (name === 'group') {
+                var groupOption = fields.group.options[fields.group.selectedIndex];
+                if (groupOption && groupOption.dataset.academicYearId && fields.academic_year) {
+                    fields.academic_year.value = groupOption.dataset.academicYearId;
+                    syncSelectWidget(fields.academic_year);
                 }
             }
             loadOptions(name);
@@ -117,8 +128,18 @@
         function setLoading(isLoading) {
             form.setAttribute('aria-busy', isLoading ? 'true' : 'false');
             var status = form.querySelector('[data-grade-options-status]');
+            if (!status && source && source.parentNode) {
+                status = document.createElement('span');
+                status.dataset.gradeOptionsStatus = '1';
+                status.className = 'journal-admin-field-status';
+                var wrapper = source.closest('.related-widget-wrapper') || source.parentElement;
+                if (wrapper && wrapper.parentNode) {
+                    wrapper.parentNode.insertBefore(status, wrapper.nextSibling);
+                }
+            }
             if (status) {
                 status.textContent = isLoading ? 'Обновляем доступные варианты...' : '';
+                status.classList.remove('journal-admin-field-status--error');
             }
         }
 
@@ -152,6 +173,9 @@
             var previousGroupId = previousOption && previousOption.dataset.groupId
                 ? previousOption.dataset.groupId
                 : '';
+            var previousAcademicYearId = previousOption && previousOption.dataset.academicYearId
+                ? previousOption.dataset.academicYearId
+                : '';
             var fragment = document.createDocumentFragment();
             var emptyOption = new Option(
                 items.length || previousValue ? placeholders[name] : 'Нет допустимых вариантов',
@@ -171,6 +195,9 @@
                 if (item.group_id) {
                     option.dataset.groupId = String(item.group_id);
                 }
+                if (item.academic_year_id) {
+                    option.dataset.academicYearId = String(item.academic_year_id);
+                }
                 fragment.appendChild(option);
                 if (itemValue === previousValue) {
                     canKeepValue = true;
@@ -182,15 +209,53 @@
                 if (previousGroupId) {
                     preservedOption.dataset.groupId = previousGroupId;
                 }
+                if (previousAcademicYearId) {
+                    preservedOption.dataset.academicYearId = previousAcademicYearId;
+                }
                 fragment.appendChild(preservedOption);
                 canKeepValue = true;
             }
 
             select.replaceChildren(fragment);
             select.value = canKeepValue ? previousValue : '';
-            select.disabled = items.length === 0 && !previousValue;
+            var valueChanged = Boolean(previousValue && !canKeepValue);
+            if (!select.value && items.length === 1) {
+                select.value = String(items[0].id);
+                valueChanged = true;
+            }
+            select.disabled = items.length === 0 && !select.value;
             syncSelectWidget(select);
-            return Boolean(previousValue && !canKeepValue);
+            return valueChanged;
+        }
+
+        function applyDefaults(defaults, changedField) {
+            var changed = false;
+            if (!defaults) {
+                return false;
+            }
+            if (fields.group && defaults.group_id && (changedField === 'student' || !fields.group.value)) {
+                if (fields.group.value !== String(defaults.group_id)) {
+                    fields.group.value = String(defaults.group_id);
+                    syncSelectWidget(fields.group);
+                    changed = true;
+                }
+            }
+            if (
+                fields.academic_year
+                && defaults.academic_year_id
+                && (
+                    changedField === 'group'
+                    || changedField === 'student'
+                    || !fields.academic_year.value
+                )
+            ) {
+                if (fields.academic_year.value !== String(defaults.academic_year_id)) {
+                    fields.academic_year.value = String(defaults.academic_year_id);
+                    syncSelectWidget(fields.academic_year);
+                    changed = true;
+                }
+            }
+            return changed;
         }
 
         function loadOptions(changedField) {
@@ -224,6 +289,7 @@
                             selectionWasCleared = true;
                         }
                     });
+                    selectionWasCleared = applyDefaults(payload.defaults || {}, changedField) || selectionWasCleared;
                     setLoading(false);
                     if (selectionWasCleared) {
                         loadOptions(changedField);
@@ -236,7 +302,8 @@
                     setLoading(false);
                     var status = form.querySelector('[data-grade-options-status]');
                     if (status) {
-                        status.textContent = 'Не удалось обновить доступные варианты.';
+                        status.textContent = 'Не удалось обновить доступные варианты. Проверьте выбранные значения и попробуйте еще раз.';
+                        status.classList.add('journal-admin-field-status--error');
                     }
                 });
         }

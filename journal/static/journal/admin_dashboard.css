@@ -542,6 +542,8 @@ body.change-list #change-list-filters {
 
 body.change-list #change-list-filters > .d-flex {
     align-items: stretch !important;
+    flex-wrap: wrap;
+    justify-content: flex-start !important;
     gap: 10px !important;
     padding: 14px;
     border: 1px solid var(--journal-admin-border);
@@ -552,6 +554,7 @@ body.change-list #change-list-filters > .d-flex {
 
 body.change-list #changelist-search {
     display: flex;
+    order: 2;
     flex: 1 1 660px;
     flex-wrap: wrap;
     align-items: stretch !important;
@@ -600,10 +603,11 @@ body.change-list #change-list-filters .small.quiet {
 
 body.change-list #change-list-filters .object-tools {
     display: flex;
+    order: 1;
     flex: 0 0 auto;
     flex-wrap: wrap;
     align-items: stretch;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 8px;
     margin: 0;
     padding: 0;
@@ -614,10 +618,32 @@ body.change-list #change-list-filters .object-tools a,
 body.change-list #change-list-filters .object-tools button,
 body.change-list #change-list-filters > .d-flex > a.btn {
     display: inline-flex;
+    order: 1;
     align-items: center;
     justify-content: center;
     min-height: 38px;
     white-space: nowrap;
+}
+
+.journal-admin-field-status {
+    display: block;
+    margin-top: 6px;
+    color: var(--journal-admin-muted);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.journal-admin-field-status:empty {
+    display: none;
+}
+
+.journal-admin-field-status--error {
+    color: #b42318;
+}
+
+html[data-bs-theme="dark"] .journal-admin-field-status--error {
+    color: #ffb4ab;
 }
 
 body.change-list #changelist {

@@ -1318,6 +1318,8 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
             [item['id'] for item in payload['students']],
             [self.data['student'].pk],
         )
+        self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
+        self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
 
     def test_options_keep_currently_selected_values_when_other_field_changes(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
@@ -1394,6 +1396,55 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         response = self.client.get(reverse('grade_options_api'))
 
         self.assertEqual(response.status_code, 403)
+
+
+class AssignmentOptionsApiTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.data = self.create_base_journal()
+        self.admin_user = User.objects.create_superuser(
+            username='assignment_options_admin',
+            password='Pass12345!',
+        )
+
+    def test_student_subject_options_return_defaults_for_selected_subject(self):
+        extra_subject = self.create_subject(
+            name='Индивидуальная импровизация',
+            is_specialty=True,
+        )
+        self.client.login(username='assignment_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('assignment_options_api'),
+            {
+                'type': 'student_subject',
+                'student': self.data['student'].pk,
+                'subject': extra_subject.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload['defaults']['is_specialty'])
+        self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
+        self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
+        self.assertIn(extra_subject.pk, [item['id'] for item in payload['subjects']])
+
+    def test_group_subject_options_return_next_sort_order_and_group_year(self):
+        self.client.login(username='assignment_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('assignment_options_api'),
+            {
+                'type': 'group_subject',
+                'group': self.data['group'].pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
+        self.assertEqual(payload['defaults']['sort_order'], 110)
+        self.assertIn(self.data['group'].pk, [item['id'] for item in payload['groups']])
 
 
 class ViewTests(JournalTestDataMixin, TestCase):
@@ -1687,6 +1738,14 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Квалификации преподавателей')
         self.assertContains(response, reverse('admin:journal_teachersubject_changelist'))
 
+    def test_admin_changelist_add_button_is_ordered_before_search(self):
+        css = Path('journal/static/journal/admin_dashboard.css').read_text(encoding='utf-8')
+
+        self.assertIn('body.change-list #change-list-filters .object-tools', css)
+        self.assertIn('order: 1;', css)
+        self.assertIn('body.change-list #changelist-search', css)
+        self.assertIn('order: 2;', css)
+
     def test_related_models_are_visible_in_admin_without_teacher_qualification_inlines(self):
         request = type('Request', (), {'user': self.admin_user})()
 
@@ -1854,7 +1913,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(
             response,
-            'Предмет группы с такими значениями полей Группа и Предмет уже существует.',
+            'В этой группе уже есть такой предмет.',
         )
 
     def test_group_admin_allows_editing_and_deleting_students_inline(self):
@@ -1935,6 +1994,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertIs(group_admin.form, GroupSubjectAdminForm)
         self.assertEqual(group_admin.autocomplete_fields, ())
+        self.assertIn('journal/admin_assignment_dependencies.js', GroupSubjectAdminForm.Media.js)
         self.assertNotIn(inactive_group, group_form.fields['group'].queryset)
         self.assertNotIn(inactive_teacher, group_form.fields['teacher'].queryset)
         self.assertNotIn(inactive_subject, group_form.fields['subject'].queryset)
@@ -1942,8 +2002,45 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertNotIn(data['specialty'], group_form.fields['subject'].queryset)
         self.assertIs(student_admin.form, StudentSubjectAdminForm)
         self.assertEqual(student_admin.autocomplete_fields, ())
+        self.assertIn('journal/admin_assignment_dependencies.js', StudentSubjectAdminForm.Media.js)
         self.assertIn(data['specialty'], student_form.fields['subject'].queryset)
         self.assertNotIn(data['solfeggio'], student_form.fields['subject'].queryset)
+
+    def test_student_subject_admin_form_autofills_specialty_flag_from_subject(self):
+        data = self.create_base_journal()
+        extra_subject = self.create_subject(
+            name='Индивидуальная импровизация',
+            is_specialty=True,
+        )
+        student = self.create_student(
+            full_name='Ученик без специальности',
+            group=data['group'],
+            instrument=data['instrument'],
+            username='student_without_specialty',
+        )
+
+        extra_form = StudentSubjectAdminForm(
+            data={
+                'student': student.pk,
+                'subject': extra_subject.pk,
+                'teacher': data['teacher'].pk,
+                'is_specialty': 'on',
+                'is_active': 'on',
+            },
+        )
+        specialty_form = StudentSubjectAdminForm(
+            data={
+                'student': student.pk,
+                'subject': data['specialty'].pk,
+                'teacher': data['other_teacher'].pk,
+                'is_active': 'on',
+            },
+        )
+
+        self.assertTrue(extra_form.is_valid(), extra_form.errors)
+        self.assertFalse(extra_form.cleaned_data['is_specialty'])
+        self.assertTrue(specialty_form.is_valid(), specialty_form.errors)
+        self.assertTrue(specialty_form.cleaned_data['is_specialty'])
 
     def test_subject_result_admin_form_limits_subjects_by_student_assignments(self):
         data = self.create_base_journal()
@@ -2065,7 +2162,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(
             response,
-            'Индивидуальный предмет ученика с такими значениями полей Ученик и Предмет уже существует.',
+            'У ученика уже есть такой индивидуальный предмет.',
         )
 
     def test_student_admin_uses_prefetched_specialty_without_row_queries(self):
@@ -2523,6 +2620,7 @@ class AsyncDatabaseViewTests(TestCase):
         async_views = (
             views.password_help_view,
             views.grade_options_api,
+            views.assignment_options_api,
             views.journal_view,
             views.course_registration_view,
             views.course_registration_api,

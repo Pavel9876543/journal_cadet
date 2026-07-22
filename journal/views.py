@@ -16,7 +16,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q, QuerySet
+from django.db.models import Max, Q, QuerySet
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -26,6 +26,14 @@ from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
 
+from .assignment_options import (
+    active_group_queryset,
+    active_student_queryset,
+    assignment_teacher_queryset,
+    group_subject_queryset,
+    is_default_specialty_assignment,
+    student_subject_queryset,
+)
 from .forms import (
     CourseApplicationPublicForm,
     GradeCreateForm,
@@ -168,9 +176,23 @@ def _grade_options_api_sync(request):
     if not strict_options or changed_field == 'teacher':
         teachers = _include_selected_option(teachers, Teacher, teacher)
 
+    groups = groups.select_related('academic_year')
+    students = students.select_related('group', 'group__academic_year')
+    defaults = {}
+    if student is not None and student.group_id:
+        defaults['group_id'] = student.group_id
+        if student.group.academic_year_id:
+            defaults['academic_year_id'] = student.group.academic_year_id
+    elif group is not None and group.academic_year_id:
+        defaults['academic_year_id'] = group.academic_year_id
+
     return JsonResponse({
         'groups': [
-            {'id': group.pk, 'label': str(group)}
+            {
+                'id': group.pk,
+                'label': str(group),
+                'academic_year_id': group.academic_year_id,
+            }
             for group in groups
         ],
         'students': [
@@ -178,6 +200,7 @@ def _grade_options_api_sync(request):
                 'id': student.pk,
                 'label': student.full_name,
                 'group_id': student.group_id,
+                'academic_year_id': student.group.academic_year_id if student.group_id else None,
             }
             for student in students
         ],
@@ -189,7 +212,126 @@ def _grade_options_api_sync(request):
             {'id': teacher.pk, 'label': teacher.full_name}
             for teacher in teachers
         ],
+        'defaults': defaults,
     })
+
+
+@login_required
+@user_passes_test(lambda user: user.is_active and user.is_staff)
+@require_GET
+async def assignment_options_api(request):
+    return await _run_db_sync(_assignment_options_api_sync, request)
+
+
+def _assignment_options_api_sync(request):
+    assignment_type = request.GET.get('type')
+    if assignment_type not in {'group_subject', 'student_subject'}:
+        return JsonResponse(
+            {'error': 'Не удалось определить тип таблицы для связанных полей.'},
+            status=400,
+        )
+
+    group = _get_selected_object(
+        StudyGroup.objects.filter(is_active=True).select_related('academic_year'),
+        request.GET.get('group'),
+    )
+    student = _get_selected_object(
+        Student.objects.filter(is_active=True).select_related('group', 'group__academic_year'),
+        request.GET.get('student'),
+    )
+    subject = _get_selected_object(
+        Subject.objects.filter(is_active=True),
+        request.GET.get('subject'),
+    )
+    teacher = _get_selected_object(
+        Teacher.objects.filter(is_active=True),
+        request.GET.get('teacher'),
+    )
+
+    if assignment_type == 'group_subject':
+        subjects = group_subject_queryset()
+        defaults = _group_subject_defaults(group)
+    else:
+        subjects = student_subject_queryset()
+        defaults = _student_subject_defaults(student, subject)
+
+    groups = active_group_queryset()
+    students = active_student_queryset()
+    teachers = assignment_teacher_queryset(subject)
+
+    groups = _include_selected_option(groups, StudyGroup, group)
+    students = _include_selected_option(students, Student, student)
+    subjects = _include_selected_option(subjects, Subject, subject)
+    teachers = _include_selected_option(teachers, Teacher, teacher)
+
+    groups = groups.select_related('academic_year')
+    students = students.select_related('group', 'group__academic_year')
+    if teacher is None and teachers.count() == 1:
+        defaults['teacher_id'] = teachers.values_list('pk', flat=True).first()
+
+    return JsonResponse({
+        'groups': [
+            {
+                'id': item.pk,
+                'label': str(item),
+                'academic_year_id': item.academic_year_id,
+            }
+            for item in groups
+        ],
+        'students': [
+            {
+                'id': item.pk,
+                'label': item.full_name,
+                'group_id': item.group_id,
+                'academic_year_id': item.group.academic_year_id if item.group_id else None,
+            }
+            for item in students
+        ],
+        'subjects': [
+            {
+                'id': item.pk,
+                'label': item.name,
+                'is_individual': item.is_specialty,
+                'default_is_specialty': is_default_specialty_assignment(item),
+                'final_grade_type': item.final_grade_type,
+            }
+            for item in subjects
+        ],
+        'teachers': [
+            {'id': item.pk, 'label': item.full_name}
+            for item in teachers
+        ],
+        'defaults': defaults,
+    })
+
+
+def _group_subject_defaults(group: StudyGroup | None) -> dict:
+    defaults = {}
+    if group is None:
+        return defaults
+
+    if group.academic_year_id:
+        defaults['academic_year_id'] = group.academic_year_id
+
+    max_sort_order = (
+        GroupSubject.objects
+        .filter(group=group)
+        .aggregate(value=Max('sort_order'))['value']
+    )
+    defaults['sort_order'] = (max_sort_order or 0) + 10
+    return defaults
+
+
+def _student_subject_defaults(student: Student | None, subject: Subject | None) -> dict:
+    defaults = {}
+    if student is not None and student.group_id:
+        defaults['group_id'] = student.group_id
+        defaults['academic_year_id'] = student.group.academic_year_id
+    if subject is not None:
+        defaults['is_specialty'] = is_default_specialty_assignment(subject)
+        defaults['subject_is_individual'] = subject.is_specialty
+        defaults['final_grade_type'] = subject.final_grade_type
+    return defaults
 
 
 def _calculate_average(grade_values: Iterable[str]) -> str:
