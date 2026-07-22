@@ -409,6 +409,9 @@ class Student(models.Model):
     def specialty_assignment(self):
         if not self.pk:
             return None
+        prefetched_assignments = getattr(self, 'active_specialty_assignments', None)
+        if prefetched_assignments is not None:
+            return prefetched_assignments[0] if prefetched_assignments else None
         return (
             self.individual_subjects
             .select_related('subject', 'teacher')

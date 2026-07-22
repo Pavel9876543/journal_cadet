@@ -12,8 +12,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.db import connection
 from django.db.models import Count
 from django.test import Client, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
 
@@ -44,6 +46,7 @@ from journal.grade_options import (
     get_grade_teachers,
 )
 from journal.registration_utils import minimum_birth_date_for_age, normalize_parent_contacts
+from journal.views import _build_journal_tables
 from journal.models import (
     AcademicYear,
     CourseApplication,
@@ -1403,6 +1406,50 @@ class ViewTests(JournalTestDataMixin, TestCase):
             f'name="final__{self.data["solfeggio"].pk}__{self.data["student"].pk}"',
         )
 
+    def test_journal_table_builder_batches_assignment_queries(self):
+        second_group = self.create_group(
+            name='Вторая группа',
+            academic_year=self.data['year'],
+        )
+        second_student = self.create_student(
+            full_name='Ученик Второй Группы',
+            group=second_group,
+            instrument=self.data['instrument'],
+            username='student_second_group',
+        )
+        extra_subject = self.create_subject(name='Хор')
+        GroupSubject.objects.create(
+            group=second_group,
+            subject=extra_subject,
+            teacher=self.data['teacher'],
+        )
+
+        groups = [self.data['group'], second_group]
+        subjects = [
+            self.data['solfeggio'],
+            self.data['literature'],
+            self.data['specialty'],
+            extra_subject,
+        ]
+        students = [self.data['student'], second_student]
+
+        with CaptureQueriesContext(connection) as captured_queries:
+            journal_tables = _build_journal_tables(
+                groups=groups,
+                subjects=subjects,
+                students=students,
+                grade_qs=Grade.objects.none(),
+                results_qs=SubjectResult.objects.none(),
+                selected_academic_year=self.data['year'],
+            )
+
+        self.assertGreaterEqual(len(journal_tables), 4)
+        self.assertLessEqual(
+            len(captured_queries),
+            3,
+            [query['sql'] for query in captured_queries],
+        )
+
     def test_student_cannot_edit_inline_grades(self):
         self.client.login(username='student_sidorov', password='Pass12345!')
 
@@ -1531,6 +1578,44 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(
             [inline.model for inline in SubjectAdmin.inlines],
             [TeacherSubject, GroupSubject, StudentSubject],
+        )
+
+    def test_student_admin_uses_prefetched_specialty_without_row_queries(self):
+        data = self.create_base_journal()
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Student]
+        student = model_admin.get_queryset(request).get(pk=data['student'].pk)
+
+        with CaptureQueriesContext(connection) as captured_queries:
+            self.assertEqual(model_admin.specialty_teacher_display(student), data['other_teacher'])
+            self.assertEqual(model_admin.specialty_subject_display(student), data['specialty'])
+
+        self.assertEqual(
+            len(captured_queries),
+            0,
+            [query['sql'] for query in captured_queries],
+        )
+
+    def test_grade_admin_uses_assignment_annotations_without_row_queries(self):
+        data = self.create_base_journal()
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            date=date(2025, 10, 8),
+            value='5',
+        )
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Grade]
+        grade_from_queryset = model_admin.get_queryset(request).get(pk=grade.pk)
+
+        with CaptureQueriesContext(connection) as captured_queries:
+            self.assertEqual(model_admin.source_type_display(grade_from_queryset), 'Групповой предмет')
+
+        self.assertEqual(
+            len(captured_queries),
+            0,
+            [query['sql'] for query in captured_queries],
         )
 
     def test_changing_group_assignment_in_admin_cascades_to_existing_grades(self):

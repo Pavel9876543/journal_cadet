@@ -1,10 +1,11 @@
+from datetime import date
 from urllib.parse import urlencode
 
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
@@ -33,6 +34,7 @@ from .models import (
     TeacherSubject,
     TemporaryCredential,
 )
+from .registration_utils import calculate_age
 
 
 admin.site.site_header = 'Электронный журнал музыкальной школы'
@@ -899,6 +901,21 @@ class StudentAdmin(admin.ModelAdmin):
         }),
     )
 
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.prefetch_related(
+            Prefetch(
+                'individual_subjects',
+                queryset=(
+                    StudentSubject.objects
+                    .filter(is_specialty=True, is_active=True)
+                    .select_related('subject', 'teacher')
+                    .order_by('subject__name')
+                ),
+                to_attr='active_specialty_assignments',
+            ),
+        )
+
     @admin.display(description='Пользователь')
     def user_link(self, obj):
         return admin_change_link(obj.user)
@@ -1054,6 +1071,27 @@ class GradeAdmin(admin.ModelAdmin):
     class Media:
         js = ('journal/grade_dependencies.js',)
 
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            _is_group_subject=Exists(
+                GroupSubject.objects.filter(
+                    group_id=OuterRef('student__group_id'),
+                    subject_id=OuterRef('subject_id'),
+                    teacher_id=OuterRef('teacher_id'),
+                    is_active=True,
+                ),
+            ),
+            _is_individual_subject=Exists(
+                StudentSubject.objects.filter(
+                    student_id=OuterRef('student_id'),
+                    subject_id=OuterRef('subject_id'),
+                    teacher_id=OuterRef('teacher_id'),
+                    is_active=True,
+                ),
+            ),
+        )
+
     @admin.display(description='Группа')
     def student_group_display(self, obj):
         if obj and obj.student_id:
@@ -1064,9 +1102,16 @@ class GradeAdmin(admin.ModelAdmin):
     def source_type_display(self, obj):
         if not obj or not obj.pk:
             return 'Будет проверено при сохранении'
-        if obj.is_group_subject:
+        is_group_subject = getattr(obj, '_is_group_subject', None)
+        if is_group_subject is None:
+            is_group_subject = obj.is_group_subject
+        if is_group_subject:
             return 'Групповой предмет'
-        if obj.is_individual_subject:
+
+        is_individual_subject = getattr(obj, '_is_individual_subject', None)
+        if is_individual_subject is None:
+            is_individual_subject = obj.is_individual_subject
+        if is_individual_subject:
             return 'Индивидуальный предмет'
         return 'Нет активного назначения'
 
@@ -1228,13 +1273,29 @@ class CourseApplicationAdmin(admin.ModelAdmin):
         }),
     )
 
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        self._course_age_reference_date = (
+            CourseRegistrationSettings.objects
+            .filter(pk=1)
+            .values_list('course_starts_on', flat=True)
+            .first()
+            or date.today()
+        )
+        return qs
+
     @admin.display(description='ФИО', ordering='last_name')
     def full_name_display(self, obj):
         return obj.full_name
 
     @admin.display(description='Возраст на начало курсов')
     def age_display(self, obj):
-        return obj.age if obj.birth_date else '—'
+        if not obj.birth_date:
+            return '—'
+        reference_date = getattr(self, '_course_age_reference_date', None)
+        if reference_date is None:
+            return obj.age
+        return calculate_age(obj.birth_date, today=reference_date)
 
     @admin.display(description='Ученик создан', boolean=True)
     def has_journal_student_display(self, obj):

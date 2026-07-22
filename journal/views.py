@@ -289,7 +289,8 @@ def _students_for_table(
     group: StudyGroup,
     subject: Subject,
     students_by_group: dict[int, list[Student]],
-    teacher: Teacher | None = None,
+    group_subject_pairs: set[tuple[int, int]],
+    individual_students_by_pair: dict[tuple[int, int], set[int]],
 ) -> list[Student]:
     """
     Возвращает учеников, которые должны попасть в таблицу конкретного предмета.
@@ -298,38 +299,62 @@ def _students_for_table(
     1) предмет назначен всей его группе через GroupSubject;
     2) предмет назначен ему индивидуально через StudentSubject.
 
-    Для преподавателя дополнительно учитывается только его назначение.
+    Карты назначений уже отфильтрованы по роли и выбранному преподавателю.
     """
     group_students = students_by_group.get(group.pk, [])
     if not group_students:
         return []
 
-    group_assignment = GroupSubject.objects.filter(
-        group=group,
-        subject=subject,
-        is_active=True,
-    )
-    individual_student_ids = StudentSubject.objects.filter(
-        student__group=group,
-        subject=subject,
-        is_active=True,
-        student__is_active=True,
-    )
-
-    if teacher is not None:
-        group_assignment = group_assignment.filter(teacher=teacher)
-        individual_student_ids = individual_student_ids.filter(teacher=teacher)
-
+    assignment_key = (group.pk, subject.pk)
     table_student_ids: set[int] = set()
-    if group_assignment.exists():
+    if assignment_key in group_subject_pairs:
         table_student_ids.update(student.pk for student in group_students)
 
-    table_student_ids.update(individual_student_ids.values_list('student_id', flat=True))
+    table_student_ids.update(individual_students_by_pair.get(assignment_key, set()))
 
     if not table_student_ids:
         return []
 
     return [student for student in group_students if student.pk in table_student_ids]
+
+
+def _table_assignment_maps(
+    *,
+    groups,
+    subjects,
+    teacher: Teacher | None = None,
+) -> tuple[set[tuple[int, int]], dict[tuple[int, int], set[int]]]:
+    group_ids = {group.pk for group in groups if group is not None}
+    subject_ids = {subject.pk for subject in subjects if subject is not None}
+    if not group_ids or not subject_ids:
+        return set(), defaultdict(set)
+
+    group_assignments = GroupSubject.objects.filter(
+        group_id__in=group_ids,
+        subject_id__in=subject_ids,
+        is_active=True,
+    )
+    individual_assignments = StudentSubject.objects.filter(
+        student__group_id__in=group_ids,
+        subject_id__in=subject_ids,
+        is_active=True,
+        student__is_active=True,
+    )
+
+    if teacher is not None:
+        group_assignments = group_assignments.filter(teacher=teacher)
+        individual_assignments = individual_assignments.filter(teacher=teacher)
+
+    group_subject_pairs = set(group_assignments.values_list('group_id', 'subject_id'))
+    individual_students_by_pair: dict[tuple[int, int], set[int]] = defaultdict(set)
+    for group_id, subject_id, student_id in individual_assignments.values_list(
+        'student__group_id',
+        'subject_id',
+        'student_id',
+    ):
+        individual_students_by_pair[(group_id, subject_id)].add(student_id)
+
+    return group_subject_pairs, individual_students_by_pair
 
 
 def _build_journal_tables(
@@ -358,6 +383,12 @@ def _build_journal_tables(
     for result in results_qs:
         result_map[(result.student_id, result.subject_id, result.academic_year_id)] = result
 
+    group_subject_pairs, individual_students_by_pair = _table_assignment_maps(
+        groups=groups,
+        subjects=subjects,
+        teacher=teacher,
+    )
+
     for group in groups:
         if group is None:
             continue
@@ -370,15 +401,17 @@ def _build_journal_tables(
                 group=group,
                 subject=subject,
                 students_by_group=students_by_group,
-                teacher=teacher,
+                group_subject_pairs=group_subject_pairs,
+                individual_students_by_pair=individual_students_by_pair,
             )
             if not table_students:
                 continue
 
+            table_student_ids = {student.pk for student in table_students}
             subject_grades = [
                 grade
                 for grade in grades_map.get((group.pk, subject.pk), [])
-                if grade.student_id in {student.pk for student in table_students}
+                if grade.student_id in table_student_ids
             ]
             dates = sorted({grade.date for grade in subject_grades})
             row_map = {student.pk: {lesson_date: '' for lesson_date in dates} for student in table_students}
@@ -436,8 +469,40 @@ def _save_inline_grades(
     selected_academic_year: AcademicYear | None = None,
 ) -> bool:
     changed = 0
-    student_ids = set(students.values_list('pk', flat=True))
-    subject_ids = set(subjects.values_list('pk', flat=True))
+    student_map = {
+        student.pk: student
+        for student in students.select_related('group', 'group__academic_year')
+    }
+    subject_map = {
+        subject.pk: subject
+        for subject in subjects
+    }
+    student_ids = set(student_map)
+    subject_ids = set(subject_map)
+    teacher_group_subject_pairs: set[tuple[int, int]] = set()
+    teacher_individual_subject_pairs: set[tuple[int, int]] = set()
+
+    if role_mode == 'teacher' and teacher is not None and student_ids and subject_ids:
+        teacher_group_subject_pairs = set(
+            GroupSubject.objects
+            .filter(
+                group_id__in={student.group_id for student in student_map.values()},
+                subject_id__in=subject_ids,
+                teacher=teacher,
+                is_active=True,
+            )
+            .values_list('group_id', 'subject_id')
+        )
+        teacher_individual_subject_pairs = set(
+            StudentSubject.objects
+            .filter(
+                student_id__in=student_ids,
+                subject_id__in=subject_ids,
+                teacher=teacher,
+                is_active=True,
+            )
+            .values_list('student_id', 'subject_id')
+        )
 
     with transaction.atomic():
         for field_name, raw_value in request.POST.items():
@@ -466,12 +531,18 @@ def _save_inline_grades(
                 if student_id not in student_ids or subject_id not in subject_ids:
                     continue
 
-                student = students.filter(pk=student_id).select_related('group', 'group__academic_year').first()
-                subject = subjects.filter(pk=subject_id).first()
+                student = student_map.get(student_id)
+                subject = subject_map.get(subject_id)
                 if student is None or subject is None:
                     continue
 
-                if role_mode == 'teacher' and not _student_subject_allowed_for_teacher(student, subject, teacher):
+                if (
+                    role_mode == 'teacher'
+                    and (
+                        (student.group_id, subject_id) not in teacher_group_subject_pairs
+                        and (student_id, subject_id) not in teacher_individual_subject_pairs
+                    )
+                ):
                     continue
 
                 try:
