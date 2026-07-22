@@ -1580,6 +1580,45 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             [TeacherSubject, GroupSubject, StudentSubject],
         )
 
+    def test_group_admin_allows_adding_students_inline(self):
+        year = self.create_academic_year()
+        group = StudyGroup.objects.create(name='Группа с учениками', academic_year=year)
+        instrument = self.create_instrument()
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_studygroup_change', args=[group.pk]),
+            data={
+                'name': group.name,
+                'academic_year': year.pk,
+                'is_active': 'on',
+                'group_subjects-TOTAL_FORMS': '0',
+                'group_subjects-INITIAL_FORMS': '0',
+                'group_subjects-MIN_NUM_FORMS': '0',
+                'group_subjects-MAX_NUM_FORMS': '1000',
+                'students-TOTAL_FORMS': '1',
+                'students-INITIAL_FORMS': '0',
+                'students-MIN_NUM_FORMS': '0',
+                'students-MAX_NUM_FORMS': '1000',
+                'students-0-id': '',
+                'students-0-group': group.pk,
+                'students-0-full_name': 'Новый Ученик',
+                'students-0-instrument': instrument.pk,
+                'students-0-user': '',
+                'students-0-is_active': 'on',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Student.objects.filter(
+                group=group,
+                full_name='Новый Ученик',
+                instrument=instrument,
+            ).exists(),
+        )
+
     def test_student_admin_uses_prefetched_specialty_without_row_queries(self):
         data = self.create_base_journal()
         request = type('Request', (), {'user': self.admin_user})()
@@ -1617,6 +1656,24 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             0,
             [query['sql'] for query in captured_queries],
         )
+
+    def test_teacher_admin_creates_user_and_temporary_credentials_on_manual_add(self):
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Teacher]
+        teacher = Teacher(
+            full_name='Новый Преподаватель',
+            email='new-teacher@example.com',
+        )
+
+        model_admin.save_model(request, teacher, form=None, change=False)
+
+        teacher.refresh_from_db()
+        self.assertIsNotNone(teacher.user)
+        self.assertEqual(teacher.user.username, 'Преподаватель Новый')
+        self.assertTrue(teacher.user.groups.filter(name='Преподаватель').exists())
+        credential = TemporaryCredential.objects.get(login=teacher.user.username)
+        self.assertTrue(credential.temporary_password)
+        self.assertTrue(teacher.user.check_password(credential.temporary_password))
 
     def test_changing_group_assignment_in_admin_cascades_to_existing_grades(self):
         data = self.create_base_journal()
@@ -2264,6 +2321,28 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(TemporaryCredential.objects.count(), 2)
 
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_createsuperuser_stores_temporary_credentials(self):
+        with patch.dict(
+            'os.environ',
+            {'DJANGO_SUPERUSER_PASSWORD': 'AdminTemp123!'},
+        ):
+            call_command(
+                'createsuperuser',
+                interactive=False,
+                username='created_admin',
+                email='created-admin@example.com',
+                stdout=StringIO(),
+            )
+
+        user = User.objects.get(username='created_admin')
+        credential = TemporaryCredential.objects.get(login='created_admin')
+
+        self.assertTrue(user.is_superuser)
+        self.assertTrue(user.groups.filter(name='Администратор').exists())
+        self.assertEqual(credential.temporary_password, 'AdminTemp123!')
+        self.assertTrue(user.check_password(credential.temporary_password))
+
 
 class SeedDataCommandTests(TestCase):
     @staticmethod
@@ -2322,7 +2401,7 @@ class SeedDataCommandTests(TestCase):
             student.user.groups.filter(name='Ученик').exists(),
         )
 
-    def test_seed_data_preserves_existing_admin_credentials(self):
+    def test_seed_data_creates_temporary_credentials_for_existing_admins(self):
         admin_user = User.objects.create_superuser(
             username='existing_admin',
             password='OriginalPass123!',
@@ -2334,12 +2413,19 @@ class SeedDataCommandTests(TestCase):
         admin_user.refresh_from_db()
 
         self.assertTrue(User.objects.filter(username='existing_admin').exists())
-        self.assertTrue(admin_user.check_password('OriginalPass123!'))
         self.assertTrue(admin_user.is_staff)
         self.assertTrue(admin_user.is_superuser)
         self.assertTrue(
             admin_user.groups.filter(name='Администратор').exists(),
         )
+        credential = TemporaryCredential.objects.get(login='existing_admin')
+        self.assertTrue(admin_user.check_password(credential.temporary_password))
+
+    def test_seed_data_creates_temporary_credentials_for_every_user(self):
+        user_logins = set(User.objects.values_list('username', flat=True))
+        credential_logins = set(TemporaryCredential.objects.values_list('login', flat=True))
+
+        self.assertEqual(credential_logins, user_logins)
 
     def test_seed_data_can_be_run_twice_without_duplicate_settings_error(self):
         self.run_seed_data()

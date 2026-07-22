@@ -13,6 +13,8 @@ from django.db import transaction
 
 from journal.account_utils import (
     build_username_from_full_name,
+    display_name_for_user,
+    ensure_temporary_credential_for_user,
     generate_temporary_password,
     split_user_name,
 )
@@ -100,6 +102,7 @@ class Command(BaseCommand):
         self._create_students(groups, instruments, subjects, teachers)
         self._create_course_applications()
         self._create_course_group_assignments(academic_year, subjects, teachers)
+        self._ensure_temporary_credentials_for_all_users()
 
         students = list(
             Student.objects
@@ -247,6 +250,41 @@ class Command(BaseCommand):
 
         for user in admin_users.distinct():
             user.groups.add(admin_group)
+
+    def _ensure_temporary_credentials_for_all_users(self) -> None:
+        exported_logins = {row['login'] for row in self.credentials}
+        users = (
+            self.UserModel.objects
+            .filter(is_active=True)
+            .select_related('student_profile', 'teacher_profile')
+            .prefetch_related('groups')
+            .order_by('id')
+        )
+
+        for user in users:
+            credential = ensure_temporary_credential_for_user(
+                user,
+                reset_missing_password=True,
+            )
+            if user.username in exported_logins:
+                continue
+            self._add_credentials(
+                self._credential_role_for_user(user),
+                display_name_for_user(user) or user.username,
+                credential.login,
+                credential.temporary_password,
+            )
+            exported_logins.add(user.username)
+
+    def _credential_role_for_user(self, user) -> str:
+        group_names = set(user.groups.values_list('name', flat=True))
+        if self.ADMIN_GROUP_NAME in group_names or user.is_superuser or user.is_staff:
+            return 'admin'
+        if self.TEACHER_GROUP_NAME in group_names:
+            return 'teacher'
+        if self.STUDENT_GROUP_NAME in group_names:
+            return 'student'
+        return 'user'
 
     def _create_current_academic_year(self) -> AcademicYear:
         return AcademicYear.objects.create(

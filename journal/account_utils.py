@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.contrib.auth.models import User
+from django.core.exceptions import ObjectDoesNotExist
 from django.utils.crypto import get_random_string
 
 _TEMP_PASSWORD_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
@@ -59,15 +60,68 @@ def generate_temporary_password(length: int = 8) -> str:
     return get_random_string(length, allowed_chars=_TEMP_PASSWORD_ALPHABET)
 
 
+def user_student_phone(user: User) -> str:
+    try:
+        student = user.student_profile
+    except (AttributeError, ObjectDoesNotExist):
+        student = None
+    return getattr(student, 'student_phone', '') or ''
+
+
+def ensure_temporary_credential_for_user(
+    user: User,
+    *,
+    password: str | None = None,
+    reset_missing_password: bool = False,
+):
+    from .models import TemporaryCredential
+
+    credential = TemporaryCredential.objects.filter(login=user.username).order_by('id').first()
+    password_is_missing = credential is None or not credential.temporary_password
+
+    if password is None and reset_missing_password and password_is_missing:
+        password = generate_temporary_password()
+        user.set_password(password)
+        user.save(update_fields=['password'])
+
+    student_phone = user_student_phone(user)
+
+    if credential is None:
+        credential = TemporaryCredential.objects.create(
+            login=user.username,
+            temporary_password=password or '',
+            student_phone=student_phone,
+        )
+    else:
+        update_fields = []
+        if password is not None and credential.temporary_password != password:
+            credential.temporary_password = password
+            update_fields.append('temporary_password')
+        if credential.student_phone != student_phone:
+            credential.student_phone = student_phone
+            update_fields.append('student_phone')
+        if update_fields:
+            credential.save(update_fields=update_fields)
+
+    TemporaryCredential.objects.filter(login=user.username).exclude(pk=credential.pk).delete()
+    return credential
+
+
 def display_name_for_user(user: User) -> str:
     if user is None:
         return ''
 
-    student_profile = getattr(user, 'student_profile', None)
+    try:
+        student_profile = user.student_profile
+    except (AttributeError, ObjectDoesNotExist):
+        student_profile = None
     if student_profile is not None:
         return build_display_name_from_full_name(student_profile.full_name)
 
-    teacher_profile = getattr(user, 'teacher_profile', None)
+    try:
+        teacher_profile = user.teacher_profile
+    except (AttributeError, ObjectDoesNotExist):
+        teacher_profile = None
     if teacher_profile is not None:
         return build_display_name_from_full_name(teacher_profile.full_name)
 

@@ -10,6 +10,12 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
+from .account_utils import (
+    build_username_from_full_name,
+    ensure_temporary_credential_for_user,
+    generate_temporary_password,
+    split_user_name,
+)
 from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
 from .grade_options import (
     get_grade_groups,
@@ -675,7 +681,7 @@ class StudyGroupAdmin(admin.ModelAdmin):
         'group_subjects__teacher__full_name',
     )
     autocomplete_fields = ('academic_year',)
-    inlines = (GroupSubjectInline,)
+    inlines = (GroupSubjectInline, StudentInline)
     ordering = ('academic_year__name', 'name')
     list_select_related = ('academic_year',)
     list_per_page = 30
@@ -799,6 +805,39 @@ class TeacherAdmin(admin.ModelAdmin):
                 distinct=True,
             ),
         ).prefetch_related('group_subjects__group', 'group_subjects__subject')
+
+    def save_model(self, request, obj, form, change):
+        temporary_password = None
+        if not change and obj.user_id is None:
+            username = build_username_from_full_name(
+                obj.full_name,
+                existing_usernames=set(AuthUser.objects.values_list('username', flat=True)),
+            )
+            temporary_password = generate_temporary_password()
+            first_name, last_name = split_user_name(obj.full_name)
+            obj.user = AuthUser.objects.create_user(
+                username=username,
+                password=temporary_password,
+                first_name=first_name,
+                last_name=last_name,
+                email=obj.email,
+            )
+        elif not change and obj.user_id and not TemporaryCredential.objects.filter(login=obj.user.username).exists():
+            temporary_password = generate_temporary_password()
+            obj.user.set_password(temporary_password)
+            obj.user.save(update_fields=['password'])
+
+        if obj.user_id:
+            teacher_group, _created = AuthGroup.objects.get_or_create(name='Преподаватель')
+            obj.user.groups.add(teacher_group)
+
+        super().save_model(request, obj, form, change)
+
+        if obj.user_id:
+            ensure_temporary_credential_for_user(
+                obj.user,
+                password=temporary_password,
+            )
 
     @admin.display(description='Пользователь')
     def user_link(self, obj):

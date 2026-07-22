@@ -63,6 +63,7 @@ if not DEBUG and not ALLOWED_HOSTS:
 INSTALLED_APPS = [
     'jazzmin',
     'django.contrib.admin',
+    'journal.command_overrides',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
