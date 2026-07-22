@@ -365,42 +365,58 @@ class SubjectResultAdminForm(forms.ModelForm):
         instance = self.instance if self.instance and self.instance.pk else None
         student_id = self._raw_value('student') or getattr(instance, 'student_id', None)
         subject_id = self._raw_value('subject') or getattr(instance, 'subject_id', None)
+        academic_year_id = self._raw_value('academic_year') or getattr(instance, 'academic_year_id', None)
 
-        if student_id:
-            try:
-                student = Student.objects.select_related('group').get(pk=student_id)
-            except (Student.DoesNotExist, ValueError, TypeError):
-                student = None
+        student = self._selected_object(Student.objects.select_related('group'), student_id)
+        subject = self._selected_object(Subject.objects.all(), subject_id)
+        academic_year = self._selected_object(AcademicYear.objects.all(), academic_year_id)
 
-            if student:
-                group_subject_ids = GroupSubject.objects.filter(
-                    group_id=student.group_id,
-                    is_active=True,
-                ).values_list('subject_id', flat=True)
-                individual_subject_ids = StudentSubject.objects.filter(
-                    student_id=student.pk,
-                    is_active=True,
-                ).values_list('subject_id', flat=True)
-                subject_queryset = Subject.objects.filter(
-                    Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids)
-                ).distinct().order_by('name')
-                self.fields['subject'].queryset = self._include_selected_subject(
-                    subject_queryset,
-                    subject_id,
-                )
+        if 'student' in self.fields:
+            self.fields['student'].queryset = self._include_selected_choice(
+                get_grade_students(
+                    subject=subject,
+                    academic_year=academic_year,
+                ),
+                Student,
+                student_id,
+            )
+            self.fields['student'].widget.attrs['data-grade-options-url'] = reverse('grade_options_api')
+
+        if 'subject' in self.fields:
+            self.fields['subject'].queryset = self._include_selected_choice(
+                get_grade_subjects(
+                    student=student,
+                    academic_year=academic_year,
+                ),
+                Subject,
+                subject_id,
+            )
+            if 'student' not in self.fields:
+                self.fields['subject'].widget.attrs['data-grade-options-url'] = reverse('grade_options_api')
+
+        if 'academic_year' in self.fields:
+            self.fields['academic_year'].queryset = AcademicYear.objects.order_by('-starts_on')
 
     def _raw_value(self, field_name):
         if not self.is_bound:
             return None
         return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
 
-    def _include_selected_subject(self, queryset, raw_value):
+    def _selected_object(self, queryset, raw_value):
+        if not raw_value:
+            return None
+        try:
+            return queryset.filter(pk=raw_value).first()
+        except (TypeError, ValueError):
+            return None
+
+    def _include_selected_choice(self, queryset, model, raw_value):
         if not raw_value:
             return queryset
         try:
-            return Subject.objects.filter(
+            return model.objects.filter(
                 Q(pk__in=queryset.values('pk')) | Q(pk=raw_value),
-            ).distinct().order_by('name')
+            ).distinct()
         except (TypeError, ValueError):
             return queryset
 
@@ -445,8 +461,38 @@ class GroupSubjectAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if 'group' in self.fields:
+            self.fields['group'].queryset = self._include_selected_choice(
+                StudyGroup.objects.filter(is_active=True).select_related('academic_year'),
+                StudyGroup,
+                'group',
+            )
         if 'subject' in self.fields:
-            self.fields['subject'].queryset = Subject.objects.filter(is_specialty=False)
+            self.fields['subject'].queryset = self._include_selected_choice(
+                Subject.objects.filter(is_specialty=False, is_active=True),
+                Subject,
+                'subject',
+            )
+        if 'teacher' in self.fields:
+            self.fields['teacher'].queryset = self._include_selected_choice(
+                Teacher.objects.filter(is_active=True),
+                Teacher,
+                'teacher',
+            )
+
+    def _raw_value(self, field_name):
+        if self.is_bound:
+            return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
+        return getattr(self.instance, f'{field_name}_id', None)
+
+    def _include_selected_choice(self, queryset, model, field_name):
+        raw_value = self._raw_value(field_name)
+        if not raw_value:
+            return queryset
+        try:
+            return model.objects.filter(Q(pk__in=queryset.values('pk')) | Q(pk=raw_value)).distinct()
+        except (TypeError, ValueError):
+            return queryset
 
 
 class StudentSubjectAdminForm(forms.ModelForm):
@@ -456,8 +502,38 @@ class StudentSubjectAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if 'student' in self.fields:
+            self.fields['student'].queryset = self._include_selected_choice(
+                Student.objects.filter(is_active=True).select_related('group'),
+                Student,
+                'student',
+            )
         if 'subject' in self.fields:
-            self.fields['subject'].queryset = Subject.objects.filter(is_specialty=True)
+            self.fields['subject'].queryset = self._include_selected_choice(
+                Subject.objects.filter(is_specialty=True, is_active=True),
+                Subject,
+                'subject',
+            )
+        if 'teacher' in self.fields:
+            self.fields['teacher'].queryset = self._include_selected_choice(
+                Teacher.objects.filter(is_active=True),
+                Teacher,
+                'teacher',
+            )
+
+    def _raw_value(self, field_name):
+        if self.is_bound:
+            return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
+        return getattr(self.instance, f'{field_name}_id', None)
+
+    def _include_selected_choice(self, queryset, model, field_name):
+        raw_value = self._raw_value(field_name)
+        if not raw_value:
+            return queryset
+        try:
+            return model.objects.filter(Q(pk__in=queryset.values('pk')) | Q(pk=raw_value)).distinct()
+        except (TypeError, ValueError):
+            return queryset
 
 
 class StudentChoiceWithCityWidget(forms.Select):
@@ -494,6 +570,9 @@ class GroupStudentInlineForm(forms.ModelForm):
 
         self.fields['student'].queryset = student_queryset.order_by('full_name', 'pk')
         self.fields['student'].initial = selected_student
+        self.fields['city_church'].disabled = True
+        self.fields['city_church'].required = False
+        self.fields['city_church'].initial = selected_student.city_church if selected_student is not None else ''
         self.fields['city_church'].widget.attrs['data-student-city-target'] = '1'
 
 
@@ -631,20 +710,17 @@ class StudentInlineFormSet(forms.models.BaseInlineFormSet):
 
     def save_existing(self, form, obj, commit=True):
         selected_student = form.cleaned_data.get('student') or obj
-        city_church = self._city_church_for_form(form, selected_student)
 
         if selected_student.pk != obj.pk:
             self.delete_existing(obj, commit=commit)
             selected_student.group = self.instance
-            selected_student.city_church = city_church
             if commit:
-                selected_student.save(update_fields=['group', 'city_church'])
+                selected_student.save(update_fields=['group'])
             return selected_student
 
         obj.group = self.instance
-        obj.city_church = city_church
         if commit:
-            obj.save(update_fields=['group', 'city_church'])
+            obj.save(update_fields=['group'])
         return obj
 
     def save_new(self, form, commit=True):
@@ -653,24 +729,9 @@ class StudentInlineFormSet(forms.models.BaseInlineFormSet):
             return super().save_new(form, commit=commit)
 
         selected_student.group = self.instance
-        selected_student.city_church = self._city_church_for_form(form, selected_student)
         if commit:
-            selected_student.save(update_fields=['group', 'city_church'])
+            selected_student.save(update_fields=['group'])
         return selected_student
-
-    def _city_church_for_form(self, form, student):
-        city_church = form.cleaned_data.get('city_church', '')
-        selected_student = form.cleaned_data.get('student')
-        if (
-            selected_student is not None
-            and form.instance.pk
-            and selected_student.pk != form.instance.pk
-            and 'city_church' not in form.changed_data
-        ):
-            return student.city_church
-        if form.instance.pk or 'city_church' in form.changed_data:
-            return city_church
-        return city_church or student.city_church
 
 
 class GroupSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
@@ -718,7 +779,6 @@ class GroupSubjectInline(admin.TabularInline):
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
     extra = 0
-    autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
     verbose_name = 'Предмет группы'
@@ -730,7 +790,6 @@ class GroupSubjectForTeacherInline(admin.TabularInline):
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
     extra = 1
-    autocomplete_fields = ('group', 'subject')
     fields = ('group', 'subject', 'sort_order', 'is_active')
     show_change_link = True
     verbose_name = 'Групповой предмет'
@@ -742,7 +801,6 @@ class GroupSubjectForSubjectInline(admin.TabularInline):
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
     extra = 0
-    autocomplete_fields = ('group', 'teacher')
     fields = ('group', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
     classes = ('collapse',)
@@ -755,7 +813,6 @@ class StudentSubjectInline(admin.TabularInline):
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 0
-    autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'is_specialty', 'is_active')
     show_change_link = True
     verbose_name = 'Индивидуальный предмет'
@@ -767,7 +824,6 @@ class StudentSubjectForTeacherInline(admin.TabularInline):
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 1
-    autocomplete_fields = ('student', 'subject')
     fields = ('student', 'subject', 'is_specialty', 'is_active')
     show_change_link = True
     verbose_name = 'Индивидуальный ученик'
@@ -779,7 +835,6 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 0
-    autocomplete_fields = ('student', 'teacher')
     fields = ('student', 'teacher', 'is_specialty', 'is_active')
     show_change_link = True
     classes = ('collapse',)
@@ -817,11 +872,46 @@ class SubjectResultInline(admin.TabularInline):
     form = SubjectResultAdminForm
     formset = SubjectResultInlineFormSet
     extra = 0
-    autocomplete_fields = ('subject', 'academic_year')
     fields = ('academic_year', 'subject', 'exam_grade', 'final_grade')
     show_change_link = True
     verbose_name = 'Итог'
     verbose_name_plural = 'Итоги по предметам'
+
+    class Media:
+        js = ('journal/grade_dependencies.js',)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        parent_student = obj
+        base_form = self.form
+
+        class InlineSubjectResultAdminForm(base_form):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                if parent_student is None or 'subject' not in self.fields:
+                    return
+
+                subject_id = self._raw_value('subject') or getattr(self.instance, 'subject_id', None)
+                academic_year_id = self._raw_value('academic_year') or getattr(
+                    self.instance,
+                    'academic_year_id',
+                    None,
+                )
+                academic_year = self._selected_object(AcademicYear.objects.all(), academic_year_id)
+                self.fields['subject'].queryset = self._include_selected_choice(
+                    get_grade_subjects(
+                        student=parent_student,
+                        academic_year=academic_year,
+                    ),
+                    Subject,
+                    subject_id,
+                )
+                self.fields['subject'].widget.attrs.update({
+                    'data-fixed-student': str(parent_student.pk),
+                    'data-grade-options-url': reverse('grade_options_api'),
+                })
+
+        kwargs['form'] = InlineSubjectResultAdminForm
+        return super().get_formset(request, obj, **kwargs)
 
 
 # -----------------------------------------------------------------------------
@@ -1303,10 +1393,10 @@ class TeacherSubjectAdmin(admin.ModelAdmin):
 
 @admin.register(GroupSubject)
 class GroupSubjectAdmin(admin.ModelAdmin):
+    form = GroupSubjectAdminForm
     list_display = ('group', 'subject', 'teacher', 'sort_order', 'is_active')
     list_filter = ('is_active', 'group__academic_year', 'group', 'subject', 'teacher')
     search_fields = ('group__name', 'subject__name', 'teacher__full_name')
-    autocomplete_fields = ('group', 'subject', 'teacher')
     list_select_related = ('group', 'group__academic_year', 'subject', 'teacher')
     ordering = ('group__academic_year__name', 'group__name', 'sort_order', 'subject__name')
     list_per_page = 50
@@ -1323,10 +1413,10 @@ class GroupSubjectAdmin(admin.ModelAdmin):
 
 @admin.register(StudentSubject)
 class StudentSubjectAdmin(admin.ModelAdmin):
+    form = StudentSubjectAdminForm
     list_display = ('student', 'student_group_display', 'subject', 'teacher', 'is_specialty', 'is_active')
     list_filter = ('is_active', 'is_specialty', 'subject', 'teacher', 'student__group')
     search_fields = ('student__full_name', 'student__group__name', 'subject__name', 'teacher__full_name')
-    autocomplete_fields = ('student', 'subject', 'teacher')
     list_select_related = ('student', 'student__group', 'subject', 'teacher')
     ordering = ('student__full_name', 'subject__name')
     list_per_page = 50
@@ -1376,7 +1466,7 @@ class GradeAdmin(admin.ModelAdmin):
         'comment',
     )
     autocomplete_fields = ('academic_year',)
-    readonly_fields = ('source_type_display', 'student_group_display')
+    readonly_fields = ('source_type_display',)
     date_hierarchy = 'date'
     list_select_related = ('student', 'student__group', 'subject', 'teacher', 'academic_year')
     ordering = ('-date', 'student__full_name')
@@ -1388,7 +1478,6 @@ class GradeAdmin(admin.ModelAdmin):
                 'date',
                 'group',
                 'student',
-                'student_group_display',
                 'subject',
                 'teacher',
                 'value',
@@ -1467,7 +1556,6 @@ class SubjectResultAdmin(admin.ModelAdmin):
     )
     list_filter = ('academic_year', 'subject', 'student__group', 'student__group__academic_year')
     search_fields = ('student__full_name', 'student__group__name', 'subject__name')
-    autocomplete_fields = ('student', 'subject', 'academic_year')
     list_select_related = ('student', 'student__group', 'subject', 'academic_year')
     ordering = ('academic_year__name', 'student__full_name', 'subject__name')
     list_per_page = 50
@@ -1488,6 +1576,9 @@ class SubjectResultAdmin(admin.ModelAdmin):
         }),
     )
     readonly_fields = ('student_group_display',)
+
+    class Media:
+        js = ('journal/grade_dependencies.js',)
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):

@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -57,12 +58,20 @@ from .models import (
 )
 
 
+async def _run_db_sync(func, *args, **kwargs):
+    return await sync_to_async(func, thread_sensitive=True)(*args, **kwargs)
+
+
 # -----------------------------------------------------------------------------
 # Общие helper-функции журнала
 # -----------------------------------------------------------------------------
 
 
-def password_help_view(request):
+async def password_help_view(request):
+    return await _run_db_sync(_password_help_view_sync, request)
+
+
+def _password_help_view_sync(request):
     contacts = PasswordRecoveryContact.objects.filter(is_active=True)
     return render(
         request,
@@ -73,7 +82,11 @@ def password_help_view(request):
 
 @login_required
 @require_GET
-def grade_options_api(request):
+async def grade_options_api(request):
+    return await _run_db_sync(_grade_options_api_sync, request)
+
+
+def _grade_options_api_sync(request):
     teacher_profile = getattr(request.user, 'teacher_profile', None)
     can_manage_all_grades = (
         request.user.is_superuser
@@ -116,6 +129,9 @@ def grade_options_api(request):
     else:
         teacher = teacher_profile
 
+    changed_field = request.GET.get('changed') or ''
+    strict_options = request.GET.get('strict') == '1'
+
     groups = get_grade_groups(
         student=student,
         subject=subject,
@@ -143,10 +159,14 @@ def grade_options_api(request):
     if not can_manage_all_grades:
         teachers = teachers.filter(pk=teacher_profile.pk)
 
-    groups = _include_selected_option(groups, StudyGroup, group)
-    students = _include_selected_option(students, Student, student)
-    subjects = _include_selected_option(subjects, Subject, subject)
-    teachers = _include_selected_option(teachers, Teacher, teacher)
+    if not strict_options or changed_field == 'group':
+        groups = _include_selected_option(groups, StudyGroup, group)
+    if not strict_options or changed_field == 'student':
+        students = _include_selected_option(students, Student, student)
+    if not strict_options or changed_field == 'subject':
+        subjects = _include_selected_option(subjects, Subject, subject)
+    if not strict_options or changed_field == 'teacher':
+        teachers = _include_selected_option(teachers, Teacher, teacher)
 
     return JsonResponse({
         'groups': [
@@ -664,7 +684,11 @@ def _save_inline_grades(
 
 
 @login_required
-def journal_view(request):
+async def journal_view(request):
+    return await _run_db_sync(_journal_view_sync, request)
+
+
+def _journal_view_sync(request):
     if (
         not request.user.is_superuser
         and TemporaryCredential.objects.filter(login=request.user.username).exists()
@@ -1188,7 +1212,11 @@ def _get_application_credential(application: CourseApplication):
     return TemporaryCredential.objects.filter(course_application=application).first()
 
 
-def course_registration_view(request):
+async def course_registration_view(request):
+    return await _run_db_sync(_course_registration_view_sync, request)
+
+
+def _course_registration_view_sync(request):
     if request.method not in {'GET', 'POST'}:
         return HttpResponseNotAllowed(['GET', 'POST'])
 
@@ -1225,7 +1253,11 @@ def course_registration_view(request):
 
 
 @csrf_exempt
-def course_registration_api(request):
+async def course_registration_api(request):
+    return await _run_db_sync(_course_registration_api_sync, request)
+
+
+def _course_registration_api_sync(request):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
 
@@ -1346,7 +1378,11 @@ def _build_student_credentials_xlsx(rows):
 
 
 @user_passes_test(lambda user: user.is_active and user.is_superuser)
-def export_student_credentials_xlsx(request):
+async def export_student_credentials_xlsx(request):
+    return await _run_db_sync(_export_student_credentials_xlsx_sync, request)
+
+
+def _export_student_credentials_xlsx_sync(request):
     rows = (
         TemporaryCredential.objects
         .select_related('course_application')
@@ -1374,8 +1410,13 @@ def export_student_credentials_xlsx(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
+
 @user_passes_test(lambda user: user.is_active and user.is_superuser)
-def export_all_data_excel(request):
+async def export_all_data_excel(request):
+    return await _run_db_sync(_export_all_data_excel_sync, request)
+
+
+def _export_all_data_excel_sync(request):
     workbook = build_full_export_workbook()
 
     now = timezone.localtime()

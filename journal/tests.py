@@ -27,7 +27,15 @@ from journal.account_utils import (
     display_name_for_user,
     generate_temporary_password,
 )
-from journal.admin import GradeAdmin, GradeAdminForm, StudentAdminForm, TeacherAdminForm
+from journal.admin import (
+    GradeAdmin,
+    GradeAdminForm,
+    GroupSubjectAdminForm,
+    StudentAdminForm,
+    StudentSubjectAdminForm,
+    SubjectResultAdminForm,
+    TeacherAdminForm,
+)
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -1332,6 +1340,30 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertIn(self.data['solfeggio'].pk, [item['id'] for item in payload['subjects']])
         self.assertIn(self.data['other_teacher'].pk, [item['id'] for item in payload['teachers']])
 
+    def test_strict_options_drop_incompatible_dependent_values(self):
+        other_year = self.create_academic_year(name='2026/2027')
+        other_group = self.create_group(name='Другая группа', academic_year=other_year)
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'group': other_group.pk,
+                'student': self.data['student'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'teacher': self.data['teacher'].pk,
+                'changed': 'group',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn(other_group.pk, [item['id'] for item in payload['groups']])
+        self.assertNotIn(self.data['student'].pk, [item['id'] for item in payload['students']])
+        self.assertNotIn(self.data['solfeggio'].pk, [item['id'] for item in payload['subjects']])
+        self.assertNotIn(self.data['teacher'].pk, [item['id'] for item in payload['teachers']])
+
     def test_teacher_options_are_always_limited_to_own_assignments(self):
         self.client.login(username='teacher_ivanov', password='Pass12345!')
 
@@ -1743,6 +1775,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(get_response, 'name="students-0-city_church"')
         self.assertContains(get_response, f'value="{student.pk}"')
         self.assertContains(get_response, 'data-city-church="Тамбов / Центр"')
+        self.assertContains(get_response, 'data-student-city-target="1"')
+        self.assertContains(get_response, 'disabled')
         self.assertNotContains(get_response, 'name="students-0-full_name"')
         self.assertNotContains(get_response, 'name="students-0-instrument"')
 
@@ -1772,7 +1806,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         student.refresh_from_db()
         self.assertEqual(Student.objects.count(), 1)
         self.assertEqual(student.group, group)
-        self.assertEqual(student.city_church, 'Воронеж / Север')
+        self.assertEqual(student.city_church, 'Тамбов / Центр')
 
     def test_group_admin_shows_inline_error_for_duplicate_group_subject(self):
         year = self.create_academic_year()
@@ -1835,6 +1869,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             full_name='Старое Имя',
             group=group,
             instrument=instrument,
+            city_church='Старый город / церковь',
             is_active=True,
         )
         student_to_delete = Student.objects.create(
@@ -1875,8 +1910,71 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         student_to_edit.refresh_from_db()
         student_to_delete.refresh_from_db()
-        self.assertEqual(student_to_edit.city_church, 'Новый город / церковь')
+        self.assertEqual(student_to_edit.city_church, 'Старый город / церковь')
         self.assertEqual(student_to_delete.group, fallback_group)
+
+    def test_admin_assignment_forms_limit_field_choices(self):
+        data = self.create_base_journal()
+        inactive_group = self.create_group(
+            name='Неактивная группа',
+            academic_year=data['year'],
+        )
+        inactive_group.is_active = False
+        inactive_group.save()
+        inactive_teacher = self.create_teacher(username='inactive_teacher')
+        inactive_teacher.is_active = False
+        inactive_teacher.save()
+        inactive_subject = self.create_subject(name='Неактивный предмет')
+        inactive_subject.is_active = False
+        inactive_subject.save()
+
+        group_form = GroupSubjectAdminForm()
+        student_form = StudentSubjectAdminForm()
+        group_admin = django_admin.site._registry[GroupSubject]
+        student_admin = django_admin.site._registry[StudentSubject]
+
+        self.assertIs(group_admin.form, GroupSubjectAdminForm)
+        self.assertEqual(group_admin.autocomplete_fields, ())
+        self.assertNotIn(inactive_group, group_form.fields['group'].queryset)
+        self.assertNotIn(inactive_teacher, group_form.fields['teacher'].queryset)
+        self.assertNotIn(inactive_subject, group_form.fields['subject'].queryset)
+        self.assertIn(data['solfeggio'], group_form.fields['subject'].queryset)
+        self.assertNotIn(data['specialty'], group_form.fields['subject'].queryset)
+        self.assertIs(student_admin.form, StudentSubjectAdminForm)
+        self.assertEqual(student_admin.autocomplete_fields, ())
+        self.assertIn(data['specialty'], student_form.fields['subject'].queryset)
+        self.assertNotIn(data['solfeggio'], student_form.fields['subject'].queryset)
+
+    def test_subject_result_admin_form_limits_subjects_by_student_assignments(self):
+        data = self.create_base_journal()
+        unassigned_subject = self.create_subject(name='Неназначенный предмет')
+
+        form = SubjectResultAdminForm(
+            data={
+                'student': data['student'].pk,
+                'academic_year': data['year'].pk,
+                'subject': '',
+                'exam_grade': '',
+                'final_grade': '',
+            },
+        )
+
+        subject_queryset = form.fields['subject'].queryset
+        self.assertIn(data['solfeggio'], subject_queryset)
+        self.assertIn(data['specialty'], subject_queryset)
+        self.assertNotIn(unassigned_subject, subject_queryset)
+
+    def test_grade_admin_change_form_has_single_group_field(self):
+        model_admin = django_admin.site._registry[Grade]
+        fieldsets = model_admin.get_fieldsets(type('Request', (), {'user': self.admin_user})())
+        fields = [
+            field
+            for _name, options in fieldsets
+            for field in options.get('fields', ())
+        ]
+
+        self.assertIn('group', fields)
+        self.assertNotIn('student_group_display', fields)
 
     def test_group_admin_detaches_student_when_no_fallback_group_exists(self):
         year = self.create_academic_year()
@@ -2414,6 +2512,31 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 429)
         self.assertFalse(response.json()['success'])
+
+
+class AsyncDatabaseViewTests(TestCase):
+    def test_database_backed_url_views_are_async(self):
+        from asgiref.sync import iscoroutinefunction
+
+        from journal import admin_tools, views
+
+        async_views = (
+            views.password_help_view,
+            views.grade_options_api,
+            views.journal_view,
+            views.course_registration_view,
+            views.course_registration_api,
+            views.export_student_credentials_xlsx,
+            views.export_all_data_excel,
+            admin_tools.admin_data_tools_view,
+            admin_tools.admin_seed_test_data_view,
+            admin_tools.admin_delete_database_view,
+            admin_tools.admin_export_test_credentials_excel_view,
+        )
+
+        for view_func in async_views:
+            with self.subTest(view=view_func.__name__):
+                self.assertTrue(iscoroutinefunction(view_func))
 
 
 class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):

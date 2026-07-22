@@ -26,6 +26,10 @@
     function initialize(scope) {
         var root = scope || document;
         root.querySelectorAll('[data-student-city-source="1"]').forEach(function (select) {
+            if (select.dataset.studentCityInitialized === '1') {
+                return;
+            }
+            select.dataset.studentCityInitialized = '1';
             select.addEventListener('change', function () {
                 updateCityChurch(select);
             });

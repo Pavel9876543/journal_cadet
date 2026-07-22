@@ -215,6 +215,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
 
 # По умолчанию оставляем SQLite, но можно переопределить через env-переменные.
 DB_ENGINE = os.getenv('DB_ENGINE', 'django.db.backends.sqlite3')

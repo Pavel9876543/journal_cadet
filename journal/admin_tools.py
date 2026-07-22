@@ -5,6 +5,7 @@ from secrets import compare_digest
 from io import BytesIO
 from urllib.parse import quote
 
+from asgiref.sync import sync_to_async
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import user_passes_test
@@ -50,8 +51,16 @@ MAX_COLUMN_WIDTH = 60
 DATA_TOOLS_PASSWORD_FIELD = 'pas_key_data'
 
 
+async def _run_db_sync(func, *args, **kwargs):
+    return await sync_to_async(func, thread_sensitive=True)(*args, **kwargs)
+
+
 @superuser_required
-def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
+async def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
+    return await _run_db_sync(_admin_data_tools_view_sync, request)
+
+
+def _admin_data_tools_view_sync(request: HttpRequest) -> HttpResponse:
     """
     Страница инструментов данных в Django Admin.
 
@@ -82,7 +91,11 @@ def admin_data_tools_view(request: HttpRequest) -> HttpResponse:
 
 
 @superuser_required
-def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
+async def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
+    return await _run_db_sync(_admin_seed_test_data_view_sync, request)
+
+
+def _admin_seed_test_data_view_sync(request: HttpRequest) -> HttpResponse:
     """
     Запускает management-команду seed_data из админки.
 
@@ -126,7 +139,11 @@ def admin_seed_test_data_view(request: HttpRequest) -> HttpResponse:
 
 
 @superuser_required
-def admin_delete_database_view(request: HttpRequest) -> HttpResponse:
+async def admin_delete_database_view(request: HttpRequest) -> HttpResponse:
+    return await _run_db_sync(_admin_delete_database_view_sync, request)
+
+
+def _admin_delete_database_view_sync(request: HttpRequest) -> HttpResponse:
     """
     Очищает данные журнала из админских инструментов.
 
@@ -223,7 +240,11 @@ def clear_database_data() -> dict[str, int]:
 
 
 @superuser_required
-def admin_export_test_credentials_excel_view(request: HttpRequest) -> HttpResponse:
+async def admin_export_test_credentials_excel_view(request: HttpRequest) -> HttpResponse:
+    return await _run_db_sync(_admin_export_test_credentials_excel_view_sync, request)
+
+
+def _admin_export_test_credentials_excel_view_sync(request: HttpRequest) -> HttpResponse:
     """
     Экспорт временных учетных данных в Excel.
 

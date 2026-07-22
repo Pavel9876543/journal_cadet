@@ -3,30 +3,50 @@
 
     var FIELD_NAMES = ['group', 'student', 'subject', 'teacher'];
 
-    function start() {
-        var sources = document.querySelectorAll(
+    function inlinePrefix(name) {
+        var match = String(name || '').match(/^(.*-\d+)-[^-]+$/);
+        return match ? match[1] : '';
+    }
+
+    function start(root) {
+        var container = root || document;
+        var sources = container.querySelectorAll(
             'form[data-grade-options-url], [data-grade-options-url]:not(form)'
         );
-        var initializedForms = new Set();
+        var initializedKeys = new Set();
 
         sources.forEach(function (source) {
             var form = source.matches('form') ? source : source.closest('form');
-            if (!form || initializedForms.has(form)) {
+            if (!form) {
                 return;
             }
-            initializedForms.add(form);
-            initializeForm(form, source.dataset.gradeOptionsUrl || form.dataset.gradeOptionsUrl);
+
+            var prefix = source.matches('form') ? '' : inlinePrefix(source.getAttribute('name'));
+            var scope = prefix ? (source.closest('tr') || source.closest('.dynamic-subject_results') || form) : form;
+            var key = prefix || 'form';
+            if (initializedKeys.has(key)) {
+                return;
+            }
+            initializedKeys.add(key);
+            initializeForm(scope, source.dataset.gradeOptionsUrl || form.dataset.gradeOptionsUrl, prefix, form, source);
         });
     }
 
-    function initializeForm(form, endpoint) {
+    function initializeForm(scope, endpoint, prefix, form, source) {
         if (!endpoint) {
             return;
         }
 
+        form = form || scope.closest('form') || scope;
+        source = source || scope;
+
+        function fieldSelector(name) {
+            return prefix ? '[name="' + prefix + '-' + name + '"]' : '[name="' + name + '"]';
+        }
+
         var fields = {};
         FIELD_NAMES.concat(['academic_year']).forEach(function (name) {
-            fields[name] = form.querySelector('[name="' + name + '"]');
+            fields[name] = scope.querySelector(fieldSelector(name));
         });
 
         var placeholders = {};
@@ -41,6 +61,7 @@
             placeholders[name] = emptyOption ? emptyOption.textContent : 'Выберите значение';
         });
 
+        var fixedStudent = scope.dataset.fixedStudent || form.dataset.fixedStudent || source.dataset.fixedStudent || '';
         var fixedTeacher = form.dataset.fixedTeacher || '';
         var fixedSubject = form.dataset.fixedSubject || '';
         var fixedAcademicYear = form.dataset.fixedAcademicYear || '';
@@ -55,7 +76,7 @@
                     syncSelectWidget(fields.group);
                 }
             }
-            loadOptions();
+            loadOptions(name);
         }
 
         Object.keys(fields).forEach(function (name) {
@@ -67,7 +88,7 @@
             });
         });
 
-        function buildUrl() {
+        function buildUrl(changedField) {
             var url = new URL(endpoint, window.location.origin);
             Object.keys(fields).forEach(function (name) {
                 if (fields[name] && fields[name].value) {
@@ -77,11 +98,18 @@
             if (!fields.teacher && fixedTeacher) {
                 url.searchParams.set('teacher', fixedTeacher);
             }
+            if (!fields.student && fixedStudent) {
+                url.searchParams.set('student', fixedStudent);
+            }
             if (!fields.subject && fixedSubject) {
                 url.searchParams.set('subject', fixedSubject);
             }
             if (!fields.academic_year && fixedAcademicYear) {
                 url.searchParams.set('academic_year', fixedAcademicYear);
+            }
+            if (changedField) {
+                url.searchParams.set('changed', changedField);
+                url.searchParams.set('strict', '1');
             }
             return url;
         }
@@ -112,10 +140,10 @@
             }
         }
 
-        function replaceOptions(name, items) {
+        function replaceOptions(name, items, preserveMissing) {
             var select = fields[name];
             if (!select) {
-                return;
+                return false;
             }
 
             var previousValue = select.value;
@@ -149,7 +177,7 @@
                 }
             });
 
-            if (previousValue && !canKeepValue) {
+            if (previousValue && !canKeepValue && preserveMissing) {
                 var preservedOption = new Option(previousLabel || previousValue, previousValue, false, true);
                 if (previousGroupId) {
                     preservedOption.dataset.groupId = previousGroupId;
@@ -162,9 +190,10 @@
             select.value = canKeepValue ? previousValue : '';
             select.disabled = items.length === 0 && !previousValue;
             syncSelectWidget(select);
+            return Boolean(previousValue && !canKeepValue);
         }
 
-        function loadOptions() {
+        function loadOptions(changedField) {
             requestSequence += 1;
             var sequence = requestSequence;
             if (activeRequest) {
@@ -173,7 +202,7 @@
             activeRequest = new AbortController();
             setLoading(true);
 
-            fetch(buildUrl(), {
+            fetch(buildUrl(changedField), {
                 credentials: 'same-origin',
                 headers: {'X-Requested-With': 'XMLHttpRequest'},
                 signal: activeRequest.signal,
@@ -188,10 +217,17 @@
                     if (sequence !== requestSequence) {
                         return;
                     }
+                    var selectionWasCleared = false;
                     FIELD_NAMES.forEach(function (name) {
-                        replaceOptions(name, payload[name + 's'] || []);
+                        var preserveMissing = !changedField || changedField === name;
+                        if (replaceOptions(name, payload[name + 's'] || [], preserveMissing)) {
+                            selectionWasCleared = true;
+                        }
                     });
                     setLoading(false);
+                    if (selectionWasCleared) {
+                        loadOptions(changedField);
+                    }
                 })
                 .catch(function (error) {
                     if (error.name === 'AbortError') {
@@ -213,4 +249,8 @@
     } else {
         start();
     }
+
+    document.addEventListener('formset:added', function (event) {
+        start(event.target);
+    });
 })();
