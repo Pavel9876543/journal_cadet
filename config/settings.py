@@ -121,7 +121,7 @@ JAZZMIN_SETTINGS = {
             'name': 'Инструкция',
             'url': 'admin_guide',
             'icon': 'fas fa-question-circle',
-            'permissions': ['auth.view_user'],
+            'permissions': ['auth.delete_user'],
         },
         {
             'name': 'Тестовые данные',
@@ -193,7 +193,7 @@ JAZZMIN_SETTINGS = {
                 'name': 'Инструкция администратора',
                 'url': 'admin_guide',
                 'icon': 'fas fa-question-circle',
-                'permissions': ['auth.view_user'],
+                'permissions': ['auth.delete_user'],
             },
             {
                 'name': 'Запуск тестовых данных',

@@ -1,8 +1,10 @@
 import os
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Group, Permission
 from django.core.management.base import BaseCommand
+
+from journal.account_utils import ensure_temporary_credential_for_user
 
 
 class Command(BaseCommand):
@@ -55,6 +57,12 @@ class Command(BaseCommand):
 
         if changed:
             user.save()
+
+        admin_group, _created = Group.objects.get_or_create(name="Администратор")
+        user.groups.add(admin_group)
+
+        if created or os.getenv("DJANGO_SUPERUSER_ROTATE_PASSWORD", "0") == "1":
+            ensure_temporary_credential_for_user(user, password=password)
 
         # Defensive: explicitly grant every model permission in addition to is_superuser.
         all_perms = Permission.objects.all()

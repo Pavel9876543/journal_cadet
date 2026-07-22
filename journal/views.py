@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 import json
 from typing import Iterable
@@ -13,7 +13,6 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Max, Q, QuerySet
@@ -21,11 +20,11 @@ from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
 
+from .account_utils import user_has_temporary_credential
 from .assignment_options import (
     active_group_queryset,
     active_student_queryset,
@@ -63,6 +62,7 @@ from .models import (
     SubjectResult,
     Teacher,
     TemporaryCredential,
+    CourseRegistrationRateLimit,
 )
 
 
@@ -833,7 +833,7 @@ async def journal_view(request):
 def _journal_view_sync(request):
     if (
         not request.user.is_superuser
-        and TemporaryCredential.objects.filter(login=request.user.username).exists()
+        and user_has_temporary_credential(request.user)
     ):
         messages.info(request, 'Смените временный пароль перед работой с журналом.')
         return redirect('password_change')
@@ -1316,17 +1316,32 @@ def _get_client_ip(request) -> str:
 
 def _registration_api_is_throttled(request) -> bool:
     cache_key = f'course_registration_api:{_get_client_ip(request)}'
-    added = cache.add(cache_key, 1, COURSE_REGISTRATION_API_THROTTLE_WINDOW)
-    if added:
-        return False
+    now = timezone.now()
+    window_start_limit = now - timedelta(seconds=COURSE_REGISTRATION_API_THROTTLE_WINDOW)
 
-    try:
-        attempts = cache.incr(cache_key)
-    except ValueError:
-        cache.set(cache_key, 1, COURSE_REGISTRATION_API_THROTTLE_WINDOW)
-        return False
+    with transaction.atomic():
+        CourseRegistrationRateLimit.objects.filter(window_started_at__lt=window_start_limit).delete()
+        rate_limit, _created = (
+            CourseRegistrationRateLimit.objects
+            .select_for_update()
+            .get_or_create(
+                cache_key=cache_key,
+                defaults={
+                    'attempts': 0,
+                    'window_started_at': now,
+                },
+            )
+        )
 
-    return attempts > COURSE_REGISTRATION_API_THROTTLE_LIMIT
+        if rate_limit.window_started_at < window_start_limit:
+            rate_limit.attempts = 1
+            rate_limit.window_started_at = now
+            rate_limit.save(update_fields=['attempts', 'window_started_at', 'updated_at'])
+            return False
+
+        rate_limit.attempts += 1
+        rate_limit.save(update_fields=['attempts', 'updated_at'])
+        return rate_limit.attempts > COURSE_REGISTRATION_API_THROTTLE_LIMIT
 
 
 def _get_registration_settings() -> CourseRegistrationSettings:
@@ -1394,7 +1409,6 @@ def _course_registration_view_sync(request):
     )
 
 
-@csrf_exempt
 async def course_registration_api(request):
     return await _run_db_sync(_course_registration_api_sync, request)
 
@@ -1431,8 +1445,7 @@ def _course_registration_api_sync(request):
                 'application_id': application.pk,
                 'status': application.status,
                 'status_display': application.get_status_display(),
-                'login': credential.login if credential else '',
-                'temporary_password': credential.temporary_password if credential else '',
+                'credentials_created': credential is not None,
             },
             status=201,
         )

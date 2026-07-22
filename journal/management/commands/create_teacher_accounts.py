@@ -9,25 +9,40 @@ from journal.models import Teacher
 class Command(BaseCommand):
     help = 'Создает/обновляет учетные записи преподавателей и выводит логины/пароли.'
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--reset-existing',
+            action='store_true',
+            help='Сбросить логины и временные пароли уже связанным пользователям.',
+        )
+
     @transaction.atomic
     def handle(self, *args, **options):
         User = get_user_model()
         credentials = []
         used_usernames = set(User.objects.values_list('username', flat=True))
+        reset_existing = options['reset_existing']
 
         for teacher in Teacher.objects.select_related('user').order_by('id'):
+            user_is_new = teacher.user is None
             user = teacher.user or User(is_staff=False, is_superuser=False, is_active=True)
             if user.pk and user.username in used_usernames:
                 used_usernames.remove(user.username)
 
-            username = account_utils.build_username_from_full_name(
-                teacher.full_name,
-                existing_usernames=used_usernames,
-            )
-            password = account_utils.generate_temporary_password()
             first_name, last_name = account_utils.split_user_name(teacher.full_name)
+            password = None
 
-            user.username = username
+            if user_is_new or reset_existing:
+                username = account_utils.build_username_from_full_name(
+                    teacher.full_name,
+                    existing_usernames=used_usernames,
+                )
+                password = account_utils.generate_temporary_password()
+                user.username = username
+                user.set_password(password)
+            else:
+                username = user.username
+
             user.first_name = first_name
             user.last_name = last_name
             user.is_staff = False
@@ -46,7 +61,7 @@ class Command(BaseCommand):
                 {
                     'teacher': teacher.full_name,
                     'login': username,
-                    'password': password,
+                    'password': password or 'не менялся',
                 }
             )
 

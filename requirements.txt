@@ -1,7 +1,7 @@
 Django==5.2.7
 gunicorn==23.0.0
-uvicorn[standard]
+uvicorn[standard]==0.38.0
 whitenoise==6.8.2
 psycopg2-binary==2.9.9
 django-jazzmin==3.0.1
-openpyxl
+openpyxl==3.1.5

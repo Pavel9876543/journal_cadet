@@ -37,6 +37,11 @@ class AcademicYear(models.Model):
         ]
         constraints = [
             models.UniqueConstraint(fields=['name'], name='unique_acad_year_name'),
+            models.UniqueConstraint(
+                fields=['is_active'],
+                condition=Q(is_active=True),
+                name='unique_active_academic_year',
+            ),
         ]
 
     def __str__(self) -> str:
@@ -48,10 +53,13 @@ class AcademicYear(models.Model):
             raise ValidationError({'ends_on': 'Дата окончания должна быть позже даты начала.'})
 
     def save(self, *args, **kwargs):
-        self.full_clean()
         with transaction.atomic():
+            self.clean_fields()
+            self.clean()
+            self.validate_unique()
             if self.is_active:
                 AcademicYear.objects.exclude(pk=self.pk).update(is_active=False)
+            self.validate_constraints()
             super().save(*args, **kwargs)
 
     @classmethod
@@ -1065,9 +1073,35 @@ class TemporaryCredential(models.Model):
             models.Index(fields=['student_phone'], name='temp_cred_phone_idx'),
             models.Index(fields=['-created_at'], name='temp_cred_created_idx'),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=Q(user__isnull=False),
+                name='unique_temp_credential_user',
+            ),
+            models.UniqueConstraint(fields=['login'], name='unique_temp_credential_login'),
+        ]
 
     def __str__(self) -> str:
         return self.login
+
+
+class CourseRegistrationRateLimit(models.Model):
+    cache_key = models.CharField('Ключ ограничения', max_length=255, unique=True)
+    attempts = models.PositiveSmallIntegerField('Количество попыток', default=0)
+    window_started_at = models.DateTimeField('Начало окна')
+    updated_at = models.DateTimeField('Дата изменения', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Ограничение регистрации'
+        verbose_name_plural = 'Ограничения регистрации'
+        indexes = [
+            models.Index(fields=['cache_key'], name='course_reg_rate_key_idx'),
+            models.Index(fields=['window_started_at'], name='course_reg_rate_window_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return self.cache_key
 
 
 class CourseApplication(models.Model):
@@ -1174,7 +1208,6 @@ class CourseApplication(models.Model):
             models.Index(fields=['student_phone'], name='course_app_phone_idx'),
             models.Index(fields=['generated_login'], name='course_app_login_idx'),
         ]
-
     def __str__(self) -> str:
         return self.full_name
 

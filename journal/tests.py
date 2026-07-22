@@ -1481,10 +1481,14 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
     def test_user_with_temporary_password_is_redirected_to_password_change(self):
         TemporaryCredential.objects.create(
+            user=self.data['teacher'].user,
             login=self.data['teacher'].user.username,
             temporary_password='abc234de',
         )
+        self.data['teacher'].user.username = 'teacher_renamed'
+        self.data['teacher'].user.save(update_fields=['username'])
         self.client.login(username='teacher_ivanov', password='Pass12345!')
+        self.client.force_login(self.data['teacher'].user)
 
         response = self.client.get(reverse('journal'))
 
@@ -1671,10 +1675,14 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self,
     ):
         TemporaryCredential.objects.create(
+            user=self.data['teacher'].user,
             login=self.data['teacher'].user.username,
             temporary_password='abc234de',
         )
+        self.data['teacher'].user.username = 'teacher_renamed'
+        self.data['teacher'].user.save(update_fields=['username'])
         self.client.login(username='teacher_ivanov', password='Pass12345!')
+        self.client.force_login(self.data['teacher'].user)
 
         get_response = self.client.get(reverse('password_change'))
 
@@ -1694,7 +1702,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertEqual(post_response.status_code, 302)
         self.assertFalse(
             TemporaryCredential.objects.filter(
-                login=self.data['teacher'].user.username,
+                user=self.data['teacher'].user,
             ).exists(),
         )
 
@@ -1702,7 +1710,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
         self.assertTrue(
             self.client.login(
-                username='teacher_ivanov',
+                username='teacher_renamed',
                 password='NewPass12345!',
             ),
         )
@@ -2586,7 +2594,7 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
             response.content.decode('utf-8'),
         )
 
-    def test_registration_api_returns_generated_credentials(self):
+    def test_registration_api_creates_credentials_without_returning_password(self):
         with patch(
             'journal.account_utils.generate_temporary_password',
             return_value='Temp12345!',
@@ -2603,10 +2611,11 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertTrue(payload['success'])
         self.assertEqual(payload['status'], CourseApplication.STATUS_CONFIRMED)
         self.assertEqual(payload['status_display'], 'Подтверждена')
-        self.assertEqual(payload['login'], 'Иванов Иван')
-        self.assertEqual(payload['temporary_password'], 'Temp12345!')
+        self.assertTrue(payload['credentials_created'])
+        self.assertNotIn('login', payload)
+        self.assertNotIn('temporary_password', payload)
 
-    def test_registration_api_accepts_public_post_without_csrf_cookie(self):
+    def test_registration_api_requires_csrf_cookie(self):
         csrf_client = Client(enforce_csrf_checks=True, HTTP_HOST='127.0.0.1')
 
         with patch(
@@ -2618,8 +2627,8 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
                 data=self.application_form_payload(),
             )
 
-        self.assertEqual(response.status_code, 201)
-        self.assertTrue(response.json()['success'])
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(CourseApplication.objects.count(), 0)
 
     def test_registration_api_rejects_duplicate_phone(self):
         CourseApplication.objects.create(**self.application_payload())

@@ -122,6 +122,25 @@ def ensure_temporary_credential_for_user(
     return credential
 
 
+def user_has_temporary_credential(user: User) -> bool:
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return False
+
+    from .models import TemporaryCredential
+
+    return TemporaryCredential.objects.filter(
+        Q(user=user) | Q(login=user.username),
+    ).exists()
+
+
+def clear_temporary_credentials_for_user(user: User) -> tuple[int, dict]:
+    from .models import TemporaryCredential
+
+    return TemporaryCredential.objects.filter(
+        Q(user=user) | Q(login=user.username),
+    ).delete()
+
+
 def display_name_for_user(user: User) -> str:
     if user is None:
         return ''

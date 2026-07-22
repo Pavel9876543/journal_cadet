@@ -17,6 +17,7 @@ from .account_utils import (
     ensure_temporary_credential_for_user,
     generate_temporary_password,
     split_user_name,
+    user_has_temporary_credential,
 )
 from .assignment_options import (
     active_group_queryset,
@@ -1426,7 +1427,7 @@ class TeacherAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
                 last_name=last_name,
                 email=obj.email,
             )
-        elif not change and obj.user_id and not TemporaryCredential.objects.filter(login=obj.user.username).exists():
+        elif not change and obj.user_id and not user_has_temporary_credential(obj.user):
             temporary_password = generate_temporary_password()
             obj.user.set_password(temporary_password)
             obj.user.save(update_fields=['password'])

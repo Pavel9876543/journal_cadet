@@ -26,7 +26,6 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
-    TemporaryCredential,
 )
 from .registration_utils import (
     calculate_age,
@@ -34,6 +33,7 @@ from .registration_utils import (
     normalize_parent_contacts,
     normalize_phone_number,
 )
+from .account_utils import clear_temporary_credentials_for_user
 
 
 HTML_DATE_INPUT_FORMAT = '%Y-%m-%d'
@@ -177,7 +177,7 @@ class DetailedPasswordChangeForm(SetPasswordForm):
     def save(self, commit=True):
         user = super().save(commit=commit)
         if commit:
-            TemporaryCredential.objects.filter(login=user.username).delete()
+            clear_temporary_credentials_for_user(user)
         return user
 
 
