@@ -12,6 +12,7 @@ from django.utils.translation import gettext_lazy as _
 
 from .account_utils import (
     build_username_from_full_name,
+    display_name_for_user,
     ensure_temporary_credential_for_user,
     generate_temporary_password,
     split_user_name,
@@ -431,6 +432,31 @@ class StudentSubjectAdminForm(forms.ModelForm):
             self.fields['subject'].queryset = Subject.objects.filter(is_specialty=True)
 
 
+def fallback_group_for_detached_student(current_group_id=None):
+    groups = (
+        StudyGroup.objects
+        .filter(name=CourseApplication.STUDENT_COURSE_GROUP_NAME)
+        .select_related('academic_year')
+    )
+    if current_group_id:
+        groups = groups.exclude(pk=current_group_id)
+
+    return (
+        groups.filter(is_active=True).order_by('-academic_year__starts_on', 'name').first()
+        or groups.order_by('-academic_year__starts_on', 'name').first()
+    )
+
+
+class StudentInlineFormSet(forms.models.BaseInlineFormSet):
+    def delete_existing(self, obj, commit=True):
+        target_group = fallback_group_for_detached_student(
+            current_group_id=getattr(self.instance, 'pk', None),
+        )
+        obj.group = target_group
+        if commit:
+            obj.save(update_fields=['group'])
+
+
 # -----------------------------------------------------------------------------
 # Inline-классы
 # -----------------------------------------------------------------------------
@@ -507,6 +533,7 @@ class StudentSubjectForSubjectInline(admin.TabularInline):
 class StudentInline(admin.TabularInline):
     model = Student
     form = StudentAdminForm
+    formset = StudentInlineFormSet
     extra = 1
     autocomplete_fields = ('user', 'instrument')
     fields = (
@@ -1074,7 +1101,9 @@ class StudentSubjectAdmin(admin.ModelAdmin):
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
-        return obj.student.group if obj.student_id else '—'
+        if obj and obj.student_id:
+            return obj.student.group or '—'
+        return '—'
 
 
 @admin.register(Grade)
@@ -1163,7 +1192,7 @@ class GradeAdmin(admin.ModelAdmin):
     @admin.display(description='Группа')
     def student_group_display(self, obj):
         if obj and obj.student_id:
-            return obj.student.group
+            return obj.student.group or '—'
         return '—'
 
     @admin.display(description='Тип назначения')
@@ -1221,7 +1250,9 @@ class SubjectResultAdmin(admin.ModelAdmin):
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
-        return obj.student.group if obj.student_id else '—'
+        if obj and obj.student_id:
+            return obj.student.group or '—'
+        return '—'
 
 
 # -----------------------------------------------------------------------------
@@ -1406,22 +1437,36 @@ class CourseApplicationAdmin(admin.ModelAdmin):
 
 @admin.register(TemporaryCredential)
 class TemporaryCredentialAdmin(admin.ModelAdmin):
-    list_display = ('login', 'course_application_link', 'student_phone', 'created_at')
-    list_filter = ('created_at',)
+    list_display = (
+        'login',
+        'user_link',
+        'role_display',
+        'contact_phone_display',
+        'course_application_link',
+        'created_at',
+    )
+    list_filter = ('created_at', 'user__groups', 'user__is_staff', 'user__is_superuser')
     search_fields = (
         'login',
         'student_phone',
+        'user__username',
+        'user__first_name',
+        'user__last_name',
+        'user__email',
+        'user__student_profile__full_name',
+        'user__teacher_profile__full_name',
         'course_application__last_name',
         'course_application__first_name',
         'course_application__middle_name',
     )
     readonly_fields = ('created_at',)
-    autocomplete_fields = ('course_application',)
+    autocomplete_fields = ('user', 'course_application')
     date_hierarchy = 'created_at'
     list_per_page = 50
     fieldsets = (
         ('Временный доступ', {
             'fields': (
+                'user',
                 'course_application',
                 'login',
                 'temporary_password',
@@ -1432,9 +1477,57 @@ class TemporaryCredentialAdmin(admin.ModelAdmin):
         }),
     )
 
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related(
+                'user',
+                'user__student_profile',
+                'user__teacher_profile',
+                'course_application',
+            )
+            .prefetch_related('user__groups')
+        )
+
     @admin.display(description='Заявка')
     def course_application_link(self, obj):
         return admin_change_link(obj.course_application)
+
+    @admin.display(description='Пользователь')
+    def user_link(self, obj):
+        user = obj.user
+        if user is None and obj.login:
+            user = AuthUser.objects.filter(username=obj.login).first()
+        return admin_change_link(user, label=display_name_for_user(user) or getattr(user, 'username', None))
+
+    @admin.display(description='Роль')
+    def role_display(self, obj):
+        user = obj.user
+        if user is None and obj.login:
+            user = AuthUser.objects.filter(username=obj.login).prefetch_related('groups').first()
+        if user is None:
+            return 'Ученик' if obj.course_application_id or obj.student_phone else '—'
+
+        group_names = set(user.groups.values_list('name', flat=True))
+        if user.is_superuser or user.is_staff or 'Администратор' in group_names:
+            return 'Администратор'
+        if 'Преподаватель' in group_names or hasattr(user, 'teacher_profile'):
+            return 'Преподаватель'
+        if 'Ученик' in group_names or hasattr(user, 'student_profile'):
+            return 'Ученик'
+        return 'Пользователь'
+
+    @admin.display(description='Телефон')
+    def contact_phone_display(self, obj):
+        if obj.student_phone:
+            return obj.student_phone
+        user = obj.user
+        if user is None and obj.login:
+            user = AuthUser.objects.filter(username=obj.login).select_related('student_profile').first()
+        if user is not None and hasattr(user, 'student_profile'):
+            return user.student_profile.student_phone or '—'
+        return '—'
 
 
 @admin.register(CourseRegistrationSettings)

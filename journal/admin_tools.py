@@ -270,7 +270,12 @@ def build_temporary_credentials_workbook() -> Workbook:
         'Роль',
     ])
 
-    queryset = TemporaryCredential.objects.order_by('id')
+    queryset = (
+        TemporaryCredential.objects
+        .select_related('user')
+        .prefetch_related('user__groups')
+        .order_by('id')
+    )
 
     for credential in queryset:
         worksheet.append([
@@ -324,12 +329,14 @@ def get_credential_role(credential: TemporaryCredential) -> str:
     if not login:
         return ''
 
-    user = (
-        get_user_model()
-        .objects
-        .filter(username=login)
-        .first()
-    )
+    user = getattr(credential, 'user', None)
+    if user is None:
+        user = (
+            get_user_model()
+            .objects
+            .filter(username=login)
+            .first()
+        )
 
     if user is None:
         return ''

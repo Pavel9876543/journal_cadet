@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Q
 from django.utils.crypto import get_random_string
 
 _TEMP_PASSWORD_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
@@ -76,7 +77,12 @@ def ensure_temporary_credential_for_user(
 ):
     from .models import TemporaryCredential
 
-    credential = TemporaryCredential.objects.filter(login=user.username).order_by('id').first()
+    credential = (
+        TemporaryCredential.objects
+        .filter(Q(user=user) | Q(login=user.username))
+        .order_by('id')
+        .first()
+    )
     password_is_missing = credential is None or not credential.temporary_password
 
     if password is None and reset_missing_password and password_is_missing:
@@ -88,12 +94,19 @@ def ensure_temporary_credential_for_user(
 
     if credential is None:
         credential = TemporaryCredential.objects.create(
+            user=user,
             login=user.username,
             temporary_password=password or '',
             student_phone=student_phone,
         )
     else:
         update_fields = []
+        if credential.user_id != user.pk:
+            credential.user = user
+            update_fields.append('user')
+        if credential.login != user.username:
+            credential.login = user.username
+            update_fields.append('login')
         if password is not None and credential.temporary_password != password:
             credential.temporary_password = password
             update_fields.append('temporary_password')
@@ -103,7 +116,9 @@ def ensure_temporary_credential_for_user(
         if update_fields:
             credential.save(update_fields=update_fields)
 
-    TemporaryCredential.objects.filter(login=user.username).exclude(pk=credential.pk).delete()
+    TemporaryCredential.objects.filter(
+        Q(user=user) | Q(login=user.username),
+    ).exclude(pk=credential.pk).delete()
     return credential
 
 

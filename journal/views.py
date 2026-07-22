@@ -143,6 +143,11 @@ def grade_options_api(request):
     if not can_manage_all_grades:
         teachers = teachers.filter(pk=teacher_profile.pk)
 
+    groups = _include_selected_option(groups, StudyGroup, group)
+    students = _include_selected_option(students, Student, student)
+    subjects = _include_selected_option(subjects, Subject, subject)
+    teachers = _include_selected_option(teachers, Teacher, teacher)
+
     return JsonResponse({
         'groups': [
             {'id': group.pk, 'label': str(group)}
@@ -207,6 +212,14 @@ def _get_selected_object(queryset, raw_pk):
         return queryset.filter(pk=raw_pk).first()
     except (TypeError, ValueError):
         return None
+
+
+def _include_selected_option(queryset, model, selected):
+    if selected is None or not getattr(selected, 'pk', None):
+        return queryset
+    return model.objects.filter(
+        Q(pk__in=queryset.values('pk')) | Q(pk=selected.pk),
+    ).distinct()
 
 
 def _current_academic_year() -> AcademicYear | None:
@@ -941,8 +954,8 @@ def _journal_for_student(
     selected_academic_year: AcademicYear | None,
 ):
     role_mode = 'student'
-    selected_group = student.group
-    groups = [selected_group]
+    selected_group = student.group if student.group_id else None
+    groups = [selected_group] if selected_group is not None else []
     students = [student]
 
     subjects = get_student_allowed_subjects(student)
@@ -987,7 +1000,7 @@ def _journal_for_student(
             students=students,
             journal_tables=journal_tables,
             selected_group=selected_group,
-            selected_group_id=str(selected_group.pk),
+            selected_group_id=str(selected_group.pk) if selected_group is not None else '',
             selected_subject_id=selected_subject_id,
             academic_years=academic_years,
             selected_academic_year=selected_academic_year,

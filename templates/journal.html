@@ -1122,7 +1122,7 @@
                     {% else %}
                         <div class="field">
                             <span class="field-label">Группа</span>
-                            <input type="text" value="{{ selected_group.name }}" readonly>
+                            <input type="text" value="{% if selected_group %}{{ selected_group.name }}{% else %}-{% endif %}" readonly>
                         </div>
                     {% endif %}
 

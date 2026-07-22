@@ -265,6 +265,22 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertIn(data['solfeggio'], data['group'].subjects.all())
         self.assertEqual(data['teacher'].group_subjects.count(), 1)
 
+    def test_student_group_is_optional_and_cleared_when_group_is_deleted(self):
+        group = self.create_group()
+        student = self.create_student(group=group)
+
+        group.delete()
+        student.refresh_from_db()
+
+        self.assertIsNone(student.group)
+
+    def test_student_without_group_keeps_individual_subjects_display(self):
+        data = self.create_base_journal()
+        data['student'].group = None
+        data['student'].save(update_fields=['group'])
+
+        self.assertIn('Специальность', data['student'].subjects_display)
+
     def test_group_subject_rejects_specialty_subject(self):
         group = self.create_group()
         specialty = self.create_subject(name='Специальность', is_specialty=True)
@@ -595,6 +611,7 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credential.login, 'Иванов Иван')
         self.assertEqual(credential.temporary_password, 'Temp12345!')
         self.assertEqual(credential.student_phone, '+7 (999) 123-45-67')
+        self.assertEqual(credential.user, user)
         self.assertTrue(user.check_password('Temp12345!'))
         self.assertEqual(student.full_name, 'Иванов Иван Иванович')
         self.assertEqual(student.gender, application.gender)
@@ -1277,6 +1294,27 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
             [self.data['student'].pk],
         )
 
+    def test_options_keep_currently_selected_values_when_other_field_changes(self):
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'group': self.data['group'].pk,
+                'student': self.data['student'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'teacher': self.data['other_teacher'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn(self.data['group'].pk, [item['id'] for item in payload['groups']])
+        self.assertIn(self.data['student'].pk, [item['id'] for item in payload['students']])
+        self.assertIn(self.data['solfeggio'].pk, [item['id'] for item in payload['subjects']])
+        self.assertIn(self.data['other_teacher'].pk, [item['id'] for item in payload['teachers']])
+
     def test_teacher_options_are_always_limited_to_own_assignments(self):
         self.client.login(username='teacher_ivanov', password='Pass12345!')
 
@@ -1329,6 +1367,17 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Сольфеджио')
         self.assertNotContains(response, 'Регистрация на курсы')
+
+    def test_student_without_group_can_open_journal(self):
+        self.data['student'].group = None
+        self.data['student'].save(update_fields=['group'])
+        self.client.login(username='student_sidorov', password='Pass12345!')
+
+        response = self.client.get(reverse('journal'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Мои оценки')
+        self.assertContains(response, 'Нет данных по выбранным фильтрам.')
 
     def test_user_with_temporary_password_is_redirected_to_password_change(self):
         TemporaryCredential.objects.create(
@@ -1704,6 +1753,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
     def test_group_admin_allows_editing_and_deleting_students_inline(self):
         year = self.create_academic_year()
         group = StudyGroup.objects.create(name='Группа с редактированием', academic_year=year)
+        fallback_group = StudyGroup.objects.create(
+            name=CourseApplication.STUDENT_COURSE_GROUP_NAME,
+            academic_year=year,
+        )
         instrument = self.create_instrument()
         student_to_edit = Student.objects.create(
             full_name='Старое Имя',
@@ -1762,8 +1815,55 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 302)
         student_to_edit.refresh_from_db()
+        student_to_delete.refresh_from_db()
         self.assertEqual(student_to_edit.full_name, 'Новое Имя')
-        self.assertFalse(Student.objects.filter(pk=student_to_delete.pk).exists())
+        self.assertEqual(student_to_delete.group, fallback_group)
+
+    def test_group_admin_detaches_student_when_no_fallback_group_exists(self):
+        year = self.create_academic_year()
+        group = StudyGroup.objects.create(name='Ученики курсов', academic_year=year)
+        instrument = self.create_instrument()
+        student = Student.objects.create(
+            full_name='Открепляемый Ученик',
+            group=group,
+            instrument=instrument,
+            is_active=True,
+        )
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.post(
+            reverse('admin:journal_studygroup_change', args=[group.pk]),
+            data={
+                'name': group.name,
+                'academic_year': year.pk,
+                'is_active': 'on',
+                'group_subjects-TOTAL_FORMS': '0',
+                'group_subjects-INITIAL_FORMS': '0',
+                'group_subjects-MIN_NUM_FORMS': '0',
+                'group_subjects-MAX_NUM_FORMS': '1000',
+                'students-TOTAL_FORMS': '1',
+                'students-INITIAL_FORMS': '1',
+                'students-MIN_NUM_FORMS': '0',
+                'students-MAX_NUM_FORMS': '1000',
+                'students-0-id': student.pk,
+                'students-0-group': group.pk,
+                'students-0-full_name': student.full_name,
+                'students-0-gender': '',
+                'students-0-birth_date': '',
+                'students-0-instrument': instrument.pk,
+                'students-0-student_phone': '',
+                'students-0-city_church': '',
+                'students-0-music_education': '',
+                'students-0-user': '',
+                'students-0-is_active': 'on',
+                'students-0-DELETE': 'on',
+                '_save': 'Save',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        student.refresh_from_db()
+        self.assertIsNone(student.group)
 
     def test_student_admin_uses_prefetched_specialty_without_row_queries(self):
         data = self.create_base_journal()
@@ -1818,6 +1918,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(teacher.user.username, 'Преподаватель Новый')
         self.assertTrue(teacher.user.groups.filter(name='Преподаватель').exists())
         credential = TemporaryCredential.objects.get(login=teacher.user.username)
+        self.assertEqual(credential.user, teacher.user)
         self.assertTrue(credential.temporary_password)
         self.assertTrue(teacher.user.check_password(credential.temporary_password))
 
@@ -2514,6 +2615,7 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
             list(TemporaryCredential.objects.order_by('login').values_list('login', flat=True)),
             ['Иванов Иван', 'Иванов Иван 2'],
         )
+        self.assertFalse(TemporaryCredential.objects.filter(user__isnull=True).exists())
 
         call_command('create_student_accounts', stdout=StringIO())
 
@@ -2534,6 +2636,7 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
             list(TemporaryCredential.objects.order_by('login').values_list('login', flat=True)),
             ['Иванов Иван', 'Иванов Иван 2'],
         )
+        self.assertFalse(TemporaryCredential.objects.filter(user__isnull=True).exists())
 
         call_command('create_teacher_accounts', stdout=StringIO())
 
@@ -2558,6 +2661,7 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
 
         self.assertTrue(user.is_superuser)
         self.assertTrue(user.groups.filter(name='Администратор').exists())
+        self.assertEqual(credential.user, user)
         self.assertEqual(credential.temporary_password, 'AdminTemp123!')
         self.assertTrue(user.check_password(credential.temporary_password))
 
@@ -2642,8 +2746,10 @@ class SeedDataCommandTests(TestCase):
     def test_seed_data_creates_temporary_credentials_for_every_user(self):
         user_logins = set(User.objects.values_list('username', flat=True))
         credential_logins = set(TemporaryCredential.objects.values_list('login', flat=True))
+        credential_user_ids = set(TemporaryCredential.objects.values_list('user_id', flat=True))
 
         self.assertEqual(credential_logins, user_logins)
+        self.assertEqual(credential_user_ids, set(User.objects.values_list('id', flat=True)))
 
     def test_seed_data_can_be_run_twice_without_duplicate_settings_error(self):
         self.run_seed_data()
@@ -2729,6 +2835,7 @@ class SeedDataCommandTests(TestCase):
 
         for student in Student.objects.select_related('user'):
             credential = TemporaryCredential.objects.get(login=student.user.username)
+            self.assertEqual(credential.user, student.user)
             self.assertEqual(credential.student_phone, student.student_phone)
 
 
@@ -2762,6 +2869,8 @@ class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
 
         csv_output = output.getvalue()
 
+        self.assertIn('role,name,login,temporary_password,created_at,phone', csv_output)
+        self.assertIn('student', csv_output)
         self.assertIn('login', csv_output)
         self.assertIn('temporary_password', csv_output)
         self.assertIn('Иванов Иван', csv_output)

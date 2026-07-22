@@ -360,7 +360,9 @@ class Student(models.Model):
     )
     group = models.ForeignKey(
         StudyGroup,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='students',
         verbose_name='Группа',
     )
@@ -439,10 +441,12 @@ class Student(models.Model):
 
     @property
     def all_subjects_qs(self):
-        if not self.pk or not self.group_id:
+        if not self.pk:
             return Subject.objects.none()
 
-        group_subject_ids = self.group.group_subjects.filter(is_active=True).values_list('subject_id', flat=True)
+        group_subject_ids = ()
+        if self.group_id:
+            group_subject_ids = self.group.group_subjects.filter(is_active=True).values_list('subject_id', flat=True)
         individual_subject_ids = self.individual_subjects.filter(is_active=True).values_list('subject_id', flat=True)
         subject_ids = set(group_subject_ids) | set(individual_subject_ids)
         return Subject.objects.filter(pk__in=subject_ids).order_by('name')
@@ -1028,6 +1032,15 @@ class PasswordRecoveryContact(models.Model):
 
 
 class TemporaryCredential(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='temporary_credentials',
+        verbose_name='Пользователь',
+        help_text='Пользователь, которому выданы временные учетные данные.',
+    )
     course_application = models.OneToOneField(
         'CourseApplication',
         on_delete=models.CASCADE,
@@ -1040,13 +1053,14 @@ class TemporaryCredential(models.Model):
     login = models.CharField('Логин', max_length=150)
     temporary_password = models.CharField('Временный пароль', max_length=128)
     created_at = models.DateTimeField('Дата и время создания', auto_now_add=True)
-    student_phone = models.CharField('Номер телефона ученика', max_length=32, blank=True)
+    student_phone = models.CharField('Телефон', max_length=32, blank=True)
 
     class Meta:
         verbose_name = 'Временные учетные данные'
         verbose_name_plural = 'Временные учетные данные'
         ordering = ['-created_at', '-id']
         indexes = [
+            models.Index(fields=['user'], name='temp_cred_user_idx'),
             models.Index(fields=['login'], name='temp_cred_login_idx'),
             models.Index(fields=['student_phone'], name='temp_cred_phone_idx'),
             models.Index(fields=['-created_at'], name='temp_cred_created_idx'),
@@ -1323,6 +1337,7 @@ class CourseApplication(models.Model):
                 existing_user.save(update_fields=['password'])
 
             TemporaryCredential.objects.create(
+                user=existing_user,
                 course_application=self,
                 login=login,
                 temporary_password=temporary_password,
@@ -1330,6 +1345,12 @@ class CourseApplication(models.Model):
             )
         else:
             updates = []
+            if temporary_credential.user_id != existing_user.pk:
+                temporary_credential.user = existing_user
+                updates.append('user')
+            if temporary_credential.login != login:
+                temporary_credential.login = login
+                updates.append('login')
             if temporary_credential.course_application_id != self.pk:
                 temporary_credential.course_application = self
                 updates.append('course_application')

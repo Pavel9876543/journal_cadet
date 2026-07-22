@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from journal import account_utils
-from journal.models import Student, TemporaryCredential
+from journal.models import Student
 
 
 class Command(BaseCommand):
@@ -40,18 +40,7 @@ class Command(BaseCommand):
             student.save(update_fields=['user'])
             used_usernames.add(username)
 
-            credential = TemporaryCredential.objects.filter(login=username).order_by('id').first()
-            if credential is None:
-                TemporaryCredential.objects.create(
-                    login=username,
-                    temporary_password=password,
-                    student_phone=student.student_phone,
-                )
-            else:
-                credential.temporary_password = password
-                credential.student_phone = student.student_phone
-                credential.save(update_fields=['temporary_password', 'student_phone'])
-                TemporaryCredential.objects.filter(login=username).exclude(pk=credential.pk).delete()
+            account_utils.ensure_temporary_credential_for_user(user, password=password)
 
             credentials.append(
                 {

@@ -499,6 +499,7 @@ class Command(BaseCommand):
                 )
 
             TemporaryCredential.objects.create(
+                user=user,
                 login=user.username,
                 temporary_password=password,
             )
@@ -691,6 +692,7 @@ class Command(BaseCommand):
                 )
 
             TemporaryCredential.objects.create(
+                user=user,
                 login=user.username,
                 temporary_password=password,
                 student_phone=student.student_phone,
