@@ -24,7 +24,11 @@ from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
 
-from .academic_year_context import academic_year_ids_for_user
+from .academic_year_context import (
+    academic_year_ids_for_user,
+    filter_temporary_credentials_for_year,
+    get_selected_admin_academic_year,
+)
 from .account_utils import user_has_temporary_credential
 from .assignment_options import (
     active_group_queryset,
@@ -1924,11 +1928,11 @@ async def export_student_credentials_xlsx(request):
 
 
 def _export_student_credentials_xlsx_sync(request):
-    rows = (
-        TemporaryCredential.objects
-        .select_related('course_application')
-        .order_by('id')
-    )
+    rows = TemporaryCredential.objects.all()
+    selected_academic_year = get_selected_admin_academic_year(request)
+    if selected_academic_year is not None:
+        rows = filter_temporary_credentials_for_year(rows, selected_academic_year)
+    rows = rows.select_related('course_application').order_by('id')
 
     data_rows = []
     for credential in rows:

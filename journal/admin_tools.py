@@ -297,7 +297,14 @@ def _admin_export_test_credentials_excel_view_sync(request: HttpRequest) -> Http
 
     Файл формируется прямо в памяти и сразу отдается администратору.
     """
-    workbook = build_temporary_credentials_workbook()
+    selected_academic_year = get_selected_admin_academic_year(request)
+    credentials = TemporaryCredential.objects.all()
+    if selected_academic_year is not None:
+        credentials = filter_temporary_credentials_for_year(
+            credentials,
+            selected_academic_year,
+        )
+    workbook = build_temporary_credentials_workbook(credentials)
 
     now = timezone.localtime()
     filename = f'temporary_credentials_{now:%Y-%m-%d_%H-%M}.xlsx'
@@ -318,7 +325,7 @@ def _admin_export_test_credentials_excel_view_sync(request: HttpRequest) -> Http
     return response
 
 
-def build_temporary_credentials_workbook() -> Workbook:
+def build_temporary_credentials_workbook(queryset=None) -> Workbook:
     """
     Создает Excel-файл с временными учетными данными.
 
@@ -338,8 +345,9 @@ def build_temporary_credentials_workbook() -> Workbook:
         'Роль',
     ])
 
+    queryset = queryset if queryset is not None else TemporaryCredential.objects.all()
     queryset = (
-        TemporaryCredential.objects
+        queryset
         .select_related('user')
         .prefetch_related('user__groups')
         .order_by('id')

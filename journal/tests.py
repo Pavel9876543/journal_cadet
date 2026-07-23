@@ -2777,7 +2777,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
 
     def test_inactive_academic_year_is_read_only_even_when_active_year_is_selected(self):
         old_year = self.create_academic_year(name='2025/2026')
-        active_year = self.create_academic_year(name='2026/2027')
+        self.create_academic_year(name='2026/2027')
         request = self.admin_request(active_year)
         year_admin = AcademicYearAdmin(AcademicYear, django_admin.site)
 
@@ -2850,6 +2850,27 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             str(student_admin.specialty_teacher_display(selected_student)),
             specialty.teacher_name_snapshot,
         )
+
+    def test_repeat_student_temporary_credential_belongs_only_to_creation_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        first_application = CourseApplication.objects.create(**self.application_payload())
+        active_year = self.create_academic_year(name='2026/2027')
+        CourseApplication.objects.create(
+            **self.application_payload(student_phone='+7 (999) 765-43-21'),
+        )
+        credential = TemporaryCredential.objects.get(user_id=first_application.user_id)
+
+        old_credentials = filter_temporary_credentials_for_year(
+            TemporaryCredential.objects.all(),
+            old_year,
+        )
+        active_credentials = filter_temporary_credentials_for_year(
+            TemporaryCredential.objects.all(),
+            active_year,
+        )
+
+        self.assertIn(credential, old_credentials)
+        self.assertNotIn(credential, active_credentials)
 
     def test_temporary_credentials_are_scoped_to_selected_academic_year(self):
         old_year = self.create_academic_year(name='2025/2026')
@@ -4184,6 +4205,30 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('Телефон ученика', rows[0])
         self.assertNotIn('Заявка', rows[0])
 
+    def test_admin_temporary_credentials_export_uses_selected_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_application = CourseApplication.objects.create(**self.application_payload())
+        active_year = self.create_academic_year(name='2026/2027')
+        active_application = CourseApplication.objects.create(
+            **self.application_payload(
+                last_name='Петров',
+                birth_date=date(2001, 2, 2),
+                student_phone='+7 (999) 765-43-21',
+            ),
+        )
+        session = self.client.session
+        session['journal_admin_academic_year_id'] = old_year.pk
+        session.save()
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_export_test_credentials_excel'))
+        workbook = load_workbook(BytesIO(response.content))
+        rows = list(workbook.active.iter_rows(values_only=True))
+
+        self.assertIn(old_application.generated_login, {row[0] for row in rows[1:]})
+        self.assertNotIn(active_application.generated_login, {row[0] for row in rows[1:]})
+        self.assertNotIn('teacher_export', {row[0] for row in rows[1:]})
+
     def test_admin_temporary_credentials_export_rejects_post(self):
         self.client.login(username='admin_xlsx', password='Pass12345!')
 
@@ -4207,7 +4252,7 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
             rows,
         )
 
-    def test_temporary_credentials_export_rejects_post(self):
+    def test_legacy_temporary_credentials_export_rejects_post(self):
         self.client.login(username='admin_xlsx', password='Pass12345!')
 
         response = self.client.post(reverse('export_student_credentials_xlsx'))
