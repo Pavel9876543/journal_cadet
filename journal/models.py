@@ -2202,7 +2202,14 @@ class CourseApplication(models.Model):
 
 
 def sync_students_with_active_academic_year(academic_year_id: int) -> None:
-    """Restore current group pointers from the enrollment of the active year."""
+    """Restore current student state from enrollments of the active year."""
+    enrolled_student_ids = StudentEnrollment.objects.filter(
+        academic_year_id=academic_year_id,
+    ).values('student_id')
+    Student.objects.exclude(pk__in=enrolled_student_ids).update(
+        group=None,
+        is_active=False,
+    )
     Student.objects.filter(group__isnull=False).exclude(
         group__academic_year_id=academic_year_id,
     ).update(group=None)

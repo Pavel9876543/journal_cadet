@@ -298,6 +298,7 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertFalse(data['year'].is_active)
         self.assertTrue(new_year.is_active)
         self.assertIsNone(data['student'].group_id)
+        self.assertFalse(data['student'].is_active)
         self.assertEqual(grade.enrollment.group_id, data['group'].pk)
         self.assertEqual(grade.student_name_snapshot, old_name)
 
@@ -398,6 +399,7 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         data['student'].refresh_from_db()
         self.assertTrue(data['year'].is_active)
         self.assertEqual(data['student'].group_id, data['group'].pk)
+        self.assertTrue(data['student'].is_active)
 
     def test_archived_grade_cannot_be_changed_or_deleted(self):
         data = self.create_base_journal()
