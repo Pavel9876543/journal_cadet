@@ -121,61 +121,48 @@ class AcademicYear(models.Model):
             if old_value and not old_value['is_active']:
                 raise ValidationError(ARCHIVED_ACADEMIC_YEAR_ERROR)
 
+    @classmethod
+    def _lock_activation(cls) -> None:
+        if connection.vendor == 'postgresql':
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'SELECT pg_advisory_xact_lock(%s)',
+                    [0x4341444554594541],
+                )
+        # Row locks serialize updates on databases that support SELECT FOR UPDATE.
+        list(cls.objects.select_for_update().values_list('pk', flat=True))
+
     def save(self, *args, **kwargs):
         with transaction.atomic():
-            if connection.vendor == 'postgresql':
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        'SELECT pg_advisory_xact_lock(%s)',
-                        [0x4341444554594541],
-                    )
+            self._lock_activation()
             previous_active_id = (
                 AcademicYear.objects
-                .select_for_update()
                 .filter(is_active=True)
                 .values_list('pk', flat=True)
                 .first()
             )
-            list(AcademicYear.objects.select_for_update().values_list('pk', flat=True))
             self.clean_fields()
             self.clean()
             self.validate_unique()
             self.is_active = False
             self.validate_constraints()
+
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None:
+                kwargs['update_fields'] = tuple(set(update_fields) | {'is_active'})
+
             super().save(*args, **kwargs)
-            latest_year = self.latest()
-            if (
-                previous_active_id
-                and previous_active_id != self.pk
-                and latest_year is not None
-                and latest_year.pk == self.pk
-            ):
-                finalize_academic_year_snapshots(previous_active_id)
-            self.activate_latest()
+            self.activate_latest(previous_active_id=previous_active_id, lock_acquired=True)
             self.is_active = AcademicYear.objects.filter(pk=self.pk, is_active=True).exists()
-            if self.is_active:
-                if previous_active_id and previous_active_id != self.pk:
-                    Student.objects.filter(
-                        group__academic_year_id=previous_active_id,
-                    ).update(group=None)
-                CourseRegistrationSettings.sync_active_year(self)
 
     def delete(self, *args, **kwargs):
         with transaction.atomic():
-            if connection.vendor == 'postgresql':
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        'SELECT pg_advisory_xact_lock(%s)',
-                        [0x4341444554594541],
-                    )
+            self._lock_activation()
             validate_active_academic_year(self)
-            list(AcademicYear.objects.select_for_update().values_list('pk', flat=True))
             if AcademicYear.objects.count() <= 1:
                 raise ValidationError('Нельзя удалить единственный учебный год.')
             result = super().delete(*args, **kwargs)
-            active_year = self.activate_latest()
-            if active_year is not None:
-                CourseRegistrationSettings.sync_active_year(active_year)
+            self.activate_latest(lock_acquired=True)
             return result
 
     @classmethod
@@ -183,14 +170,36 @@ class AcademicYear(models.Model):
         return cls.objects.order_by('-starts_on', '-ends_on', '-pk').first()
 
     @classmethod
-    def activate_latest(cls):
+    def activate_latest(cls, *, previous_active_id=None, lock_acquired=False):
         with transaction.atomic():
-            years = cls.objects.select_for_update().order_by('-starts_on', '-ends_on', '-pk')
+            if not lock_acquired:
+                cls._lock_activation()
+
+            years = cls.objects.order_by('-starts_on', '-ends_on', '-pk')
             latest_year = years.first()
             if latest_year is None:
                 return None
+
+            if previous_active_id is None:
+                previous_active_id = (
+                    cls.objects
+                    .filter(is_active=True)
+                    .values_list('pk', flat=True)
+                    .first()
+                )
+
+            active_changed = previous_active_id != latest_year.pk
+            if active_changed and previous_active_id:
+                finalize_academic_year_snapshots(previous_active_id)
+
             years.exclude(pk=latest_year.pk).update(is_active=False)
             cls.objects.filter(pk=latest_year.pk).update(is_active=True)
+            latest_year.is_active = True
+
+            if active_changed:
+                sync_students_with_active_academic_year(latest_year.pk)
+
+            CourseRegistrationSettings.sync_active_year(latest_year)
             return latest_year
 
     @classmethod
@@ -2190,6 +2199,43 @@ class CourseApplication(models.Model):
             ).first()
 
         return None
+
+
+def sync_students_with_active_academic_year(academic_year_id: int) -> None:
+    """Restore current group pointers from the enrollment of the active year."""
+    Student.objects.filter(group__isnull=False).exclude(
+        group__academic_year_id=academic_year_id,
+    ).update(group=None)
+
+    enrollments = list(
+        StudentEnrollment.objects
+        .filter(academic_year_id=academic_year_id)
+        .only('student_id', 'group_id', 'is_active')
+    )
+    if not enrollments:
+        return
+
+    students_by_id = {
+        student.pk: student
+        for student in Student.objects.filter(
+            pk__in=[enrollment.student_id for enrollment in enrollments],
+        )
+    }
+    students_to_update = []
+    for enrollment in enrollments:
+        student = students_by_id.get(enrollment.student_id)
+        if student is None:
+            continue
+        student.group_id = enrollment.group_id
+        student.is_active = enrollment.is_active
+        students_to_update.append(student)
+
+    if students_to_update:
+        Student.objects.bulk_update(
+            students_to_update,
+            ('group', 'is_active'),
+            batch_size=500,
+        )
 
 
 def finalize_academic_year_snapshots(academic_year_id: int) -> None:

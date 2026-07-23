@@ -345,6 +345,61 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertEqual(grade.subject_name_snapshot, 'Итоговое название предмета')
         self.assertEqual(grade.teacher_name_snapshot, 'Итоговое имя преподавателя')
 
+    def test_reordering_active_year_finalizes_it_and_restores_latest_enrollment(self):
+        data = self.create_base_journal()
+        current_year = self.create_academic_year(name='2027/2028')
+        current_group = self.create_group(name='Группа Б', academic_year=current_year)
+        GroupSubject.objects.create(
+            group=current_group,
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+        )
+
+        data['student'].group = current_group
+        data['student'].full_name = 'Финальное имя второго года'
+        data['student'].save()
+        current_grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=current_year,
+            date=date(2027, 10, 10),
+            value='5',
+        )
+
+        current_year.name = '2024/2025'
+        current_year.starts_on = date(2024, 9, 1)
+        current_year.ends_on = date(2025, 8, 31)
+        current_year.save()
+
+        data['year'].refresh_from_db()
+        current_year.refresh_from_db()
+        data['student'].refresh_from_db()
+        current_grade.refresh_from_db()
+        current_enrollment = StudentEnrollment.objects.get(
+            student=data['student'],
+            academic_year=current_year,
+        )
+
+        self.assertTrue(data['year'].is_active)
+        self.assertFalse(current_year.is_active)
+        self.assertEqual(data['student'].group_id, data['group'].pk)
+        self.assertEqual(current_enrollment.full_name, 'Финальное имя второго года')
+        self.assertEqual(current_grade.student_name_snapshot, 'Финальное имя второго года')
+
+    def test_deleting_empty_active_year_restores_previous_student_groups(self):
+        data = self.create_base_journal()
+        empty_year = self.create_academic_year(name='2026/2027')
+        data['student'].refresh_from_db()
+        self.assertIsNone(data['student'].group_id)
+
+        empty_year.delete()
+
+        data['year'].refresh_from_db()
+        data['student'].refresh_from_db()
+        self.assertTrue(data['year'].is_active)
+        self.assertEqual(data['student'].group_id, data['group'].pk)
+
     def test_archived_grade_cannot_be_changed_or_deleted(self):
         data = self.create_base_journal()
         grade = Grade.objects.create(
