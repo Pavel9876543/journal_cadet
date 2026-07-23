@@ -40,7 +40,7 @@ Django-приложение для ведения журнала кадет/уч
 - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` - настройки подключения Django к БД.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` - настройки контейнера PostgreSQL.
 - `pas_key_data` или `DATA_TOOLS_PASSWORD` - пароль подтверждения для опасных инструментов данных в админке.
-- `TRUST_X_FORWARDED_FOR=1` - доверять первому IP из `X-Forwarded-For`, только если reverse proxy очищает этот заголовок.
+- `TRUST_X_FORWARDED_FOR=1` - учитывать `X-Forwarded-For` только за доверенным reverse proxy; адрес берётся с правой стороны цепочки с учётом `TRUSTED_PROXY_COUNT`.
 - `WAIT_FOR_DB=1` - ждать доступности PostgreSQL при старте контейнера.
 - `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`, `DJANGO_SUPERUSER_PASSWORD` - данные суперпользователя. Пароль применяется только при первом создании аккаунта и не меняется при последующих запусках.
 
@@ -122,7 +122,7 @@ Production-контейнер доступен только на `127.0.0.1:8000
 Скрипт создаст `.env.prod` из `.env.prod.example`, если файла нет, и выполнит:
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 180
 ```
 
 При старте контейнера `docker/entrypoint.sh` автоматически выполняет:
@@ -130,8 +130,10 @@ docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod
 ```bash
 python manage.py migrate --noinput
 python manage.py ensure_superuser
-python manage.py collectstatic --noinput
+python manage.py collectstatic --noinput --clear
 ```
+
+Статика собирается в контейнерный каталог `/var/lib/cadet-journal/staticfiles`, а не в примонтированный с Windows каталог `/app`. После обновления со старой версии обязательно пересоберите образ через `./scripts/run-local.sh` или командой Compose с `--build`.
 
 ## Тестовое заполнение БД
 
@@ -155,7 +157,7 @@ python manage.py migrate --noinput
 python manage.py seed_data
 ```
 
-Важно: `python manage.py seed_data` очищает существующие заявки, оценки, итоги, учеников, преподавателей, группы, предметы, временные учетные данные и всех пользователей. Используйте эту команду только для тестовой БД или когда перезаполнение допустимо.
+Важно: `python manage.py seed_data` очищает существующие учебные данные и обычные аккаунты учеников/преподавателей, созданные для демо-набора. Суперпользователи, staff-пользователи и их пароли сохраняются. Используйте команду только для тестовой БД или когда перезаполнение допустимо.
 
 Можно запускать команды отдельно:
 
@@ -165,6 +167,18 @@ python manage.py create_teacher_accounts
 python manage.py create_student_accounts
 python manage.py ensure_superuser
 ```
+
+### Когда создаются временные учетные данные
+
+Временный пароль записывается только одновременно с созданием нового аккаунта. Поддерживаемые пути создания:
+
+- пользователь, ученик или преподаватель, созданный через админку;
+- подтверждённая новая заявка на курсы;
+- `createsuperuser` и первый запуск `ensure_superuser`;
+- `create_teacher_accounts` и `create_student_accounts` для профилей без аккаунта;
+- новые демонстрационные аккаунты из `seed_data`.
+
+Редактирование ФИО, контактов, группы, ролей, активности, email или логина не меняет хэш пароля и не создаёт новый временный пароль. Повторный запуск команд также не сбрасывает пароли существующих аккаунтов. Низкоуровневое создание пользователя напрямую через ORM (`User.objects.create_user`) не сохраняет открытый пароль в таблицу: для терминала используйте предусмотренные management-команды.
 
 Для Docker можно использовать как общий скрипт на хосте, так и запуск внутри контейнера:
 
@@ -329,5 +343,5 @@ python manage.py ensure_superuser
 Собрать static-файлы:
 
 ```bash
-python manage.py collectstatic --noinput
+python manage.py collectstatic --noinput --clear
 ```

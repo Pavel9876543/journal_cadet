@@ -105,6 +105,15 @@ jobs:
           docker run --rm --entrypoint python cadet-journal:ci manage.py check
           docker run --rm --entrypoint python cadet-journal:ci manage.py collectstatic --noinput --clear
 
+          # Reproduce the development layout where source code is mounted at
+          # /app. STATIC_ROOT must stay outside that mount so collectstatic
+          # never chmods files on a Windows bind-mounted filesystem.
+          docker run --rm \
+            --mount type=bind,src="$PWD",dst=/app,readonly \
+            --entrypoint python \
+            cadet-journal:ci \
+            manage.py collectstatic --noinput --clear
+
       - name: Production-like HTTP healthcheck
         run: |
           container_id="$(docker run -d \

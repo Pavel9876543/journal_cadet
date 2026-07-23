@@ -31,7 +31,6 @@ class Command(BaseCommand):
                 )
                 password = account_utils.generate_temporary_password()
                 user.username = username
-                user.set_password(password)
             else:
                 username = user.username
 
