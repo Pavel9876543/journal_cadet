@@ -20,18 +20,49 @@ jobs:
 
     steps:
       - name: Deploy on server via SSH
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          APP_DIR: ${{ vars.APP_DIR || '/opt/cadet_journal' }}
+          REPO_CLONE_URL: ${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
+          DJANGO_CSRF_TRUSTED_ORIGINS: ${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DJANGO_SUPERUSER_USERNAME: ${{ secrets.DJANGO_SUPERUSER_USERNAME }}
+          DJANGO_SUPERUSER_EMAIL: ${{ secrets.DJANGO_SUPERUSER_EMAIL }}
+          DJANGO_SUPERUSER_PASSWORD: ${{ secrets.DJANGO_SUPERUSER_PASSWORD }}
+          DJANGO_SUPERUSER_ROTATE_PASSWORD: ${{ secrets.DJANGO_SUPERUSER_ROTATE_PASSWORD }}
+          DATA_TOOLS_PASSWORD: ${{ secrets.DATA_TOOLS_PASSWORD }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          script_stop: true
+          command_timeout: 25m
+          envs: APP_DIR,REPO_CLONE_URL,DJANGO_SECRET_KEY,DJANGO_ALLOWED_HOSTS,DJANGO_CSRF_TRUSTED_ORIGINS,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,DJANGO_SUPERUSER_USERNAME,DJANGO_SUPERUSER_EMAIL,DJANGO_SUPERUSER_PASSWORD,DJANGO_SUPERUSER_ROTATE_PASSWORD,DATA_TOOLS_PASSWORD
           script: |
-            set -e
+            set -eu
 
-            APP_DIR="${{ vars.APP_DIR || '/opt/cadet_journal' }}"
-            REPO_CLONE_URL="${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}"
+            require_value() {
+              value="$1"
+              variable_name="$2"
+              if [ -z "$value" ]; then
+                echo "Ошибка: обязательная переменная $variable_name не задана."
+                exit 1
+              fi
+            }
+
+            require_value "${APP_DIR:-}" APP_DIR
+            require_value "${REPO_CLONE_URL:-}" REPO_CLONE_URL
+            require_value "${DJANGO_SECRET_KEY:-}" DJANGO_SECRET_KEY
+            require_value "${DJANGO_ALLOWED_HOSTS:-}" DJANGO_ALLOWED_HOSTS
+            require_value "${POSTGRES_DB:-}" POSTGRES_DB
+            require_value "${POSTGRES_USER:-}" POSTGRES_USER
+            require_value "${POSTGRES_PASSWORD:-}" POSTGRES_PASSWORD
+            require_value "${DJANGO_SUPERUSER_USERNAME:-}" DJANGO_SUPERUSER_USERNAME
+            require_value "${DJANGO_SUPERUSER_PASSWORD:-}" DJANGO_SUPERUSER_PASSWORD
 
             echo "=== Проверка прав пользователя ==="
 
@@ -53,76 +84,74 @@ jobs:
               SUDO="sudo -n"
             fi
 
-            echo "=== Установка базовых зависимостей ==="
-
-            if command -v apt-get >/dev/null 2>&1; then
-              export DEBIAN_FRONTEND=noninteractive
-
-              $SUDO apt-get update -y
-              $SUDO apt-get install -y \
-                ca-certificates \
-                curl \
-                gnupg \
-                git \
-                lsb-release
-            else
-              echo "Ошибка: этот workflow сейчас поддерживает только Debian/Ubuntu серверы с apt-get."
+            if ! command -v apt-get >/dev/null 2>&1; then
+              echo "Ошибка: workflow поддерживает Debian/Ubuntu серверы с apt-get."
               exit 1
             fi
+
+            echo "=== Установка базовых зависимостей ==="
+            export DEBIAN_FRONTEND=noninteractive
+            $SUDO apt-get update -y
+            $SUDO apt-get install -y ca-certificates curl gnupg git
 
             echo "=== Проверка и установка Docker ==="
 
-            export DEBIAN_FRONTEND=noninteractive
-            
-            $SUDO install -m 0755 -d /etc/apt/keyrings
-            
-            if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
-              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-                $SUDO gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-            
+            if command -v docker >/dev/null 2>&1 && (
+              docker compose version >/dev/null 2>&1 ||
+              $SUDO docker compose version >/dev/null 2>&1
+            ); then
+              echo "Docker Compose уже установлен."
+            else
+              . /etc/os-release
+
+              case "${ID:-}" in
+                ubuntu|debian)
+                  DOCKER_DISTRO="$ID"
+                  ;;
+                *)
+                  echo "Ошибка: Docker-репозиторий не настроен для системы ${ID:-unknown}."
+                  exit 1
+                  ;;
+              esac
+
+              DOCKER_CODENAME="${VERSION_CODENAME:-}"
+              if [ -z "$DOCKER_CODENAME" ]; then
+                echo "Ошибка: не удалось определить codename системы."
+                exit 1
+              fi
+
+              $SUDO install -m 0755 -d /etc/apt/keyrings
+              curl -fsSL "https://download.docker.com/linux/$DOCKER_DISTRO/gpg" | \
+                $SUDO gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
               $SUDO chmod a+r /etc/apt/keyrings/docker.gpg
+
+              echo \
+                "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$DOCKER_DISTRO $DOCKER_CODENAME stable" | \
+                $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+              $SUDO apt-get update -y
+              $SUDO apt-get install -y \
+                docker-ce \
+                docker-ce-cli \
+                containerd.io \
+                docker-buildx-plugin \
+                docker-compose-plugin
+
+              $SUDO systemctl enable docker
+              $SUDO systemctl start docker
             fi
-            
-            . /etc/os-release
-            
-            DOCKER_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
-            
-            if [ -z "$DOCKER_CODENAME" ]; then
-              echo "Ошибка: не удалось определить codename Ubuntu."
-              exit 1
-            fi
-            
-            echo "Codename системы: $DOCKER_CODENAME"
-            
-            echo \
-              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" | \
-              $SUDO tee /etc/apt/sources.list.d/docker.list > /dev/null
-            
-            $SUDO apt-get update -y
-            
-            $SUDO apt-get install -y \
-              docker-ce \
-              docker-ce-cli \
-              containerd.io \
-              docker-buildx-plugin \
-              docker-compose-plugin
-            
-            $SUDO systemctl enable docker
-            $SUDO systemctl start docker
-            
-            echo "=== Версии Docker ==="
-            
+
             if docker version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
               DOCKER_CMD="docker"
             else
               DOCKER_CMD="$SUDO docker"
             fi
-            
+
+            echo "=== Версии Docker ==="
             $DOCKER_CMD --version
             $DOCKER_CMD compose version
 
             echo "=== Подготовка директории приложения ==="
-
             $SUDO mkdir -p "$APP_DIR"
 
             if [ ! -w "$APP_DIR" ]; then
@@ -138,27 +167,25 @@ jobs:
             fi
 
             cd "$APP_DIR"
-
             git config --global --add safe.directory "$APP_DIR"
-            
+
             echo "=== Сброс локальных изменений на сервере ==="
             git fetch origin
             git checkout main
             git reset --hard origin/main
             git clean -fd
-            
-            echo "=== Код проекта обновлён ==="
 
             echo "=== Создание .env.prod ==="
-
-            : > .env.prod
+            umask 077
+            env_tmp="$(mktemp .env.prod.XXXXXX)"
 
             printf '%s\n' \
               "DJANGO_ENV=production" \
               "DEBUG=0" \
-              "SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" \
-              "ALLOWED_HOSTS=${{ secrets.DJANGO_ALLOWED_HOSTS }}" \
-              "CSRF_TRUSTED_ORIGINS=${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}" \
+              "ALLOW_EMBEDDED_PREVIEW=0" \
+              "SECRET_KEY=$DJANGO_SECRET_KEY" \
+              "ALLOWED_HOSTS=$DJANGO_ALLOWED_HOSTS" \
+              "CSRF_TRUSTED_ORIGINS=${DJANGO_CSRF_TRUSTED_ORIGINS:-}" \
               "SECURE_SSL_REDIRECT=1" \
               "SESSION_COOKIE_SECURE=1" \
               "CSRF_COOKIE_SECURE=1" \
@@ -166,32 +193,33 @@ jobs:
               "SECURE_HSTS_INCLUDE_SUBDOMAINS=1" \
               "SECURE_HSTS_PRELOAD=1" \
               "USE_X_FORWARDED_PROTO=1" \
+              "TRUST_X_FORWARDED_FOR=0" \
               "DB_ENGINE=django.db.backends.postgresql" \
-              "DB_NAME=${{ secrets.POSTGRES_DB }}" \
-              "DB_USER=${{ secrets.POSTGRES_USER }}" \
-              "DB_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
+              "DB_NAME=$POSTGRES_DB" \
+              "DB_USER=$POSTGRES_USER" \
+              "DB_PASSWORD=$POSTGRES_PASSWORD" \
               "DB_HOST=db" \
               "DB_PORT=5432" \
               "WAIT_FOR_DB=1" \
-              "POSTGRES_DB=${{ secrets.POSTGRES_DB }}" \
-              "POSTGRES_USER=${{ secrets.POSTGRES_USER }}" \
-              "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
-              "DJANGO_SUPERUSER_USERNAME=${{ secrets.DJANGO_SUPERUSER_USERNAME }}" \
-              "DJANGO_SUPERUSER_EMAIL=${{ secrets.DJANGO_SUPERUSER_EMAIL }}" \
-              "DJANGO_SUPERUSER_PASSWORD=${{ secrets.DJANGO_SUPERUSER_PASSWORD }}" \
-              "DJANGO_SUPERUSER_ROTATE_PASSWORD=${{ secrets.DJANGO_SUPERUSER_ROTATE_PASSWORD }}" \
-              "pas_key_data=${{ secrets.DATA_TOOLS_PASSWORD }}" \
-              "APP_IMAGE=cadet-journal:web" >> .env.prod
+              "POSTGRES_DB=$POSTGRES_DB" \
+              "POSTGRES_USER=$POSTGRES_USER" \
+              "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
+              "DJANGO_SUPERUSER_USERNAME=$DJANGO_SUPERUSER_USERNAME" \
+              "DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL:-}" \
+              "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" \
+              "DJANGO_SUPERUSER_ROTATE_PASSWORD=${DJANGO_SUPERUSER_ROTATE_PASSWORD:-0}" \
+              "pas_key_data=${DATA_TOOLS_PASSWORD:-}" \
+              "ENABLE_DESTRUCTIVE_DATA_TOOLS=0" \
+              "BACKUP_RETENTION_DAYS=30" \
+              "APP_IMAGE=cadet-journal:web" > "$env_tmp"
 
-            chmod 600 .env.prod
+            mv "$env_tmp" .env.prod
 
             echo "=== Запуск production-стека ==="
-
             chmod +x ./scripts/run-prod.sh
             ./scripts/run-prod.sh
 
             echo "=== Очистка старых Docker-образов ==="
-
             $DOCKER_CMD image prune -f || true
 
             echo "=== Деплой завершён успешно ==="

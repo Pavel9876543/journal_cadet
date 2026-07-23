@@ -50,8 +50,29 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      - name: Migration consistency
+        run: python manage.py makemigrations --check --dry-run
+
       - name: Django check
         run: python manage.py check
+
+      - name: Production security check
+        env:
+          DJANGO_ENV: production
+          DEBUG: "0"
+          SECRET_KEY: ci-only-production-check-secret-key-with-more-than-fifty-characters-2026
+          ALLOWED_HOSTS: example.com
+          CSRF_TRUSTED_ORIGINS: https://example.com
+          SECURE_SSL_REDIRECT: "1"
+          SESSION_COOKIE_SECURE: "1"
+          CSRF_COOKIE_SECURE: "1"
+          SECURE_HSTS_SECONDS: "31536000"
+          SECURE_HSTS_INCLUDE_SUBDOMAINS: "1"
+          SECURE_HSTS_PRELOAD: "1"
+        run: python manage.py check --deploy --fail-level WARNING
+
+      - name: Static assets check
+        run: python manage.py collectstatic --noinput --clear
 
       - name: Tests
         run: python manage.py test -v 2

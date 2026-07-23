@@ -18,3 +18,10 @@ staticfiles/
 secrets
 secrets.csv
 export.csv
+
+# Локальные экспорты и резервные копии
+/exports/
+/backups/
+/*.dump
+/*.xlsx
+*_students.csv
