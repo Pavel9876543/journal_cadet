@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.db import connection
 from django.db.models import Count, Q
 from django.test import Client, TestCase, override_settings
@@ -65,6 +65,7 @@ from journal.models import (
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentEnrollment,
     StudentSubject,
     StudyGroup,
     Subject,
@@ -82,10 +83,11 @@ class JournalTestDataMixin:
     """Фабрики для тестов новой архитектуры журнала."""
 
     def create_academic_year(self, *, name='2025/2026', is_active=True):
+        start_year = int(name.split('/', 1)[0])
         return AcademicYear.objects.create(
             name=name,
-            starts_on=date(2025, 9, 1),
-            ends_on=date(2026, 8, 31),
+            starts_on=date(start_year, 9, 1),
+            ends_on=date(start_year + 1, 8, 31),
             is_active=is_active,
         )
 
@@ -277,6 +279,100 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertFalse(first.is_active)
         self.assertTrue(second.is_active)
 
+    def test_new_year_preserves_old_enrollment_and_grade_snapshots(self):
+        data = self.create_base_journal()
+        old_name = data['student'].full_name
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 10),
+            value='5',
+        )
+
+        new_year = self.create_academic_year(name='2026/2027')
+        data['student'].refresh_from_db()
+        data['year'].refresh_from_db()
+        grade.refresh_from_db()
+
+        self.assertFalse(data['year'].is_active)
+        self.assertTrue(new_year.is_active)
+        self.assertIsNone(data['student'].group_id)
+        self.assertEqual(grade.enrollment.group_id, data['group'].pk)
+        self.assertEqual(grade.student_name_snapshot, old_name)
+
+        data['student'].full_name = 'Новое имя ученика'
+        data['student'].save()
+        old_enrollment = StudentEnrollment.objects.get(
+            student=data['student'],
+            academic_year=data['year'],
+        )
+        self.assertEqual(old_enrollment.full_name, old_name)
+
+    def test_new_year_finalizes_current_names_before_archiving(self):
+        data = self.create_base_journal()
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 10),
+            value='5',
+        )
+        data['student'].full_name = 'Итоговое имя ученика'
+        data['student'].save()
+        data['solfeggio'].name = 'Итоговое название предмета'
+        data['solfeggio'].save()
+        data['teacher'].full_name = 'Итоговое имя преподавателя'
+        data['teacher'].save()
+
+        self.create_academic_year(name='2026/2027')
+        grade.refresh_from_db()
+        assignment = GroupSubject.objects.get(
+            group=data['group'],
+            subject=data['solfeggio'],
+        )
+        enrollment = StudentEnrollment.objects.get(
+            student=data['student'],
+            academic_year=data['year'],
+        )
+
+        self.assertEqual(enrollment.full_name, 'Итоговое имя ученика')
+        self.assertEqual(assignment.subject_name_snapshot, 'Итоговое название предмета')
+        self.assertEqual(assignment.teacher_name_snapshot, 'Итоговое имя преподавателя')
+        self.assertEqual(grade.student_name_snapshot, 'Итоговое имя ученика')
+        self.assertEqual(grade.subject_name_snapshot, 'Итоговое название предмета')
+        self.assertEqual(grade.teacher_name_snapshot, 'Итоговое имя преподавателя')
+
+    def test_archived_grade_cannot_be_changed_or_deleted(self):
+        data = self.create_base_journal()
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 10),
+            value='5',
+        )
+        self.create_academic_year(name='2026/2027')
+
+        grade.value = '4'
+        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
+            grade.save()
+        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
+            grade.delete()
+
+    def test_academic_year_periods_cannot_overlap(self):
+        self.create_academic_year()
+
+        with self.assertRaisesMessage(ValidationError, 'пересекается'):
+            AcademicYear.objects.create(
+                name='Пересекающийся',
+                starts_on=date(2026, 8, 1),
+                ends_on=date(2027, 7, 31),
+            )
+
     def test_cannot_save_group_in_archived_academic_year(self):
         group = self.create_group()
         AcademicYear.objects.create(
@@ -364,6 +460,39 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         student.refresh_from_db()
 
         self.assertIsNone(student.group)
+
+    def test_deleting_active_enrollment_clears_current_student_group(self):
+        group = self.create_group()
+        student = self.create_student(group=group)
+        enrollment = student.enrollment_for_year(group.academic_year)
+
+        enrollment.delete()
+        student.refresh_from_db()
+
+        self.assertIsNone(student.group)
+        self.assertFalse(
+            StudentEnrollment.objects.filter(
+                student=student,
+                academic_year=group.academic_year,
+            ).exists(),
+        )
+
+    def test_only_academic_year_cannot_be_deleted(self):
+        academic_year = self.create_academic_year()
+
+        with self.assertRaisesMessage(ValidationError, 'единственный учебный год'):
+            academic_year.delete()
+
+        self.assertTrue(AcademicYear.objects.filter(pk=academic_year.pk, is_active=True).exists())
+
+    def test_archived_academic_year_cannot_be_deleted(self):
+        archived_year = self.create_academic_year()
+        self.create_academic_year(name='2026/2027')
+
+        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
+            archived_year.delete()
+
+        self.assertTrue(AcademicYear.objects.filter(pk=archived_year.pk).exists())
 
     def test_student_without_group_keeps_individual_subjects_display(self):
         data = self.create_base_journal()
@@ -887,6 +1016,21 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
                 ),
             )
 
+    def test_editing_confirmed_application_does_not_reset_existing_user_password(self):
+        application = CourseApplication.objects.create(**self.application_payload())
+        user = application.user
+        original_password_hash = user.password
+        TemporaryCredential.objects.filter(course_application=application).delete()
+
+        application.comments = 'Обновленный комментарий'
+        application.save()
+        user.refresh_from_db()
+
+        self.assertEqual(user.password, original_password_hash)
+        self.assertFalse(
+            TemporaryCredential.objects.filter(course_application=application).exists(),
+        )
+
 
 class FormTests(JournalTestDataMixin, TestCase):
     def test_public_course_application_form_hides_status_and_normalizes_phone(self):
@@ -1015,13 +1159,13 @@ class FormTests(JournalTestDataMixin, TestCase):
             '2025-09-01',
         )
 
-    def test_course_registration_settings_form_stores_age_and_course_dates(self):
+    def test_course_registration_settings_form_stores_age_and_uses_active_year_dates(self):
+        academic_year = self.create_academic_year(name='2026/2027')
         form = CourseRegistrationSettingsForm(
+            instance=CourseRegistrationSettings.load(),
             data={
                 'telegram_group_url': ' https://t.me/test_group ',
                 'minimum_registration_age': 16,
-                'course_starts_on': '2025-09-01',
-                'course_ends_on': '2026-08-31',
             },
         )
 
@@ -1029,10 +1173,10 @@ class FormTests(JournalTestDataMixin, TestCase):
         settings_obj = form.save()
         self.assertEqual(settings_obj.telegram_group_url, 'https://t.me/test_group')
         self.assertEqual(settings_obj.minimum_registration_age, 16)
-        self.assertEqual(settings_obj.course_starts_on, date(2025, 9, 1))
-        self.assertEqual(settings_obj.course_ends_on, date(2026, 8, 31))
+        self.assertEqual(settings_obj.course_starts_on, academic_year.starts_on)
+        self.assertEqual(settings_obj.course_ends_on, academic_year.ends_on)
 
-    def test_course_registration_settings_form_rejects_invalid_course_dates(self):
+    def test_course_registration_settings_form_does_not_accept_course_dates(self):
         form = CourseRegistrationSettingsForm(
             data={
                 'telegram_group_url': 'https://t.me/test_group',
@@ -1042,8 +1186,9 @@ class FormTests(JournalTestDataMixin, TestCase):
             },
         )
 
-        self.assertFalse(form.is_valid())
-        self.assertIn('course_ends_on', form.errors)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn('course_starts_on', form.fields)
+        self.assertNotIn('course_ends_on', form.fields)
 
     def test_grade_form_accepts_only_assigned_teacher_for_student_subject(self):
         data = self.create_base_journal()
@@ -1138,7 +1283,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertFalse(form.is_valid())
-        self.assertIn('Ученик не состоит в выбранной группе.', str(form.errors))
+        self.assertIn('Выбранный ученик недоступен', str(form.errors))
 
     def test_grade_form_rejects_inactive_student_from_forged_post(self):
         data = self.create_base_journal()
@@ -1159,7 +1304,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertFalse(form.is_valid())
-        self.assertIn('Ученик не может получить оценку', str(form.errors))
+        self.assertIn('Выбранный ученик недоступен', str(form.errors))
 
     def test_grade_form_rejects_group_from_another_academic_year(self):
         data = self.create_base_journal()
@@ -1714,6 +1859,41 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertNotContains(response, '<button class="table-save-button"')
         self.assertNotContains(response, 'name="action" value="add_grade"')
 
+    def test_archived_journal_uses_snapshots_after_current_records_are_renamed(self):
+        old_student_name = self.data['student'].full_name
+        old_subject_name = self.data['solfeggio'].name
+        Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=date(2025, 10, 15),
+            value='5',
+        )
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+        self.data['student'].refresh_from_db()
+        self.data['student'].full_name = 'Текущее имя ученика'
+        self.data['student'].save()
+        self.data['solfeggio'].name = 'Текущее название предмета'
+        self.data['solfeggio'].save()
+        self.client.login(username='admin_test', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('journal'),
+            {
+                'group': self.data['group'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+
+        self.assertContains(response, old_student_name)
+        self.assertContains(response, old_subject_name)
+
     def test_post_to_archived_academic_year_does_not_change_grade(self):
         grade = Grade.objects.create(
             student=self.data['student'],
@@ -1774,13 +1954,16 @@ class ViewTests(JournalTestDataMixin, TestCase):
             self.data['specialty'],
             extra_subject,
         ]
-        students = [self.data['student'], second_student]
+        enrollments = StudentEnrollment.objects.filter(
+            academic_year=self.data['year'],
+            student__in=[self.data['student'], second_student],
+        ).select_related('student', 'group')
 
         with CaptureQueriesContext(connection) as captured_queries:
             journal_tables = _build_journal_tables(
                 groups=groups,
                 subjects=subjects,
-                students=students,
+                enrollments=enrollments,
                 grade_qs=Grade.objects.none(),
                 results_qs=SubjectResult.objects.none(),
                 selected_academic_year=self.data['year'],
@@ -1906,6 +2089,31 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertFalse(model_admin.has_change_permission(request, data['group']))
         self.assertFalse(model_admin.has_delete_permission(request, data['group']))
+
+    def test_archived_group_page_uses_enrollment_and_assignment_snapshots(self):
+        data = self.create_base_journal()
+        archived_student_name = data['student'].full_name
+        archived_subject_name = data['solfeggio'].name
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
+        )
+        data['student'].refresh_from_db()
+        data['student'].full_name = 'Текущее имя ученика'
+        data['student'].save()
+        data['solfeggio'].name = 'Текущее название предмета'
+        data['solfeggio'].save()
+        self.client.login(username='dashboard_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('admin:journal_studygroup_change', args=[data['group'].pk]),
+        )
+
+        self.assertContains(response, archived_student_name)
+        self.assertContains(response, archived_subject_name)
+        self.assertNotContains(response, 'name="student_enrollments-0-student"')
+        self.assertNotContains(response, 'name="group_subjects-0-subject"')
 
     def test_admin_dashboard_links_recovery_settings_and_related_data(self):
         self.create_base_journal()
@@ -2081,14 +2289,14 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.client.login(username='dashboard_admin', password='Pass12345!')
 
         get_response = self.client.get(reverse('admin:journal_studygroup_change', args=[group.pk]))
-        self.assertContains(get_response, 'name="students-0-student"')
-        self.assertContains(get_response, 'name="students-0-city_church"')
+        self.assertContains(get_response, 'name="student_enrollments-0-student"')
+        self.assertContains(get_response, 'name="student_enrollments-0-city_church"')
         self.assertContains(get_response, f'value="{student.pk}"')
         self.assertContains(get_response, 'data-city-church="Тамбов / Центр"')
         self.assertContains(get_response, 'data-student-city-target="1"')
         self.assertContains(get_response, 'disabled')
-        self.assertNotContains(get_response, 'name="students-0-full_name"')
-        self.assertNotContains(get_response, 'name="students-0-instrument"')
+        self.assertNotContains(get_response, 'name="student_enrollments-0-full_name"')
+        self.assertNotContains(get_response, 'name="student_enrollments-0-instrument"')
 
         response = self.client.post(
             reverse('admin:journal_studygroup_change', args=[group.pk]),
@@ -2100,14 +2308,14 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'group_subjects-INITIAL_FORMS': '0',
                 'group_subjects-MIN_NUM_FORMS': '0',
                 'group_subjects-MAX_NUM_FORMS': '1000',
-                'students-TOTAL_FORMS': '1',
-                'students-INITIAL_FORMS': '0',
-                'students-MIN_NUM_FORMS': '0',
-                'students-MAX_NUM_FORMS': '1000',
-                'students-0-id': '',
-                'students-0-group': group.pk,
-                'students-0-student': student.pk,
-                'students-0-city_church': 'Воронеж / Север',
+                'student_enrollments-TOTAL_FORMS': '1',
+                'student_enrollments-INITIAL_FORMS': '0',
+                'student_enrollments-MIN_NUM_FORMS': '0',
+                'student_enrollments-MAX_NUM_FORMS': '1000',
+                'student_enrollments-0-id': '',
+                'student_enrollments-0-group': group.pk,
+                'student_enrollments-0-student': student.pk,
+                'student_enrollments-0-city_church': 'Воронеж / Север',
                 '_save': 'Save',
             },
         )
@@ -2153,10 +2361,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'group_subjects-1-teacher': teacher.pk,
                 'group_subjects-1-sort_order': '20',
                 'group_subjects-1-is_active': 'on',
-                'students-TOTAL_FORMS': '0',
-                'students-INITIAL_FORMS': '0',
-                'students-MIN_NUM_FORMS': '0',
-                'students-MAX_NUM_FORMS': '1000',
+                'student_enrollments-TOTAL_FORMS': '0',
+                'student_enrollments-INITIAL_FORMS': '0',
+                'student_enrollments-MIN_NUM_FORMS': '0',
+                'student_enrollments-MAX_NUM_FORMS': '1000',
                 '_save': 'Save',
             },
         )
@@ -2188,6 +2396,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             instrument=instrument,
             is_active=True,
         )
+        enrollment_to_edit = student_to_edit.enrollment_for_year(year)
+        enrollment_to_delete = student_to_delete.enrollment_for_year(year)
         self.client.login(username='dashboard_admin', password='Pass12345!')
 
         response = self.client.post(
@@ -2200,19 +2410,19 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'group_subjects-INITIAL_FORMS': '0',
                 'group_subjects-MIN_NUM_FORMS': '0',
                 'group_subjects-MAX_NUM_FORMS': '1000',
-                'students-TOTAL_FORMS': '2',
-                'students-INITIAL_FORMS': '2',
-                'students-MIN_NUM_FORMS': '0',
-                'students-MAX_NUM_FORMS': '1000',
-                'students-0-id': student_to_edit.pk,
-                'students-0-group': group.pk,
-                'students-0-student': student_to_edit.pk,
-                'students-0-city_church': 'Новый город / церковь',
-                'students-1-id': student_to_delete.pk,
-                'students-1-group': group.pk,
-                'students-1-student': student_to_delete.pk,
-                'students-1-city_church': student_to_delete.city_church,
-                'students-1-DELETE': 'on',
+                'student_enrollments-TOTAL_FORMS': '2',
+                'student_enrollments-INITIAL_FORMS': '2',
+                'student_enrollments-MIN_NUM_FORMS': '0',
+                'student_enrollments-MAX_NUM_FORMS': '1000',
+                'student_enrollments-0-id': enrollment_to_edit.pk,
+                'student_enrollments-0-group': group.pk,
+                'student_enrollments-0-student': student_to_edit.pk,
+                'student_enrollments-0-city_church': 'Новый город / церковь',
+                'student_enrollments-1-id': enrollment_to_delete.pk,
+                'student_enrollments-1-group': group.pk,
+                'student_enrollments-1-student': student_to_delete.pk,
+                'student_enrollments-1-city_church': student_to_delete.city_church,
+                'student_enrollments-1-DELETE': 'on',
                 '_save': 'Save',
             },
         )
@@ -2334,6 +2544,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             instrument=instrument,
             is_active=True,
         )
+        enrollment = student.enrollment_for_year(year)
         self.client.login(username='dashboard_admin', password='Pass12345!')
 
         response = self.client.post(
@@ -2346,15 +2557,15 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'group_subjects-INITIAL_FORMS': '0',
                 'group_subjects-MIN_NUM_FORMS': '0',
                 'group_subjects-MAX_NUM_FORMS': '1000',
-                'students-TOTAL_FORMS': '1',
-                'students-INITIAL_FORMS': '1',
-                'students-MIN_NUM_FORMS': '0',
-                'students-MAX_NUM_FORMS': '1000',
-                'students-0-id': student.pk,
-                'students-0-group': group.pk,
-                'students-0-student': student.pk,
-                'students-0-city_church': student.city_church,
-                'students-0-DELETE': 'on',
+                'student_enrollments-TOTAL_FORMS': '1',
+                'student_enrollments-INITIAL_FORMS': '1',
+                'student_enrollments-MIN_NUM_FORMS': '0',
+                'student_enrollments-MAX_NUM_FORMS': '1000',
+                'student_enrollments-0-id': enrollment.pk,
+                'student_enrollments-0-group': group.pk,
+                'student_enrollments-0-student': student.pk,
+                'student_enrollments-0-city_church': student.city_church,
+                'student_enrollments-0-DELETE': 'on',
                 '_save': 'Save',
             },
         )
@@ -2472,6 +2683,25 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credential.user, teacher.user)
         self.assertTrue(credential.temporary_password)
         self.assertTrue(teacher.user.check_password(credential.temporary_password))
+
+    def test_teacher_admin_does_not_reset_password_of_selected_existing_user(self):
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Teacher]
+        existing_user = User.objects.create_user(
+            username='existing teacher account',
+            password='ExistingPass123!',
+        )
+        original_password_hash = existing_user.password
+        teacher = Teacher(
+            full_name='Преподаватель с аккаунтом',
+            user=existing_user,
+        )
+
+        model_admin.save_model(request, teacher, form=None, change=False)
+        existing_user.refresh_from_db()
+
+        self.assertEqual(existing_user.password, original_password_hash)
+        self.assertFalse(TemporaryCredential.objects.filter(user=existing_user).exists())
 
     def test_teacher_admin_allows_adding_group_and_individual_subjects_inline(self):
         year = self.create_academic_year()
@@ -2791,9 +3021,10 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
                 ),
             )
 
-        CourseRegistrationSettings.objects.filter(pk=1).update(
-            course_starts_on=date(2026, 9, 1),
-            course_ends_on=date(2027, 8, 31),
+        AcademicYear.objects.create(
+            name='2026/2027',
+            starts_on=date(2026, 9, 1),
+            ends_on=date(2027, 8, 31),
         )
         second_application = CourseApplication.objects.create(
             **self.application_payload(
@@ -2894,6 +3125,12 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
 
 
 class AsyncDatabaseViewTests(TestCase):
+    def test_healthcheck_verifies_database_connection(self):
+        response = self.client.get(reverse('healthcheck'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'status': 'ok'})
+
     def test_database_backed_url_views_are_async(self):
         from asgiref.sync import iscoroutinefunction
 
@@ -2981,6 +3218,22 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertIn(('student_export', 'StudentTemp123!', 'Ученик'), rows)
         self.assertNotIn('Телефон ученика', rows[0])
         self.assertNotIn('Заявка', rows[0])
+
+    def test_temporary_credentials_export_escapes_excel_formulas(self):
+        TemporaryCredential.objects.create(
+            login='=HYPERLINK("https://example.invalid")',
+            temporary_password='+1+1',
+        )
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_export_test_credentials_excel'))
+        workbook = load_workbook(BytesIO(response.content), data_only=False)
+        rows = list(workbook.active.iter_rows(values_only=True))
+
+        self.assertIn(
+            ("'=HYPERLINK(\"https://example.invalid\")", "'+1+1", None),
+            rows,
+        )
 
     def test_regular_user_cannot_download_temporary_credentials_xlsx(self):
         self.client.login(username='regular_xlsx', password='Pass12345!')
@@ -3080,9 +3333,9 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
     @override_settings(DATA_TOOLS_PASSWORD='rtycds28')
     def test_superuser_can_delete_database_with_confirmation_password(self):
         self.create_base_journal()
-        CourseRegistrationSettings.objects.create(
+        CourseRegistrationSettings.objects.update_or_create(
             pk=1,
-            telegram_group_url='https://t.me/test_group',
+            defaults={'telegram_group_url': 'https://t.me/test_group'},
         )
         PasswordRecoveryContact.objects.create(
             name='Администратор',
@@ -3151,6 +3404,39 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
 
+    def test_full_export_escapes_excel_formulas(self):
+        Instrument.objects.create(name='=1+1')
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.get(reverse('admin_export_all_data_excel'))
+        workbook = load_workbook(BytesIO(response.content), data_only=False)
+        instrument_values = [
+            cell.value
+            for row in workbook['Инструменты'].iter_rows()
+            for cell in row
+        ]
+
+        self.assertIn("'=1+1", instrument_values)
+
+    @override_settings(ENABLE_DESTRUCTIVE_DATA_TOOLS=False)
+    def test_destructive_data_tools_are_hidden_and_forbidden_when_disabled(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        tools_response = self.client.get(reverse('admin_data_tools'))
+        seed_response = self.client.get(reverse('admin_seed_test_data'))
+        delete_response = self.client.post(
+            reverse('admin_delete_database'),
+            data={
+                'confirm_delete': 'yes',
+                'pas_key_data': 'rtycds28',
+            },
+        )
+
+        self.assertNotContains(tools_response, 'Запуск тестовых данных')
+        self.assertNotContains(tools_response, 'Удалить базу данных')
+        self.assertEqual(seed_response.status_code, 403)
+        self.assertEqual(delete_response.status_code, 403)
+
 
 class AccountUtilityTests(JournalTestDataMixin, TestCase):
     def test_build_username_helpers_use_name_and_surname(self):
@@ -3213,6 +3499,19 @@ class AccountUtilityTests(JournalTestDataMixin, TestCase):
         user.full_clean()
         self.assertEqual(user.username, 'Админ Тест')
 
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_user_creation_form_rejects_control_characters_in_username(self):
+        form = UserCreationForm(
+            data={
+                'username': 'Админ\tТест',
+                'password1': 'Pass12345!',
+                'password2': 'Pass12345!',
+            },
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('username', form.errors)
+
 
 class AccountCommandTests(JournalTestDataMixin, TestCase):
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
@@ -3247,6 +3546,26 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
         self.assertEqual(TemporaryCredential.objects.count(), 2)
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_create_student_accounts_preserves_existing_password_without_credential(self):
+        user = User.objects.create_user(
+            username='existing student',
+            password='ExistingPass123!',
+        )
+        original_password_hash = user.password
+        Student.objects.create(
+            full_name='Существующий Ученик',
+            group=self.create_group(),
+            instrument=self.create_instrument(),
+            user=user,
+        )
+
+        call_command('create_student_accounts', stdout=StringIO())
+        user.refresh_from_db()
+
+        self.assertEqual(user.password, original_password_hash)
+        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
     def test_create_teacher_accounts_stores_actual_unique_usernames(self):
         Teacher.objects.create(full_name='Иван Иванов')
         Teacher.objects.create(full_name='Иван Иванов')
@@ -3266,6 +3585,24 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
         call_command('create_teacher_accounts', stdout=StringIO())
 
         self.assertEqual(TemporaryCredential.objects.count(), 2)
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_create_teacher_accounts_preserves_existing_password_without_credential(self):
+        user = User.objects.create_user(
+            username='existing teacher',
+            password='ExistingPass123!',
+        )
+        original_password_hash = user.password
+        Teacher.objects.create(
+            full_name='Существующий Преподаватель',
+            user=user,
+        )
+
+        call_command('create_teacher_accounts', stdout=StringIO())
+        user.refresh_from_db()
+
+        self.assertEqual(user.password, original_password_hash)
+        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
     def test_createsuperuser_stores_temporary_credentials(self):
@@ -3348,7 +3685,7 @@ class SeedDataCommandTests(TestCase):
             student.user.groups.filter(name='Ученик').exists(),
         )
 
-    def test_seed_data_creates_temporary_credentials_for_existing_admins(self):
+    def test_seed_data_preserves_existing_admin_password_without_fabricating_credential(self):
         admin_user = User.objects.create_superuser(
             username='existing_admin',
             password='OriginalPass123!',
@@ -3365,8 +3702,22 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(
             admin_user.groups.filter(name='Администратор').exists(),
         )
-        credential = TemporaryCredential.objects.get(login='existing_admin')
-        self.assertTrue(admin_user.check_password(credential.temporary_password))
+        self.assertTrue(admin_user.check_password('OriginalPass123!'))
+        self.assertFalse(TemporaryCredential.objects.filter(user=admin_user).exists())
+
+    @override_settings(IS_PRODUCTION_ENV=True)
+    def test_seed_data_is_blocked_in_production_without_explicit_override(self):
+        students_before = Student.objects.count()
+
+        with TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesMessage(CommandError, 'запрещена в production'):
+                call_command(
+                    'seed_data',
+                    credentials_output=str(Path(tmp_dir) / 'secrets.csv'),
+                    stdout=StringIO(),
+                )
+
+        self.assertEqual(Student.objects.count(), students_before)
 
     def test_seed_data_creates_temporary_credentials_for_every_user(self):
         user_logins = set(User.objects.values_list('username', flat=True))

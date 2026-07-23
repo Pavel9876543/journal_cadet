@@ -3,7 +3,7 @@ from datetime import date
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -54,12 +54,16 @@ def academic_year_for_object(obj):
     if isinstance(obj, StudyGroup):
         return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, Student):
-        return obj.group.academic_year if obj.group_id else None
+        if obj.group_id:
+            return obj.group.academic_year
+        active_enrollment = getattr(obj, 'active_enrollment', None)
+        return active_enrollment.academic_year if active_enrollment is not None else None
+    if isinstance(obj, StudentEnrollment):
+        return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, GroupSubject):
         return obj.group.academic_year if obj.group_id else None
     if isinstance(obj, StudentSubject):
-        student = obj.student if obj.student_id else None
-        return student.group.academic_year if student is not None and student.group_id else None
+        return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, (Grade, SubjectResult, CourseApplication)):
         return obj.academic_year if obj.academic_year_id else None
     return None
@@ -100,6 +104,18 @@ class AcademicYear(models.Model):
         super().clean()
         if self.starts_on and self.ends_on and self.starts_on >= self.ends_on:
             raise ValidationError({'ends_on': 'Дата окончания должна быть позже даты начала.'})
+        if self.starts_on and self.ends_on:
+            overlapping_years = AcademicYear.objects.filter(
+                starts_on__lte=self.ends_on,
+                ends_on__gte=self.starts_on,
+            )
+            if self.pk:
+                overlapping_years = overlapping_years.exclude(pk=self.pk)
+            if overlapping_years.exists():
+                raise ValidationError({
+                    'starts_on': 'Период учебного года пересекается с уже существующим учебным годом.',
+                    'ends_on': 'Период учебного года пересекается с уже существующим учебным годом.',
+                })
         if self.pk:
             old_value = AcademicYear.objects.filter(pk=self.pk).values('is_active').first()
             if old_value and not old_value['is_active']:
@@ -107,14 +123,60 @@ class AcademicYear(models.Model):
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'SELECT pg_advisory_xact_lock(%s)',
+                        [0x4341444554594541],
+                    )
+            previous_active_id = (
+                AcademicYear.objects
+                .select_for_update()
+                .filter(is_active=True)
+                .values_list('pk', flat=True)
+                .first()
+            )
+            list(AcademicYear.objects.select_for_update().values_list('pk', flat=True))
             self.clean_fields()
             self.clean()
             self.validate_unique()
             self.is_active = False
             self.validate_constraints()
             super().save(*args, **kwargs)
+            latest_year = self.latest()
+            if (
+                previous_active_id
+                and previous_active_id != self.pk
+                and latest_year is not None
+                and latest_year.pk == self.pk
+            ):
+                finalize_academic_year_snapshots(previous_active_id)
             self.activate_latest()
             self.is_active = AcademicYear.objects.filter(pk=self.pk, is_active=True).exists()
+            if self.is_active:
+                if previous_active_id and previous_active_id != self.pk:
+                    Student.objects.filter(
+                        group__academic_year_id=previous_active_id,
+                    ).update(group=None)
+                CourseRegistrationSettings.sync_active_year(self)
+
+    def delete(self, *args, **kwargs):
+        with transaction.atomic():
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'SELECT pg_advisory_xact_lock(%s)',
+                        [0x4341444554594541],
+                    )
+            validate_active_academic_year(self)
+            list(AcademicYear.objects.select_for_update().values_list('pk', flat=True))
+            if AcademicYear.objects.count() <= 1:
+                raise ValidationError('Нельзя удалить единственный учебный год.')
+            result = super().delete(*args, **kwargs)
+            active_year = self.activate_latest()
+            if active_year is not None:
+                CourseRegistrationSettings.sync_active_year(active_year)
+            return result
 
     @classmethod
     def latest(cls):
@@ -122,12 +184,14 @@ class AcademicYear(models.Model):
 
     @classmethod
     def activate_latest(cls):
-        latest_year = cls.latest()
-        if latest_year is None:
-            return None
-        cls.objects.exclude(pk=latest_year.pk).update(is_active=False)
-        cls.objects.filter(pk=latest_year.pk).update(is_active=True)
-        return latest_year
+        with transaction.atomic():
+            years = cls.objects.select_for_update().order_by('-starts_on', '-ends_on', '-pk')
+            latest_year = years.first()
+            if latest_year is None:
+                return None
+            years.exclude(pk=latest_year.pk).update(is_active=False)
+            cls.objects.filter(pk=latest_year.pk).update(is_active=True)
+            return latest_year
 
     @classmethod
     def get_or_create_for_dates(cls, starts_on: date, ends_on: date):
@@ -334,7 +398,7 @@ class StudyGroup(models.Model):
 
     @property
     def students_count(self) -> int:
-        return self.students.count()
+        return self.student_enrollments.count()
 
     @property
     def subjects_display(self) -> str:
@@ -534,12 +598,61 @@ class Student(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            self.sync_active_enrollment()
 
     def delete(self, *args, **kwargs):
+        if self.enrollments.exists():
+            raise ValidationError(
+                'Нельзя удалить ученика, у которого есть данные учебных лет. '
+                'Снимите признак «Активен», чтобы сохранить архив.'
+            )
         if self.group_id:
             validate_active_academic_year(self.group.academic_year, 'group')
         return super().delete(*args, **kwargs)
+
+    def sync_active_enrollment(self):
+        academic_year = self.group.academic_year if self.group_id else AcademicYear.get_active()
+        if academic_year is None or not academic_year_is_active(academic_year):
+            return None
+
+        snapshot_values = StudentEnrollment.snapshot_values_for_student(self)
+        enrollment, _created = StudentEnrollment.objects.get_or_create(
+            student=self,
+            academic_year=academic_year,
+            defaults={
+                'group': self.group,
+                **snapshot_values,
+            },
+        )
+        enrollment.group = self.group
+        for field_name, value in snapshot_values.items():
+            setattr(enrollment, field_name, value)
+        enrollment.save()
+        return enrollment
+
+    def enrollment_for_year(self, academic_year=None):
+        if academic_year is None:
+            academic_year = AcademicYear.get_active()
+        if academic_year is None or not self.pk:
+            return None
+        prefetched = getattr(self, 'journal_enrollments', None)
+        if prefetched is not None:
+            return next(
+                (
+                    enrollment
+                    for enrollment in prefetched
+                    if enrollment.academic_year_id == academic_year.pk
+                ),
+                None,
+            )
+        return (
+            self.enrollments
+            .select_related('group', 'academic_year')
+            .filter(academic_year=academic_year)
+            .first()
+        )
 
     @property
     def age(self) -> int | None:
@@ -560,7 +673,11 @@ class Student(models.Model):
         return (
             self.individual_subjects
             .select_related('subject', 'teacher')
-            .filter(is_specialty=True, is_active=True)
+            .filter(
+                is_specialty=True,
+                is_active=True,
+                academic_year__is_active=True,
+            )
             .first()
         )
 
@@ -580,15 +697,122 @@ class Student(models.Model):
             return Subject.objects.none()
 
         group_subject_ids = ()
-        if self.group_id:
-            group_subject_ids = self.group.group_subjects.filter(is_active=True).values_list('subject_id', flat=True)
-        individual_subject_ids = self.individual_subjects.filter(is_active=True).values_list('subject_id', flat=True)
+        active_year = AcademicYear.get_active()
+        enrollment = self.enrollment_for_year(active_year)
+        if enrollment and enrollment.group_id:
+            group_subject_ids = enrollment.group.group_subjects.filter(is_active=True).values_list(
+                'subject_id',
+                flat=True,
+            )
+        individual_subject_ids = self.individual_subjects.filter(
+            is_active=True,
+            academic_year=active_year,
+        ).values_list('subject_id', flat=True)
         subject_ids = set(group_subject_ids) | set(individual_subject_ids)
         return Subject.objects.filter(pk__in=subject_ids).order_by('name')
 
     @property
     def subjects_display(self) -> str:
         return ', '.join(self.all_subjects_qs.values_list('name', flat=True)) or '-'
+
+
+class StudentEnrollment(models.Model):
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name='enrollments',
+        verbose_name='Ученик',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='student_enrollments',
+        verbose_name='Учебный год',
+    )
+    group = models.ForeignKey(
+        StudyGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='student_enrollments',
+        verbose_name='Группа',
+    )
+    full_name = models.CharField('ФИО ученика на этот год', max_length=150)
+    gender = models.CharField('Пол', max_length=10, choices=Student.GENDER_CHOICES, blank=True)
+    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+    city_church = models.CharField('Город / Церковь', max_length=255, blank=True)
+    instrument_name = models.CharField('Инструмент', max_length=100, blank=True)
+    music_education = models.CharField(
+        'Музыкальное образование',
+        max_length=20,
+        choices=Student.MUSIC_EDUCATION_CHOICES,
+        blank=True,
+    )
+    student_phone = models.CharField('Телефон ученика', max_length=32, blank=True)
+    parent_contacts = models.TextField('Телефон родителей', blank=True)
+    comments = models.TextField('Комментарий', blank=True)
+    is_active = models.BooleanField('Активен в учебном году', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Зачисление ученика'
+        verbose_name_plural = 'Зачисления учеников'
+        ordering = ['-academic_year__starts_on', 'full_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student', 'academic_year'],
+                name='unique_student_enrollment_year',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['academic_year', 'group'], name='enroll_year_group_idx'),
+            models.Index(fields=['student', 'academic_year'], name='enroll_student_year_idx'),
+            models.Index(fields=['is_active'], name='enroll_active_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.full_name} — {self.academic_year}'
+
+    @staticmethod
+    def snapshot_values_for_student(student):
+        return {
+            'full_name': student.full_name,
+            'gender': student.gender,
+            'birth_date': student.birth_date,
+            'city_church': student.city_church,
+            'instrument_name': student.instrument.name if student.instrument_id else '',
+            'music_education': student.music_education,
+            'student_phone': student.student_phone,
+            'parent_contacts': student.parent_contacts,
+            'comments': student.comments,
+            'is_active': student.is_active,
+        }
+
+    def copy_from_student(self, student):
+        for field_name, value in self.snapshot_values_for_student(student).items():
+            setattr(self, field_name, value)
+
+    def clean(self):
+        super().clean()
+        if self.group_id and self.academic_year_id:
+            if self.group.academic_year_id != self.academic_year_id:
+                raise ValidationError({'group': 'Группа относится к другому учебному году.'})
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        validate_active_academic_year(self.academic_year)
+        student_id = self.student_id
+        group_id = self.group_id
+        result = super().delete(*args, **kwargs)
+        if group_id:
+            Student.objects.filter(pk=student_id, group_id=group_id).update(group=None)
+        return result
 
 
 class GroupSubject(models.Model):
@@ -612,6 +836,25 @@ class GroupSubject(models.Model):
     )
     sort_order = models.PositiveSmallIntegerField('Порядок в журнале', default=100)
     is_active = models.BooleanField('Активен', default=True)
+    subject_name_snapshot = models.CharField(
+        'Название предмета в учебном году',
+        max_length=100,
+        blank=True,
+        editable=False,
+    )
+    teacher_name_snapshot = models.CharField(
+        'ФИО преподавателя в учебном году',
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+    final_grade_type_snapshot = models.CharField(
+        'Тип итоговой оценки в учебном году',
+        max_length=20,
+        choices=Subject.FINAL_GRADE_TYPE_CHOICES,
+        blank=True,
+        editable=False,
+    )
 
     class Meta:
         verbose_name = 'Предмет группы'
@@ -654,6 +897,15 @@ class GroupSubject(models.Model):
 
         self.full_clean()
         with transaction.atomic():
+            self.subject_name_snapshot = self.subject.name
+            self.teacher_name_snapshot = self.teacher.full_name
+            self.final_grade_type_snapshot = self.subject.final_grade_type
+            kwargs['update_fields'] = _with_snapshot_update_fields(
+                kwargs.get('update_fields'),
+                'subject_name_snapshot',
+                'teacher_name_snapshot',
+                'final_grade_type_snapshot',
+            )
             super().save(*args, **kwargs)
 
             if self.is_active:
@@ -666,10 +918,14 @@ class GroupSubject(models.Model):
                     and previous['teacher_id'] != self.teacher_id
                 ):
                     Grade.objects.filter(
-                        student__group_id=self.group_id,
+                        enrollment__group_id=self.group_id,
+                        academic_year_id=self.group.academic_year_id,
                         subject_id=self.subject_id,
                         teacher_id=previous['teacher_id'],
-                    ).update(teacher_id=self.teacher_id)
+                    ).update(
+                        teacher_id=self.teacher_id,
+                        teacher_name_snapshot=self.teacher.full_name,
+                    )
 
             if previous:
                 remove_unused_teacher_subject(
@@ -707,8 +963,34 @@ class StudentSubject(models.Model):
         related_name='individual_subjects',
         verbose_name='Преподаватель',
     )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='student_subjects',
+        verbose_name='Учебный год',
+        editable=False,
+    )
     is_specialty = models.BooleanField('Специальность', default=True)
     is_active = models.BooleanField('Активно', default=True)
+    subject_name_snapshot = models.CharField(
+        'Название предмета в учебном году',
+        max_length=100,
+        blank=True,
+        editable=False,
+    )
+    teacher_name_snapshot = models.CharField(
+        'ФИО преподавателя в учебном году',
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+    final_grade_type_snapshot = models.CharField(
+        'Тип итоговой оценки в учебном году',
+        max_length=20,
+        choices=Subject.FINAL_GRADE_TYPE_CHOICES,
+        blank=True,
+        editable=False,
+    )
 
     class Meta:
         verbose_name = 'Индивидуальный предмет ученика'
@@ -721,11 +1003,11 @@ class StudentSubject(models.Model):
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=['student', 'subject'],
+                fields=['student', 'subject', 'academic_year'],
                 name='unique_student_ind_subject',
             ),
             models.UniqueConstraint(
-                fields=['student'],
+                fields=['student', 'academic_year'],
                 condition=Q(is_specialty=True, is_active=True),
                 name='unique_active_specialty',
             ),
@@ -736,14 +1018,28 @@ class StudentSubject(models.Model):
 
     def clean(self) -> None:
         super().clean()
-        if self.student_id and self.student.group_id:
-            validate_active_academic_year(self.student.group.academic_year, 'student')
+        if not self.academic_year_id and self.student_id:
+            enrollment = self.student.enrollment_for_year()
+            if enrollment is not None:
+                self.academic_year = enrollment.academic_year
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+        if self.student_id and self.academic_year_id:
+            enrollment = self.student.enrollment_for_year(self.academic_year)
+            if enrollment is None:
+                raise ValidationError({
+                    'student': 'Ученик не зачислен в выбранный учебный год.'
+                })
         if self.subject_id and not self.subject.is_specialty:
             raise ValidationError({
                 'subject': 'Групповой предмет нельзя назначить индивидуальному ученику.'
             })
 
     def save(self, *args, **kwargs):
+        if not self.academic_year_id and self.student_id:
+            enrollment = self.student.enrollment_for_year()
+            if enrollment is not None:
+                self.academic_year = enrollment.academic_year
         previous = None
         if self.pk:
             previous = (
@@ -755,6 +1051,15 @@ class StudentSubject(models.Model):
 
         self.full_clean()
         with transaction.atomic():
+            self.subject_name_snapshot = self.subject.name
+            self.teacher_name_snapshot = self.teacher.full_name
+            self.final_grade_type_snapshot = self.subject.final_grade_type
+            kwargs['update_fields'] = _with_snapshot_update_fields(
+                kwargs.get('update_fields'),
+                'subject_name_snapshot',
+                'teacher_name_snapshot',
+                'final_grade_type_snapshot',
+            )
             super().save(*args, **kwargs)
 
             if self.is_active:
@@ -770,7 +1075,11 @@ class StudentSubject(models.Model):
                         student_id=self.student_id,
                         subject_id=self.subject_id,
                         teacher_id=previous['teacher_id'],
-                    ).update(teacher_id=self.teacher_id)
+                        academic_year_id=self.academic_year_id,
+                    ).update(
+                        teacher_id=self.teacher_id,
+                        teacher_name_snapshot=self.teacher.full_name,
+                    )
 
             if previous:
                 remove_unused_teacher_subject(
@@ -779,8 +1088,8 @@ class StudentSubject(models.Model):
                 )
 
     def delete(self, *args, **kwargs):
-        if self.student_id and self.student.group_id:
-            validate_active_academic_year(self.student.group.academic_year, 'student')
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
         teacher_id = self.teacher_id
         subject_id = self.subject_id
         with transaction.atomic():
@@ -829,6 +1138,12 @@ def remove_unused_teacher_subject(teacher_id: int | None, subject_id: int | None
     ).delete()
 
 
+def _with_snapshot_update_fields(update_fields, *snapshot_fields):
+    if update_fields is None:
+        return None
+    return tuple(set(update_fields) | set(snapshot_fields))
+
+
 class Grade(models.Model):
     GRADE_1 = '1'
     GRADE_2 = '2'
@@ -873,9 +1188,42 @@ class Grade(models.Model):
         blank=True,
         help_text='Если не указать, будет определён по дате оценки.',
     )
+    enrollment = models.ForeignKey(
+        StudentEnrollment,
+        on_delete=models.PROTECT,
+        related_name='grades',
+        verbose_name='Зачисление ученика',
+        null=True,
+        blank=True,
+        editable=False,
+    )
     date = models.DateField('Дата оценки')
     value = models.CharField('Оценка', max_length=10, choices=GRADE_CHOICES)
     comment = models.CharField('Комментарий', max_length=255, blank=True)
+    student_name_snapshot = models.CharField(
+        'ФИО ученика в учебном году',
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+    group_name_snapshot = models.CharField(
+        'Группа в учебном году',
+        max_length=100,
+        blank=True,
+        editable=False,
+    )
+    subject_name_snapshot = models.CharField(
+        'Название предмета в учебном году',
+        max_length=100,
+        blank=True,
+        editable=False,
+    )
+    teacher_name_snapshot = models.CharField(
+        'ФИО преподавателя в учебном году',
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
 
     class Meta:
         verbose_name = 'Оценка'
@@ -900,6 +1248,8 @@ class Grade(models.Model):
 
     @property
     def student_group(self):
+        if self.enrollment_id:
+            return self.enrollment.group
         return self.student.group if self.student_id else None
 
     @property
@@ -907,7 +1257,7 @@ class Grade(models.Model):
         if not self.student_id or not self.subject_id or not self.teacher_id:
             return False
         return GroupSubject.objects.filter(
-            group_id=self.student.group_id,
+            group_id=self.enrollment.group_id if self.enrollment_id else self.student.group_id,
             subject_id=self.subject_id,
             teacher_id=self.teacher_id,
             is_active=True,
@@ -921,6 +1271,7 @@ class Grade(models.Model):
             student_id=self.student_id,
             subject_id=self.subject_id,
             teacher_id=self.teacher_id,
+            academic_year_id=self.academic_year_id,
             is_active=True,
         ).exists()
 
@@ -965,11 +1316,17 @@ class Grade(models.Model):
         if self.student_id:
             student = Student.objects.select_related('group', 'group__academic_year').get(pk=self.student_id)
 
-        if student is not None and student.group_id and self.academic_year_id:
-            if student.group.academic_year_id != self.academic_year_id:
+        if student is not None and self.academic_year_id:
+            enrollment = self.enrollment
+            if enrollment is None or enrollment.academic_year_id != self.academic_year_id:
+                enrollment = student.enrollment_for_year(self.academic_year)
+                self.enrollment = enrollment
+            if enrollment is None:
                 raise ValidationError({
-                    'academic_year': 'Учебный год оценки должен совпадать с учебным годом группы ученика.'
+                    'student': 'Ученик не зачислен в выбранный учебный год.'
                 })
+            if enrollment.student_id != student.pk:
+                raise ValidationError({'student': 'Зачисление относится к другому ученику.'})
 
         if self.student_id and self.subject_id and self.date:
             duplicate_qs = Grade.objects.filter(
@@ -987,7 +1344,7 @@ class Grade(models.Model):
                 student = Student.objects.select_related('group').get(pk=self.student_id)
 
             group_assignment_exists = GroupSubject.objects.filter(
-                group_id=student.group_id,
+                group_id=self.enrollment.group_id if self.enrollment_id else None,
                 subject_id=self.subject_id,
                 teacher_id=self.teacher_id,
                 is_active=True,
@@ -997,6 +1354,7 @@ class Grade(models.Model):
                 student_id=self.student_id,
                 subject_id=self.subject_id,
                 teacher_id=self.teacher_id,
+                academic_year_id=self.academic_year_id,
                 is_active=True,
             ).exists()
 
@@ -1009,6 +1367,20 @@ class Grade(models.Model):
     def save(self, *args, **kwargs):
         self.normalize_value()
         self.full_clean()
+        if self.enrollment_id:
+            self.student_name_snapshot = self.enrollment.full_name
+            self.group_name_snapshot = self.enrollment.group.name if self.enrollment.group_id else ''
+        self.subject_name_snapshot = self.subject.name
+        self.teacher_name_snapshot = self.teacher.full_name
+        kwargs['update_fields'] = _with_snapshot_update_fields(
+            kwargs.get('update_fields'),
+            'enrollment',
+            'academic_year',
+            'student_name_snapshot',
+            'group_name_snapshot',
+            'subject_name_snapshot',
+            'teacher_name_snapshot',
+        )
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -1036,8 +1408,42 @@ class SubjectResult(models.Model):
         related_name='subject_results',
         verbose_name='Учебный год',
     )
+    enrollment = models.ForeignKey(
+        StudentEnrollment,
+        on_delete=models.PROTECT,
+        related_name='subject_results',
+        verbose_name='Зачисление ученика',
+        null=True,
+        blank=True,
+        editable=False,
+    )
     exam_grade = models.CharField('Экзамен', max_length=10, null=True, blank=True)
     final_grade = models.CharField('Итоговая оценка', max_length=10, null=True, blank=True)
+    student_name_snapshot = models.CharField(
+        'ФИО ученика в учебном году',
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+    group_name_snapshot = models.CharField(
+        'Группа в учебном году',
+        max_length=100,
+        blank=True,
+        editable=False,
+    )
+    subject_name_snapshot = models.CharField(
+        'Название предмета в учебном году',
+        max_length=100,
+        blank=True,
+        editable=False,
+    )
+    final_grade_type_snapshot = models.CharField(
+        'Тип итоговой оценки в учебном году',
+        max_length=20,
+        choices=Subject.FINAL_GRADE_TYPE_CHOICES,
+        blank=True,
+        editable=False,
+    )
 
     class Meta:
         verbose_name = 'Итог по предмету'
@@ -1060,6 +1466,8 @@ class SubjectResult(models.Model):
 
     @property
     def student_group(self):
+        if self.enrollment_id:
+            return self.enrollment.group
         return self.student.group if self.student_id else None
 
     def clean(self) -> None:
@@ -1071,18 +1479,23 @@ class SubjectResult(models.Model):
 
         if self.student_id and self.subject_id:
             student = Student.objects.select_related('group', 'group__academic_year').get(pk=self.student_id)
-            if student.group_id and self.academic_year_id and student.group.academic_year_id != self.academic_year_id:
-                raise ValidationError({
-                    'academic_year': 'Учебный год итога должен совпадать с учебным годом группы ученика.'
-                })
+            enrollment = self.enrollment
+            if enrollment is None or enrollment.academic_year_id != self.academic_year_id:
+                enrollment = student.enrollment_for_year(self.academic_year)
+                self.enrollment = enrollment
+            if enrollment is None:
+                raise ValidationError({'student': 'Ученик не зачислен в выбранный учебный год.'})
+            if enrollment.student_id != student.pk:
+                raise ValidationError({'student': 'Зачисление относится к другому ученику.'})
             in_group_subjects = GroupSubject.objects.filter(
-                group_id=student.group_id,
+                group_id=enrollment.group_id,
                 subject_id=self.subject_id,
                 is_active=True,
             ).exists()
             in_individual_subjects = StudentSubject.objects.filter(
                 student_id=self.student_id,
                 subject_id=self.subject_id,
+                academic_year_id=self.academic_year_id,
                 is_active=True,
             ).exists()
             if not in_group_subjects and not in_individual_subjects:
@@ -1110,6 +1523,19 @@ class SubjectResult(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        if self.enrollment_id:
+            self.student_name_snapshot = self.enrollment.full_name
+            self.group_name_snapshot = self.enrollment.group.name if self.enrollment.group_id else ''
+        self.subject_name_snapshot = self.subject.name
+        self.final_grade_type_snapshot = self.subject.final_grade_type
+        kwargs['update_fields'] = _with_snapshot_update_fields(
+            kwargs.get('update_fields'),
+            'enrollment',
+            'student_name_snapshot',
+            'group_name_snapshot',
+            'subject_name_snapshot',
+            'final_grade_type_snapshot',
+        )
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -1150,7 +1576,34 @@ class CourseRegistrationSettings(models.Model):
     @classmethod
     def load(cls):
         settings_obj, _created = cls.objects.get_or_create(pk=1)
+        active_year = AcademicYear.get_active()
+        if active_year and (
+            settings_obj.course_starts_on != active_year.starts_on
+            or settings_obj.course_ends_on != active_year.ends_on
+        ):
+            cls.objects.filter(pk=settings_obj.pk).update(
+                course_starts_on=active_year.starts_on,
+                course_ends_on=active_year.ends_on,
+            )
+            settings_obj.course_starts_on = active_year.starts_on
+            settings_obj.course_ends_on = active_year.ends_on
         return settings_obj
+
+    @classmethod
+    def sync_active_year(cls, academic_year):
+        defaults = {
+            'course_starts_on': academic_year.starts_on,
+            'course_ends_on': academic_year.ends_on,
+        }
+        settings_obj = cls.objects.filter(pk=1).first()
+        if settings_obj is None:
+            defaults.update({
+                'telegram_group_url': '',
+                'minimum_registration_age': 14,
+            })
+            cls.objects.create(pk=1, **defaults)
+        else:
+            cls.objects.filter(pk=1).update(**defaults)
 
     def clean(self) -> None:
         super().clean()
@@ -1171,6 +1624,10 @@ class CourseRegistrationSettings(models.Model):
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
+        active_year = AcademicYear.get_active()
+        if active_year is not None:
+            self.course_starts_on = active_year.starts_on
+            self.course_ends_on = active_year.ends_on
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -1394,6 +1851,12 @@ class CourseApplication(models.Model):
             models.Index(fields=['academic_year', 'student_phone'], name='course_app_year_phone_idx'),
             models.Index(fields=['generated_login'], name='course_app_login_idx'),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['academic_year', 'student_phone'],
+                name='unique_course_app_phone_per_year',
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.full_name
@@ -1410,8 +1873,12 @@ class CourseApplication(models.Model):
     def age(self) -> int:
         from .registration_utils import calculate_age
 
-        settings_obj = CourseRegistrationSettings.objects.filter(pk=1).first()
-        reference_date = settings_obj.course_starts_on if settings_obj else date.today()
+        active_year = AcademicYear.get_active()
+        reference_date = (
+            self.academic_year.starts_on
+            if self.academic_year_id
+            else (active_year.starts_on if active_year else date.today())
+        )
         return calculate_age(self.birth_date, today=reference_date)
 
     @property
@@ -1429,6 +1896,8 @@ class CourseApplication(models.Model):
         if self.student_phone:
             self.student_phone = normalize_phone_number(self.student_phone)
 
+        if self.academic_year_id is None:
+            self.academic_year = AcademicYear.get_active()
         if self.academic_year_id is None:
             settings_obj = CourseRegistrationSettings.load()
             self.academic_year, _created = AcademicYear.get_or_create_for_dates(
@@ -1578,12 +2047,7 @@ class CourseApplication(models.Model):
             existing_student.save()
 
         temporary_credential = self._get_existing_temporary_credential(login)
-        if temporary_credential is None:
-            if temporary_password is None:
-                temporary_password = generate_temporary_password()
-                existing_user.set_password(temporary_password)
-                existing_user.save(update_fields=['password'])
-
+        if temporary_credential is None and temporary_password is not None:
             TemporaryCredential.objects.create(
                 user=existing_user,
                 course_application=self,
@@ -1591,7 +2055,7 @@ class CourseApplication(models.Model):
                 temporary_password=temporary_password,
                 student_phone=self.student_phone,
             )
-        else:
+        elif temporary_credential is not None:
             updates = []
             if temporary_credential.user_id != existing_user.pk:
                 temporary_credential.user = existing_user
@@ -1647,10 +2111,26 @@ class CourseApplication(models.Model):
         credential_qs.delete()
 
         if student is not None:
-            student.delete()
+            enrollment = student.enrollment_for_year(self.academic_year)
+            if enrollment is not None:
+                Grade.objects.filter(enrollment=enrollment).delete()
+                SubjectResult.objects.filter(enrollment=enrollment).delete()
+                StudentSubject.objects.filter(
+                    student=student,
+                    academic_year=self.academic_year,
+                ).delete()
+                Student.objects.filter(pk=student.pk).update(group=None)
+                enrollment.delete()
 
-        if user is not None and not user.is_staff and not user.is_superuser:
-            user.delete()
+            if not student.enrollments.exists():
+                student.delete()
+                if user is not None and not user.is_staff and not user.is_superuser:
+                    user.delete()
+            else:
+                Student.objects.filter(pk=student.pk).update(
+                    group=None,
+                    is_active=False,
+                )
 
         if clear_application_links:
             CourseApplication.objects.filter(pk=self.pk).update(
@@ -1710,3 +2190,137 @@ class CourseApplication(models.Model):
             ).first()
 
         return None
+
+
+def finalize_academic_year_snapshots(academic_year_id: int) -> None:
+    """Fix the final display values before an academic year becomes read-only."""
+    updated_at = timezone.now()
+
+    enrollments = list(
+        StudentEnrollment.objects
+        .filter(academic_year_id=academic_year_id)
+        .select_related('student__instrument')
+    )
+    for enrollment in enrollments:
+        enrollment.copy_from_student(enrollment.student)
+        enrollment.updated_at = updated_at
+    if enrollments:
+        StudentEnrollment.objects.bulk_update(
+            enrollments,
+            (
+                'full_name',
+                'gender',
+                'birth_date',
+                'city_church',
+                'instrument_name',
+                'music_education',
+                'student_phone',
+                'parent_contacts',
+                'comments',
+                'is_active',
+                'updated_at',
+            ),
+            batch_size=500,
+        )
+
+    group_assignments = list(
+        GroupSubject.objects
+        .filter(group__academic_year_id=academic_year_id)
+        .select_related('subject', 'teacher')
+    )
+    for assignment in group_assignments:
+        assignment.subject_name_snapshot = assignment.subject.name
+        assignment.teacher_name_snapshot = assignment.teacher.full_name
+        assignment.final_grade_type_snapshot = assignment.subject.final_grade_type
+    if group_assignments:
+        GroupSubject.objects.bulk_update(
+            group_assignments,
+            (
+                'subject_name_snapshot',
+                'teacher_name_snapshot',
+                'final_grade_type_snapshot',
+            ),
+            batch_size=500,
+        )
+
+    individual_assignments = list(
+        StudentSubject.objects
+        .filter(academic_year_id=academic_year_id)
+        .select_related('subject', 'teacher')
+    )
+    for assignment in individual_assignments:
+        assignment.subject_name_snapshot = assignment.subject.name
+        assignment.teacher_name_snapshot = assignment.teacher.full_name
+        assignment.final_grade_type_snapshot = assignment.subject.final_grade_type
+    if individual_assignments:
+        StudentSubject.objects.bulk_update(
+            individual_assignments,
+            (
+                'subject_name_snapshot',
+                'teacher_name_snapshot',
+                'final_grade_type_snapshot',
+            ),
+            batch_size=500,
+        )
+
+    grades = list(
+        Grade.objects
+        .filter(academic_year_id=academic_year_id)
+        .select_related('student', 'enrollment__group', 'subject', 'teacher')
+    )
+    for grade in grades:
+        enrollment = grade.enrollment
+        grade.student_name_snapshot = (
+            enrollment.full_name
+            if enrollment is not None
+            else grade.student.full_name
+        )
+        grade.group_name_snapshot = (
+            enrollment.group.name
+            if enrollment is not None and enrollment.group_id
+            else grade.group_name_snapshot
+        )
+        grade.subject_name_snapshot = grade.subject.name
+        grade.teacher_name_snapshot = grade.teacher.full_name
+    if grades:
+        Grade.objects.bulk_update(
+            grades,
+            (
+                'student_name_snapshot',
+                'group_name_snapshot',
+                'subject_name_snapshot',
+                'teacher_name_snapshot',
+            ),
+            batch_size=500,
+        )
+
+    results = list(
+        SubjectResult.objects
+        .filter(academic_year_id=academic_year_id)
+        .select_related('student', 'enrollment__group', 'subject')
+    )
+    for result in results:
+        enrollment = result.enrollment
+        result.student_name_snapshot = (
+            enrollment.full_name
+            if enrollment is not None
+            else result.student.full_name
+        )
+        result.group_name_snapshot = (
+            enrollment.group.name
+            if enrollment is not None and enrollment.group_id
+            else result.group_name_snapshot
+        )
+        result.subject_name_snapshot = result.subject.name
+        result.final_grade_type_snapshot = result.subject.final_grade_type
+    if results:
+        SubjectResult.objects.bulk_update(
+            results,
+            (
+                'student_name_snapshot',
+                'group_name_snapshot',
+                'subject_name_snapshot',
+                'final_grade_type_snapshot',
+            ),
+            batch_size=500,
+        )

@@ -1,4 +1,3 @@
-from datetime import date
 from urllib.parse import urlencode
 
 from django import forms
@@ -6,7 +5,9 @@ from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
 from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
+from django.core.exceptions import ValidationError
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.db.models.deletion import ProtectedError
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
@@ -17,6 +18,7 @@ from .account_utils import (
     ensure_temporary_credential_for_user,
     generate_temporary_password,
     split_user_name,
+    username_with_spaces_validator,
     user_has_temporary_credential,
 )
 from .assignment_options import (
@@ -43,6 +45,7 @@ from .models import (
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentEnrollment,
     StudentSubject,
     StudyGroup,
     Subject,
@@ -52,9 +55,6 @@ from .models import (
     TemporaryCredential,
     object_is_in_archived_academic_year,
 )
-from .registration_utils import calculate_age
-
-
 admin.site.site_header = 'Электронный журнал музыкальной школы'
 admin.site.site_title = 'Электронный журнал'
 admin.site.index_title = 'Панель администратора'
@@ -149,7 +149,12 @@ class ActiveAcademicYearGroupSubjectInlineMixin:
 
 class ActiveAcademicYearStudentSubjectInlineMixin:
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(student__group__academic_year__is_active=True)
+        return super().get_queryset(request).filter(academic_year__is_active=True)
+
+
+class ActiveAcademicYearSubjectResultInlineMixin:
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(academic_year__is_active=True)
 
 
 class SpaceFriendlyUsernameFormMixin:
@@ -157,6 +162,7 @@ class SpaceFriendlyUsernameFormMixin:
         label='Логин',
         max_length=150,
         help_text=USERNAME_WITH_SPACES_HELP_TEXT,
+        validators=[username_with_spaces_validator],
     )
 
 
@@ -215,6 +221,16 @@ class UserAdmin(JournalAdminDescriptionMixin, BaseUserAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('student_profile', 'teacher_profile')
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if not change:
+            temporary_password = form.cleaned_data.get('password1') if form else None
+            if temporary_password:
+                ensure_temporary_credential_for_user(
+                    obj,
+                    password=temporary_password,
+                )
 
     @admin.display(description='Профиль журнала')
     def journal_profile_display(self, obj):
@@ -350,7 +366,12 @@ class GradeAdminForm(forms.ModelForm):
             except (AcademicYear.DoesNotExist, ValueError, TypeError):
                 academic_year = None
 
-        group = student.group if student is not None else None
+        enrollment = (
+            student.enrollment_for_year(academic_year)
+            if student is not None and academic_year is not None
+            else None
+        )
+        group = enrollment.group if enrollment is not None else None
         if group_id:
             try:
                 group = StudyGroup.objects.get(pk=group_id)
@@ -436,7 +457,8 @@ class GradeAdminForm(forms.ModelForm):
         academic_year = cleaned_data.get('academic_year')
 
         if group is None and student is not None:
-            group = student.group
+            enrollment = student.enrollment_for_year(academic_year)
+            group = enrollment.group if enrollment is not None else None
             cleaned_data['group'] = group
 
         if academic_year is None and group is not None:
@@ -446,8 +468,13 @@ class GradeAdminForm(forms.ModelForm):
         if group is None:
             self._add_available_error('group', 'Выберите группу или ученика с указанной группой.')
 
-        if group and student and student.group_id != group.pk:
-            self._add_available_error('student', 'Ученик не состоит в выбранной группе.')
+        if group and student:
+            enrollment = student.enrollment_for_year(academic_year)
+            if enrollment is None or enrollment.group_id != group.pk:
+                self._add_available_error(
+                    'student',
+                    'Ученик не состоит в выбранной группе в этом учебном году.',
+                )
 
         if group and academic_year and group.academic_year_id != academic_year.pk:
             self._add_available_error('academic_year', 'Группа относится к другому учебному году.')
@@ -576,8 +603,8 @@ class SubjectResultAdminForm(forms.ModelForm):
 
         if academic_year and not academic_year.is_active:
             self.add_error('academic_year', 'Архивный учебный год доступен только для просмотра.')
-        if student and student.group_id and academic_year and student.group.academic_year_id != academic_year.pk:
-            self.add_error('academic_year', 'Учебный год итога должен совпадать с учебным годом группы ученика.')
+        if student and academic_year and student.enrollment_for_year(academic_year) is None:
+            self.add_error('student', 'Ученик не зачислен в выбранный учебный год.')
 
         if student and subject:
             subject_is_allowed = get_grade_subjects(
@@ -826,14 +853,19 @@ class StudentSubjectAdminForm(forms.ModelForm):
             if not subject.is_specialty:
                 self.add_error('subject', 'Групповой предмет нельзя назначить индивидуальному ученику.')
 
-        if student and student.group_id and not student.group.academic_year.is_active:
-            self.add_error('student', 'Архивный учебный год доступен только для просмотра.')
+        active_year = AcademicYear.get_active()
+        if student and student.enrollment_for_year(active_year) is None:
+            self.add_error('student', 'Ученик не зачислен в активный учебный год.')
 
         if teacher and not teacher.is_active:
             self.add_error('teacher', 'Выберите активного преподавателя.')
 
         if student and subject:
-            duplicate_qs = StudentSubject.objects.filter(student=student, subject=subject)
+            duplicate_qs = StudentSubject.objects.filter(
+                student=student,
+                subject=subject,
+                academic_year=active_year,
+            )
             if self.instance.pk:
                 duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
             if duplicate_qs.exists():
@@ -842,6 +874,7 @@ class StudentSubjectAdminForm(forms.ModelForm):
         if student and cleaned_data.get('is_specialty') and is_active:
             specialty_qs = StudentSubject.objects.filter(
                 student=student,
+                academic_year=active_year,
                 is_specialty=True,
                 is_active=True,
             )
@@ -872,13 +905,19 @@ class GroupStudentInlineForm(forms.ModelForm):
     )
 
     class Meta:
-        model = Student
+        model = StudentEnrollment
         fields = ('city_church',)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if 'student' not in self.fields or 'city_church' not in self.fields:
+            return
 
-        selected_student = self.instance if self.instance and self.instance.pk else None
+        selected_student = (
+            self.instance.student
+            if self.instance and self.instance.pk
+            else None
+        )
         student_queryset = active_student_queryset()
         if selected_student is not None:
             student_queryset = Student.objects.select_related('group', 'group__academic_year').filter(
@@ -889,7 +928,11 @@ class GroupStudentInlineForm(forms.ModelForm):
         self.fields['student'].initial = selected_student
         self.fields['city_church'].disabled = True
         self.fields['city_church'].required = False
-        self.fields['city_church'].initial = selected_student.city_church if selected_student is not None else ''
+        self.fields['city_church'].initial = (
+            self.instance.city_church
+            if self.instance and self.instance.pk
+            else (selected_student.city_church if selected_student is not None else '')
+        )
         self.fields['city_church'].widget.attrs['data-student-city-target'] = '1'
 
 
@@ -1025,20 +1068,19 @@ class StudentInlineFormSet(forms.models.BaseInlineFormSet):
         obj.group = target_group
         if commit:
             obj.save(update_fields=['group'])
+            Student.objects.filter(pk=obj.student_id).update(group=target_group)
 
     def save_existing(self, form, obj, commit=True):
-        selected_student = form.cleaned_data.get('student') or obj
+        selected_student = form.cleaned_data.get('student') or obj.student
 
-        if selected_student.pk != obj.pk:
+        if selected_student.pk != obj.student_id:
             self.delete_existing(obj, commit=commit)
-            selected_student.group = self.instance
-            if commit:
-                selected_student.save(update_fields=['group'])
-            return selected_student
+            return self._move_student_enrollment(selected_student, commit=commit)
 
         obj.group = self.instance
         if commit:
             obj.save(update_fields=['group'])
+            Student.objects.filter(pk=obj.student_id).update(group=self.instance)
         return obj
 
     def save_new(self, form, commit=True):
@@ -1046,10 +1088,29 @@ class StudentInlineFormSet(forms.models.BaseInlineFormSet):
         if selected_student is None:
             return super().save_new(form, commit=commit)
 
-        selected_student.group = self.instance
+        return self._move_student_enrollment(selected_student, commit=commit)
+
+    def _move_student_enrollment(self, student, *, commit):
+        academic_year = self.instance.academic_year
+        enrollment = StudentEnrollment.objects.filter(
+            student=student,
+            academic_year=academic_year,
+        ).first()
+        if enrollment is None:
+            enrollment = StudentEnrollment(
+                student=student,
+                academic_year=academic_year,
+                group=self.instance,
+                **StudentEnrollment.snapshot_values_for_student(student),
+            )
+        else:
+            enrollment.group = self.instance
+            enrollment.copy_from_student(student)
+
         if commit:
-            selected_student.save(update_fields=['group'])
-        return selected_student
+            enrollment.save()
+            Student.objects.filter(pk=student.pk).update(group=self.instance)
+        return enrollment
 
 
 class GroupSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
@@ -1064,11 +1125,11 @@ class GroupSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlin
 class StudentSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
     unique_checks = (
         {
-            'fields': ('student', 'subject'),
+            'fields': ('student', 'subject', 'academic_year'),
             'message': 'У ученика уже есть такой индивидуальный предмет.',
         },
         {
-            'fields': ('student',),
+            'fields': ('student', 'academic_year'),
             'condition': lambda cleaned_data: (
                 cleaned_data.get('is_specialty') and cleaned_data.get('is_active')
             ),
@@ -1076,6 +1137,13 @@ class StudentSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInl
             'message': 'У ученика уже есть активная специальность.',
         },
     )
+
+    def _unique_field_value(self, form, field_name):
+        if field_name == 'academic_year':
+            if getattr(form.instance, 'academic_year_id', None):
+                return form.instance.academic_year
+            return AcademicYear.get_active()
+        return super()._unique_field_value(form, field_name)
 
 
 class SubjectResultInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInlineFormSet):
@@ -1102,6 +1170,24 @@ class GroupSubjectInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     verbose_name = 'Предмет группы'
     verbose_name_plural = 'Предметы группы'
 
+    def get_fields(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return ('archived_subject_name', 'archived_teacher_name', 'sort_order', 'is_active')
+        return super().get_fields(request, obj)
+
+    def get_readonly_fields(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return ('archived_subject_name', 'archived_teacher_name', 'sort_order', 'is_active')
+        return super().get_readonly_fields(request, obj)
+
+    @admin.display(description='Предмет')
+    def archived_subject_name(self, obj):
+        return obj.subject_name_snapshot or obj.subject.name
+
+    @admin.display(description='Преподаватель')
+    def archived_teacher_name(self, obj):
+        return obj.teacher_name_snapshot or obj.teacher.full_name
+
 
 class GroupSubjectForTeacherInline(ActiveAcademicYearGroupSubjectInlineMixin, admin.TabularInline):
     model = GroupSubject
@@ -1126,7 +1212,11 @@ class GroupSubjectForSubjectInline(ActiveAcademicYearGroupSubjectInlineMixin, ad
     verbose_name_plural = 'Группы, где есть этот предмет'
 
 
-class StudentSubjectInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
+class StudentSubjectInline(
+    ActiveAcademicYearStudentSubjectInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
     model = StudentSubject
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
@@ -1161,17 +1251,36 @@ class StudentSubjectForSubjectInline(ActiveAcademicYearStudentSubjectInlineMixin
 
 
 class StudentInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
-    model = Student
+    model = StudentEnrollment
+    fk_name = 'group'
     form = GroupStudentInlineForm
     formset = StudentInlineFormSet
     extra = 1
     fields = ('student', 'city_church')
-    show_change_link = True
+    show_change_link = False
     verbose_name = 'Ученик'
     verbose_name_plural = 'Ученики группы'
 
     class Media:
         js = ('journal/group_student_inline.js',)
+
+    def get_fields(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return ('archived_student_name', 'archived_city_church')
+        return super().get_fields(request, obj)
+
+    def get_readonly_fields(self, request, obj=None):
+        if self.parent_is_archived(obj):
+            return ('archived_student_name', 'archived_city_church')
+        return super().get_readonly_fields(request, obj)
+
+    @admin.display(description='ФИО ученика')
+    def archived_student_name(self, obj):
+        return obj.full_name
+
+    @admin.display(description='Город / Церковь')
+    def archived_city_church(self, obj):
+        return obj.city_church or '—'
 
 
 class GradeInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
@@ -1188,7 +1297,11 @@ class GradeInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
         js = ('journal/grade_dependencies.js',)
 
 
-class SubjectResultInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
+class SubjectResultInline(
+    ActiveAcademicYearSubjectResultInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
     model = SubjectResult
     form = SubjectResultAdminForm
     formset = SubjectResultInlineFormSet
@@ -1251,6 +1364,7 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
     search_fields = ('name',)
     ordering = ('-starts_on',)
     list_per_page = 30
+    readonly_fields = ('is_active',)
     fieldsets = (
         ('Учебный год', {
             'fields': ('name', 'starts_on', 'ends_on', 'is_active'),
@@ -1261,6 +1375,39 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         return qs.annotate(_groups_count=Count('study_groups', distinct=True))
+
+    def delete_queryset(self, request, queryset):
+        deleted = 0
+        skipped = 0
+        for academic_year in queryset.order_by('-starts_on', '-ends_on', '-pk'):
+            if object_is_in_archived_academic_year(academic_year):
+                skipped += 1
+                continue
+            try:
+                academic_year.delete()
+            except ValidationError as exc:
+                skipped += 1
+                self.message_user(request, '; '.join(exc.messages), level='ERROR')
+            except ProtectedError:
+                skipped += 1
+                self.message_user(
+                    request,
+                    (
+                        f'Учебный год «{academic_year}» не удален: '
+                        'сначала удалите связанные данные активного года.'
+                    ),
+                    level='ERROR',
+                )
+            else:
+                deleted += 1
+        if deleted:
+            self.message_user(request, f'Удалено учебных лет: {deleted}.')
+        if skipped:
+            self.message_user(
+                request,
+                f'Не удалено учебных лет: {skipped}.',
+                level='ERROR',
+            )
 
     @admin.display(description='Групп')
     def groups_count(self, obj):
@@ -1401,6 +1548,7 @@ class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
         'name',
         'academic_year__name',
         'students__full_name',
+        'student_enrollments__full_name',
         'group_subjects__subject__name',
         'group_subjects__teacher__full_name',
     )
@@ -1422,7 +1570,11 @@ class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         return qs.annotate(
-            _students_count=Count('students', filter=Q(students__is_active=True), distinct=True),
+            _students_count=Count(
+                'student_enrollments',
+                filter=Q(student_enrollments__is_active=True),
+                distinct=True,
+            ),
         ).prefetch_related(
             'group_subjects__subject',
             'group_subjects__teacher',
@@ -1430,6 +1582,8 @@ class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
 
     @admin.display(description='Учеников')
     def students_count_display(self, obj):
+        if object_is_in_archived_academic_year(obj):
+            return obj._students_count
         return format_html(
             '<a href="{}">{}</a>',
             admin_changelist_url('student', {'group__id__exact': obj.pk}),
@@ -1550,18 +1704,16 @@ class TeacherAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
                 last_name=last_name,
                 email=obj.email,
             )
-        elif not change and obj.user_id and not user_has_temporary_credential(obj.user):
-            temporary_password = generate_temporary_password()
-            obj.user.set_password(temporary_password)
-            obj.user.save(update_fields=['password'])
-
         if obj.user_id:
             teacher_group, _created = AuthGroup.objects.get_or_create(name='Преподаватель')
             obj.user.groups.add(teacher_group)
 
         super().save_model(request, obj, form, change)
 
-        if obj.user_id:
+        if obj.user_id and (
+            temporary_password is not None
+            or user_has_temporary_credential(obj.user)
+        ):
             ensure_temporary_credential_for_user(
                 obj.user,
                 password=temporary_password,
@@ -1679,7 +1831,11 @@ class StudentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
                 'individual_subjects',
                 queryset=(
                     StudentSubject.objects
-                    .filter(is_specialty=True, is_active=True)
+                    .filter(
+                        is_specialty=True,
+                        is_active=True,
+                        academic_year__is_active=True,
+                    )
                     .select_related('subject', 'teacher')
                     .order_by('subject__name')
                 ),
@@ -1747,7 +1903,13 @@ class GroupSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
         'Сюда нельзя назначать индивидуальные предметы.'
     )
     form = GroupSubjectAdminForm
-    list_display = ('group', 'subject', 'teacher', 'sort_order', 'is_active')
+    list_display = (
+        'group',
+        'subject_name_display',
+        'teacher_name_display',
+        'sort_order',
+        'is_active',
+    )
     list_filter = ('is_active', 'group__academic_year', 'group', 'subject', 'teacher')
     search_fields = ('group__name', 'subject__name', 'teacher__full_name')
     list_select_related = ('group', 'group__academic_year', 'subject', 'teacher')
@@ -1763,6 +1925,18 @@ class GroupSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
         }),
     )
 
+    @admin.display(description='Предмет', ordering='subject__name')
+    def subject_name_display(self, obj):
+        if obj.group.academic_year.is_active:
+            return obj.subject.name
+        return obj.subject_name_snapshot or obj.subject.name
+
+    @admin.display(description='Преподаватель', ordering='teacher__full_name')
+    def teacher_name_display(self, obj):
+        if obj.group.academic_year.is_active:
+            return obj.teacher.full_name
+        return obj.teacher_name_snapshot or obj.teacher.full_name
+
 
 @admin.register(StudentSubject)
 class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
@@ -1771,10 +1945,18 @@ class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptio
         'Сюда нельзя назначать групповые предметы.'
     )
     form = StudentSubjectAdminForm
-    list_display = ('student', 'student_group_display', 'subject', 'teacher', 'is_specialty', 'is_active')
-    list_filter = ('is_active', 'is_specialty', 'subject', 'teacher', 'student__group')
-    search_fields = ('student__full_name', 'student__group__name', 'subject__name', 'teacher__full_name')
-    list_select_related = ('student', 'student__group', 'subject', 'teacher')
+    list_display = (
+        'student_name_display',
+        'student_group_display',
+        'subject_name_display',
+        'teacher_name_display',
+        'academic_year',
+        'is_specialty',
+        'is_active',
+    )
+    list_filter = ('academic_year', 'is_active', 'is_specialty', 'subject', 'teacher')
+    search_fields = ('student__full_name', 'subject__name', 'teacher__full_name', 'subject_name_snapshot')
+    list_select_related = ('student', 'subject', 'teacher', 'academic_year')
     ordering = ('student__full_name', 'subject__name')
     list_per_page = 50
     fieldsets = (
@@ -1787,11 +1969,40 @@ class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptio
         }),
     )
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related(
+            Prefetch(
+                'student__enrollments',
+                queryset=StudentEnrollment.objects.select_related('academic_year', 'group'),
+                to_attr='journal_enrollments',
+            ),
+        )
+
+    @admin.display(description='Ученик', ordering='student__full_name')
+    def student_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.student.full_name
+        enrollment = obj.student.enrollment_for_year(obj.academic_year)
+        return enrollment.full_name if enrollment is not None else obj.student.full_name
+
     @admin.display(description='Группа')
     def student_group_display(self, obj):
         if obj and obj.student_id:
-            return obj.student.group or '—'
+            enrollment = obj.student.enrollment_for_year(obj.academic_year)
+            return enrollment.group if enrollment is not None and enrollment.group_id else '—'
         return '—'
+
+    @admin.display(description='Предмет', ordering='subject__name')
+    def subject_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.subject.name
+        return obj.subject_name_snapshot or obj.subject.name
+
+    @admin.display(description='Преподаватель', ordering='teacher__full_name')
+    def teacher_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.teacher.full_name
+        return obj.teacher_name_snapshot or obj.teacher.full_name
 
 
 @admin.register(Grade)
@@ -1803,10 +2014,10 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
     form = GradeAdminForm
     list_display = (
         'date',
-        'student',
+        'student_name_display',
         'student_group_display',
-        'subject',
-        'teacher',
+        'subject_name_display',
+        'teacher_name_display',
         'value',
         'academic_year',
         'source_type_display',
@@ -1816,20 +2027,22 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
         'date',
         'subject',
         'teacher',
-        'student__group',
-        'student__group__academic_year',
+        'enrollment__group',
     )
     search_fields = (
         'student__full_name',
-        'student__group__name',
+        'student_name_snapshot',
+        'group_name_snapshot',
         'subject__name',
+        'subject_name_snapshot',
         'teacher__full_name',
+        'teacher_name_snapshot',
         'comment',
     )
     autocomplete_fields = ('academic_year',)
     readonly_fields = ('source_type_display',)
     date_hierarchy = 'date'
-    list_select_related = ('student', 'student__group', 'subject', 'teacher', 'academic_year')
+    list_select_related = ('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
     ordering = ('-date', 'student__full_name')
     list_per_page = 50
 
@@ -1864,7 +2077,7 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
         return qs.annotate(
             _is_group_subject=Exists(
                 GroupSubject.objects.filter(
-                    group_id=OuterRef('student__group_id'),
+                    group_id=OuterRef('enrollment__group_id'),
                     subject_id=OuterRef('subject_id'),
                     teacher_id=OuterRef('teacher_id'),
                     is_active=True,
@@ -1875,6 +2088,7 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
                     student_id=OuterRef('student_id'),
                     subject_id=OuterRef('subject_id'),
                     teacher_id=OuterRef('teacher_id'),
+                    academic_year_id=OuterRef('academic_year_id'),
                     is_active=True,
                 ),
             ),
@@ -1882,9 +2096,27 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
-        if obj and obj.student_id:
-            return obj.student.group or '—'
+        if obj and obj.enrollment_id:
+            return obj.enrollment.group or obj.group_name_snapshot or '—'
         return '—'
+
+    @admin.display(description='Ученик', ordering='student__full_name')
+    def student_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.enrollment.full_name if obj.enrollment_id else obj.student.full_name
+        return obj.student_name_snapshot or obj.student.full_name
+
+    @admin.display(description='Предмет', ordering='subject__name')
+    def subject_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.subject.name
+        return obj.subject_name_snapshot or obj.subject.name
+
+    @admin.display(description='Преподаватель', ordering='teacher__full_name')
+    def teacher_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.teacher.full_name
+        return obj.teacher_name_snapshot or obj.teacher.full_name
 
     @admin.display(description='Тип назначения')
     def source_type_display(self, obj):
@@ -1912,16 +2144,22 @@ class SubjectResultAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescription
     )
     form = SubjectResultAdminForm
     list_display = (
-        'student',
+        'student_name_display',
         'student_group_display',
-        'subject',
+        'subject_name_display',
         'academic_year',
         'exam_grade',
         'final_grade',
     )
-    list_filter = ('academic_year', 'subject', 'student__group', 'student__group__academic_year')
-    search_fields = ('student__full_name', 'student__group__name', 'subject__name')
-    list_select_related = ('student', 'student__group', 'subject', 'academic_year')
+    list_filter = ('academic_year', 'subject', 'enrollment__group')
+    search_fields = (
+        'student__full_name',
+        'student_name_snapshot',
+        'group_name_snapshot',
+        'subject__name',
+        'subject_name_snapshot',
+    )
+    list_select_related = ('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
     ordering = ('academic_year__name', 'student__full_name', 'subject__name')
     list_per_page = 50
     fieldsets = (
@@ -1947,9 +2185,21 @@ class SubjectResultAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescription
 
     @admin.display(description='Группа')
     def student_group_display(self, obj):
-        if obj and obj.student_id:
-            return obj.student.group or '—'
+        if obj and obj.enrollment_id:
+            return obj.enrollment.group or obj.group_name_snapshot or '—'
         return '—'
+
+    @admin.display(description='Ученик', ordering='student__full_name')
+    def student_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.enrollment.full_name if obj.enrollment_id else obj.student.full_name
+        return obj.student_name_snapshot or obj.student.full_name
+
+    @admin.display(description='Предмет', ordering='subject__name')
+    def subject_name_display(self, obj):
+        if obj.academic_year.is_active:
+            return obj.subject.name
+        return obj.subject_name_snapshot or obj.subject.name
 
 
 # -----------------------------------------------------------------------------
@@ -2078,15 +2328,25 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
     )
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        self._course_age_reference_date = (
-            CourseRegistrationSettings.objects
-            .filter(pk=1)
-            .values_list('course_starts_on', flat=True)
-            .first()
-            or date.today()
-        )
-        return qs
+        return super().get_queryset(request)
+
+    def delete_queryset(self, request, queryset):
+        deleted = 0
+        skipped = 0
+        for application in queryset.select_related('academic_year'):
+            if object_is_in_archived_academic_year(application):
+                skipped += 1
+                continue
+            application.delete()
+            deleted += 1
+        if deleted:
+            self.message_user(request, f'Удалено заявок: {deleted}.')
+        if skipped:
+            self.message_user(
+                request,
+                f'Архивные заявки пропущены: {skipped}.',
+                level='ERROR',
+            )
 
     @admin.display(description='ФИО', ordering='last_name')
     def full_name_display(self, obj):
@@ -2096,10 +2356,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
     def age_display(self, obj):
         if not obj.birth_date:
             return '—'
-        reference_date = getattr(self, '_course_age_reference_date', None)
-        if reference_date is None:
-            return obj.age
-        return calculate_age(obj.birth_date, today=reference_date)
+        return obj.age
 
     @admin.display(description='Ученик создан', boolean=True)
     def has_journal_student_display(self, obj):
@@ -2265,7 +2522,7 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
         'course_ends_on',
         'updated_at',
     )
-    readonly_fields = ('updated_at',)
+    readonly_fields = ('course_starts_on', 'course_ends_on', 'updated_at')
     fieldsets = (
         ('Регистрация на курсы', {
             'fields': (
@@ -2276,8 +2533,8 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
                 'updated_at',
             ),
             'description': (
-                'Здесь хранятся все настройки публичной регистрации: ссылка после заявки, '
-                'минимальный возраст и даты курсов.'
+                'Ссылка и минимальный возраст настраиваются здесь. Даты берутся из активного '
+                'учебного года и показаны только для справки.'
             ),
         }),
     )

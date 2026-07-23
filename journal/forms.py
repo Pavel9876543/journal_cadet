@@ -51,7 +51,10 @@ def html_date_input(attrs=None):
 # -----------------------------------------------------------------------------
 
 
-def get_student_allowed_subjects(student: Optional[Student]):
+def get_student_allowed_subjects(
+    student: Optional[Student],
+    academic_year: Optional[AcademicYear] = None,
+):
     """
     Возвращает предметы, доступные ученику:
     1) предметы его группы через GroupSubject;
@@ -59,10 +62,14 @@ def get_student_allowed_subjects(student: Optional[Student]):
     """
     if student is None or not getattr(student, 'pk', None):
         return Subject.objects.none()
-    return get_grade_subjects(student=student)
+    return get_grade_subjects(student=student, academic_year=academic_year)
 
 
-def get_student_subject_teachers(student: Optional[Student], subject: Optional[Subject]):
+def get_student_subject_teachers(
+    student: Optional[Student],
+    subject: Optional[Subject],
+    academic_year: Optional[AcademicYear] = None,
+):
     """
     Возвращает преподавателей, которые действительно могут вести выбранный
     предмет у выбранного ученика.
@@ -70,10 +77,18 @@ def get_student_subject_teachers(student: Optional[Student], subject: Optional[S
     if student is None or subject is None or not getattr(student, 'pk', None) or not getattr(subject, 'pk', None):
         return Teacher.objects.none()
 
-    return get_grade_teachers(student=student, subject=subject)
+    return get_grade_teachers(
+        student=student,
+        subject=subject,
+        academic_year=academic_year,
+    )
 
 
-def get_teacher_subjects(teacher: Optional[Teacher], group: Optional[StudyGroup] = None):
+def get_teacher_subjects(
+    teacher: Optional[Teacher],
+    group: Optional[StudyGroup] = None,
+    academic_year: Optional[AcademicYear] = None,
+):
     """
     Предметы, которые преподаватель реально ведет:
     - в группах через GroupSubject;
@@ -83,10 +98,17 @@ def get_teacher_subjects(teacher: Optional[Teacher], group: Optional[StudyGroup]
     if teacher is None or not getattr(teacher, 'pk', None):
         return Subject.objects.none()
 
-    return get_grade_subjects(group=group, teacher=teacher)
+    return get_grade_subjects(
+        group=group,
+        teacher=teacher,
+        academic_year=academic_year,
+    )
 
 
-def get_teacher_groups(teacher: Optional[Teacher]):
+def get_teacher_groups(
+    teacher: Optional[Teacher],
+    academic_year: Optional[AcademicYear] = None,
+):
     """
     Группы, с которыми связан преподаватель:
     - ведет групповой предмет;
@@ -95,7 +117,7 @@ def get_teacher_groups(teacher: Optional[Teacher]):
     if teacher is None or not getattr(teacher, 'pk', None):
         return StudyGroup.objects.none()
 
-    return get_grade_groups(teacher=teacher)
+    return get_grade_groups(teacher=teacher, academic_year=academic_year)
 
 
 def get_students_for_group_subject(
@@ -104,6 +126,7 @@ def get_students_for_group_subject(
     subject: Optional[Subject],
     teacher: Optional[Teacher] = None,
     base_queryset=None,
+    academic_year: Optional[AcademicYear] = None,
 ):
     """
     Ученики, которым можно поставить оценку по выбранному предмету.
@@ -116,6 +139,7 @@ def get_students_for_group_subject(
         subject=subject,
         teacher=teacher,
         base_queryset=base_queryset,
+        academic_year=academic_year,
     )
 
 
@@ -247,6 +271,9 @@ class GradeCreateForm(forms.ModelForm):
         self.dependency_subject_id = subject.pk if subject is not None else ''
         self.dependency_academic_year_id = academic_year.pk if academic_year is not None else ''
         self.fields['group'].widget.attrs['required'] = True
+        self.fields['student'].error_messages['invalid_choice'] = (
+            'Выбранный ученик недоступен для этой группы, предмета или учебного года.'
+        )
 
         default_grade_date = date.today()
         if academic_year is not None and not (academic_year.starts_on <= default_grade_date <= academic_year.ends_on):
@@ -259,10 +286,13 @@ class GradeCreateForm(forms.ModelForm):
             self.fields['academic_year'].disabled = True
 
         selected_student = self._selected_student()
-        selected_group = group or self._selected_group(selected_student)
+        selected_academic_year = academic_year or self._selected_academic_year()
+        selected_group = group or self._selected_group(
+            selected_student,
+            selected_academic_year,
+        )
         selected_subject = subject or self._selected_subject()
         selected_teacher = teacher or self._selected_teacher()
-        selected_academic_year = academic_year or self._selected_academic_year()
 
         group_queryset = get_grade_groups(
             student=selected_student,
@@ -304,21 +334,33 @@ class GradeCreateForm(forms.ModelForm):
             group_queryset,
             StudyGroup,
             'group',
+            allowed_submitted_queryset=StudyGroup.objects.all(),
         )
         self.fields['student'].queryset = self._include_submitted_choice(
             student_queryset,
             Student,
             'student',
+            allowed_submitted_queryset=get_grade_students(
+                group=selected_group,
+                academic_year=selected_academic_year,
+                base_queryset=students_queryset,
+            ),
         )
         self.fields['subject'].queryset = self._include_submitted_choice(
             subject_queryset,
             Subject,
             'subject',
+            allowed_submitted_queryset=get_grade_subjects(
+                group=selected_group,
+                student=selected_student,
+                academic_year=selected_academic_year,
+            ),
         )
         self.fields['teacher'].queryset = self._include_submitted_choice(
             teacher_queryset,
             Teacher,
             'teacher',
+            allowed_submitted_queryset=Teacher.objects.filter(is_active=True),
         )
 
         if selected_group is not None:
@@ -330,15 +372,32 @@ class GradeCreateForm(forms.ModelForm):
         if subject is not None:
             self.fields.pop('subject', None)
 
-    def _include_submitted_choice(self, queryset, model, field_name):
+    def _include_submitted_choice(
+        self,
+        queryset,
+        model,
+        field_name,
+        *,
+        allowed_submitted_queryset=None,
+    ):
         if not self.is_bound:
             return queryset
         raw_value = self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
         selected = _safe_model_choice_value(model, raw_value)
         if selected is None:
             return queryset
+        instance_value = getattr(self.instance, f'{field_name}_id', None)
+        is_existing_value = self.instance.pk and selected.pk == instance_value
+        include_selected = Q(pk=selected.pk) if is_existing_value else Q(pk__in=[])
+        if allowed_submitted_queryset is not None:
+            include_selected |= (
+                Q(pk=selected.pk)
+                & Q(pk__in=allowed_submitted_queryset.values('pk'))
+            )
+        if not is_existing_value and allowed_submitted_queryset is None:
+            return queryset
         return model.objects.filter(
-            Q(pk__in=queryset.values('pk')) | Q(pk=selected.pk),
+            Q(pk__in=queryset.values('pk')) | include_selected,
         ).distinct()
 
     def _selected_student(self):
@@ -362,8 +421,13 @@ class GradeCreateForm(forms.ModelForm):
             teacher = _safe_model_choice_value(Teacher, raw_teacher_id) or teacher
         return teacher
 
-    def _selected_group(self, selected_student=None):
-        group = selected_student.group if selected_student is not None else None
+    def _selected_group(self, selected_student=None, academic_year=None):
+        enrollment = (
+            selected_student.enrollment_for_year(academic_year)
+            if selected_student is not None
+            else None
+        )
+        group = enrollment.group if enrollment is not None else None
         raw_group_id = self.data.get(self.add_prefix('group')) or self.data.get('group')
         if raw_group_id:
             group = _safe_model_choice_value(StudyGroup, raw_group_id) or group
@@ -392,7 +456,8 @@ class GradeCreateForm(forms.ModelForm):
         academic_year = self.fixed_academic_year or cleaned_data.get('academic_year')
 
         if group is None and student is not None:
-            group = student.group
+            enrollment = student.enrollment_for_year(academic_year)
+            group = enrollment.group if enrollment is not None else None
             cleaned_data['group'] = group
 
         if self.context_group is not None:
@@ -405,8 +470,13 @@ class GradeCreateForm(forms.ModelForm):
         if self.fixed_academic_year is not None:
             cleaned_data['academic_year'] = self.fixed_academic_year
 
-        if group and student and student.group_id != group.pk:
-            self.add_error('student', 'Ученик не состоит в выбранной группе.')
+        if group and student:
+            enrollment = student.enrollment_for_year(academic_year)
+            if enrollment is None or enrollment.group_id != group.pk:
+                self.add_error(
+                    'student',
+                    'Ученик не состоит в выбранной группе.',
+                )
 
         if group and academic_year and group.academic_year_id != academic_year.pk:
             self.add_error('academic_year', 'Группа относится к другому учебному году.')
@@ -485,7 +555,10 @@ class SubjectResultForm(forms.ModelForm):
         if student is not None:
             self.fields['student'].initial = student
             self.fields['student'].queryset = Student.objects.filter(pk=student.pk)
-            self.fields['subject'].queryset = get_student_allowed_subjects(student)
+            self.fields['subject'].queryset = get_student_allowed_subjects(
+                student,
+                AcademicYear.get_active(),
+            )
 
         if subject is not None:
             self.fields['subject'].initial = subject
@@ -505,10 +578,13 @@ class SubjectResultForm(forms.ModelForm):
         if student and subject:
             if academic_year and not academic_year.is_active:
                 self.add_error('academic_year', 'Архивный учебный год доступен только для просмотра.')
-            if student.group_id and academic_year and student.group.academic_year_id != academic_year.pk:
-                self.add_error('academic_year', 'Учебный год итога должен совпадать с учебным годом группы ученика.')
+            if academic_year and student.enrollment_for_year(academic_year) is None:
+                self.add_error('student', 'Ученик не зачислен в выбранный учебный год.')
 
-            if not get_student_allowed_subjects(student).filter(pk=subject.pk).exists():
+            if not get_student_allowed_subjects(
+                student,
+                academic_year,
+            ).filter(pk=subject.pk).exists():
                 raise forms.ValidationError(
                     'Нельзя выставить итог по предмету, который не назначен ученику.'
                 )
@@ -551,7 +627,12 @@ class BaseCourseApplicationForm(forms.ModelForm):
         if self.age_limit:
             self.registration_settings = self.registration_settings or CourseRegistrationSettings.load()
             self.minimum_registration_age = self.registration_settings.minimum_registration_age
-            self.age_reference_date = self.registration_settings.course_starts_on
+            active_year = AcademicYear.get_active()
+            self.age_reference_date = (
+                active_year.starts_on
+                if active_year is not None
+                else self.registration_settings.course_starts_on
+            )
 
         if 'status' in self.fields and not include_status:
             self.fields.pop('status')
@@ -730,13 +811,16 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
 
 
 class CourseRegistrationSettingsForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        if kwargs.get('instance') is None:
+            kwargs['instance'] = CourseRegistrationSettings.load()
+        super().__init__(*args, **kwargs)
+
     class Meta:
         model = CourseRegistrationSettings
         fields = [
             'telegram_group_url',
             'minimum_registration_age',
-            'course_starts_on',
-            'course_ends_on',
         ]
         widgets = {
             'telegram_group_url': forms.URLInput(attrs={
@@ -746,8 +830,6 @@ class CourseRegistrationSettingsForm(forms.ModelForm):
                 'min': 0,
                 'max': 120,
             }),
-            'course_starts_on': html_date_input(),
-            'course_ends_on': html_date_input(),
         }
 
     def clean_telegram_group_url(self):

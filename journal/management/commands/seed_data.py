@@ -8,6 +8,7 @@ from random import Random
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Count, Q
@@ -28,6 +29,7 @@ from journal.models import (
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentEnrollment,
     StudentSubject,
     StudyGroup,
     Subject,
@@ -55,9 +57,19 @@ class Command(BaseCommand):
             default='',
             help='Путь к CSV с тестовыми логинами/паролями. По умолчанию: secrets.csv в корне проекта.',
         )
+        parser.add_argument(
+            '--allow-production',
+            action='store_true',
+            help='Явно разрешить разрушительное заполнение в production-окружении.',
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
+        if settings.IS_PRODUCTION_ENV and not options['allow_production']:
+            raise CommandError(
+                'Команда seed_data удаляет данные и запрещена в production. '
+                'Для осознанного запуска добавьте --allow-production.'
+            )
         self.credentials: list[dict[str, str]] = []
         self.used_usernames: set[str] = set()
         self.UserModel = get_user_model()
@@ -166,9 +178,10 @@ class Command(BaseCommand):
             protected_user_ids.update(
                 User.objects.filter(username=admin_username).values_list('id', flat=True),
             )
+        self.protected_user_ids = protected_user_ids
 
         # Сначала удаляем зависимые учебные данные.
-        TemporaryCredential.objects.all().delete()
+        TemporaryCredential.objects.exclude(user_id__in=protected_user_ids).delete()
         PasswordRecoveryContact.objects.all().delete()
         CourseApplication.objects.all().delete()
         SubjectResult.objects.all().delete()
@@ -176,6 +189,7 @@ class Command(BaseCommand):
         StudentSubject.objects.all().delete()
         GroupSubject.objects.all().delete()
         TeacherSubject.objects.all().delete()
+        StudentEnrollment.objects.all().delete()
 
         # Запоминаем пользователей учеников и преподавателей,
         # чтобы удалить только неадминские аккаунты.
@@ -264,10 +278,15 @@ class Command(BaseCommand):
         )
 
         for user in users:
+            existing_credential = TemporaryCredential.objects.filter(user=user).first()
+            if user.pk in getattr(self, 'protected_user_ids', set()) and existing_credential is None:
+                continue
             credential = ensure_temporary_credential_for_user(
                 user,
-                reset_missing_password=True,
+                reset_missing_password=user.pk not in getattr(self, 'protected_user_ids', set()),
             )
+            if credential is None:
+                continue
             if user.username in exported_logins:
                 continue
             self._add_credentials(

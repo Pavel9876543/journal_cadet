@@ -1,24 +1,40 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip wheel --wheel-dir /wheels -r requirements.txt
+
+
+FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system app \
+    && adduser --system --ingroup app --home /app app
+
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    netcat-openbsd \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /wheels /wheels
+RUN pip install --no-index --find-links=/wheels /wheels/* && rm -rf /wheels
 
-COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
-
-COPY . .
-
-COPY docker/entrypoint.sh /entrypoint.sh
+COPY --chown=app:app . .
+COPY --chown=app:app docker/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
+USER app
 
 EXPOSE 8000
 

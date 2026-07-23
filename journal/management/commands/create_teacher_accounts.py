@@ -45,10 +45,9 @@ class Command(BaseCommand):
 
             user.first_name = first_name
             user.last_name = last_name
-            user.is_staff = False
-            user.is_superuser = False
             user.is_active = True
-            user.set_password(password)
+            if password is not None:
+                user.set_password(password)
             user.save()
 
             teacher.user = user

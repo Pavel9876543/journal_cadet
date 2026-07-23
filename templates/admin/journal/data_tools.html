@@ -35,10 +35,12 @@
                     <span>Список доступов</span>
                 </a>
 
-                <a href="{{ seed_confirm_url }}" class="journal-action-button">
-                    <i class="fas fa-play-circle" aria-hidden="true"></i>
-                    <span>Запуск тестовых данных</span>
-                </a>
+                {% if destructive_tools_enabled %}
+                    <a href="{{ seed_confirm_url }}" class="journal-action-button">
+                        <i class="fas fa-play-circle" aria-hidden="true"></i>
+                        <span>Запуск тестовых данных</span>
+                    </a>
+                {% endif %}
 
                 <a href="{{ admin_guide_url }}" class="journal-action-button">
                     <i class="fas fa-question-circle" aria-hidden="true"></i>
@@ -55,6 +57,7 @@
             </a>
         </section>
 
+        {% if destructive_tools_enabled %}
         <section class="journal-section">
             <div class="journal-section-heading">
                 <h2>Тестовые данные</h2>
@@ -86,7 +89,6 @@
                 </button>
             </form>
         </section>
-
         <section class="journal-section journal-danger-section">
             <div class="journal-section-heading">
                 <h2>Удаление базы данных</h2>
@@ -121,6 +123,7 @@
                 </button>
             </form>
         </section>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

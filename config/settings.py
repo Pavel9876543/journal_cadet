@@ -74,6 +74,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'django.middleware.gzip.GZipMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -83,7 +84,7 @@ MIDDLEWARE = [
 ]
 
 ALLOW_EMBEDDED_PREVIEW = _env_bool('ALLOW_EMBEDDED_PREVIEW', DEBUG)
-X_FRAME_OPTIONS = 'SAMEORIGIN'
+X_FRAME_OPTIONS = 'DENY'
 if ALLOW_EMBEDDED_PREVIEW:
     MIDDLEWARE.remove('django.middleware.clickjacking.XFrameOptionsMiddleware')
 
@@ -122,12 +123,6 @@ JAZZMIN_SETTINGS = {
             'url': 'admin_guide',
             'icon': 'fas fa-question-circle',
             'permissions': ['auth.delete_user'],
-        },
-        {
-            'name': 'Тестовые данные',
-            'url': 'admin_seed_test_data',
-            'icon': 'fas fa-play-circle',
-            'permissions': ['journal.view_temporarycredential'],
         },
     ],
     'order_with_respect_to': [
@@ -195,12 +190,6 @@ JAZZMIN_SETTINGS = {
                 'icon': 'fas fa-question-circle',
                 'permissions': ['auth.delete_user'],
             },
-            {
-                'name': 'Запуск тестовых данных',
-                'url': 'admin_seed_test_data',
-                'icon': 'fas fa-play-circle',
-                'permissions': ['journal.view_temporarycredential'],
-            },
         ],
     },
 }
@@ -243,6 +232,10 @@ DATABASES = {
 }
 
 DATA_TOOLS_PASSWORD = os.getenv('pas_key_data') or os.getenv('DATA_TOOLS_PASSWORD', '')
+ENABLE_DESTRUCTIVE_DATA_TOOLS = _env_bool(
+    'ENABLE_DESTRUCTIVE_DATA_TOOLS',
+    DEBUG and not IS_PRODUCTION_ENV,
+)
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},

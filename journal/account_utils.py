@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist
+from django.core.validators import RegexValidator
 from django.db.models import Q
 from django.utils.crypto import get_random_string
 
 _TEMP_PASSWORD_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
+
+
+username_with_spaces_validator = RegexValidator(
+    regex=r'^[\w.@+\- ]+\Z',
+    message=(
+        'Логин может содержать только буквы, цифры, пробелы и символы @/./+/-/_.'
+    ),
+    code='invalid_username',
+)
 
 
 def _name_parts(full_name: str) -> list[str]:
@@ -93,6 +103,8 @@ def ensure_temporary_credential_for_user(
     student_phone = user_student_phone(user)
 
     if credential is None:
+        if password is None:
+            return None
         credential = TemporaryCredential.objects.create(
             user=user,
             login=user.username,

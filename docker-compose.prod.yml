@@ -5,3 +5,23 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env.prod
+
+  backup:
+    image: postgres:16-alpine
+    env_file:
+      - .env.prod
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      BACKUP_INTERVAL_SECONDS: "86400"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pg_backups:/backups
+      - ./docker/backup-postgres.sh:/usr/local/bin/backup-postgres:ro
+    command: ["/usr/local/bin/backup-postgres", "--loop"]
+    restart: unless-stopped
+
+volumes:
+  pg_backups:

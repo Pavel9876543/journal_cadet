@@ -14,8 +14,8 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.exceptions import ValidationError
-from django.db import transaction
-from django.db.models import Max, Q, QuerySet
+from django.db import DatabaseError, IntegrityError, connection, transaction
+from django.db.models import Max, Prefetch, Q, QuerySet
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -56,6 +56,7 @@ from .models import (
     GroupSubject,
     PasswordRecoveryContact,
     Student,
+    StudentEnrollment,
     StudentSubject,
     StudyGroup,
     Subject,
@@ -67,7 +68,22 @@ from .models import (
 
 
 async def _run_db_sync(func, *args, **kwargs):
-    return await sync_to_async(func, thread_sensitive=True)(*args, **kwargs)
+    database_engine = settings.DATABASES['default']['ENGINE']
+    # SQLite test transactions are connection/thread-bound. PostgreSQL, used in
+    # production, can execute independent requests concurrently in the pool.
+    thread_sensitive = database_engine.endswith('sqlite3')
+    return await sync_to_async(func, thread_sensitive=thread_sensitive)(*args, **kwargs)
+
+
+@require_GET
+def healthcheck_view(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except DatabaseError:
+        return JsonResponse({'status': 'unavailable'}, status=503)
+    return JsonResponse({'status': 'ok'})
 
 
 # -----------------------------------------------------------------------------
@@ -127,7 +143,7 @@ def _grade_options_api_sync(request):
     academic_year = _get_selected_object(
         AcademicYear.objects.all(),
         request.GET.get('academic_year'),
-    )
+    ) or AcademicYear.get_active()
 
     if can_manage_all_grades:
         teacher = _get_selected_object(
@@ -177,14 +193,37 @@ def _grade_options_api_sync(request):
         teachers = _include_selected_option(teachers, Teacher, teacher)
 
     groups = groups.select_related('academic_year')
-    students = students.select_related('group', 'group__academic_year')
+    students = (
+        students
+        .select_related('group', 'group__academic_year')
+        .prefetch_related(None)
+        .prefetch_related(
+            Prefetch(
+                'enrollments',
+                queryset=StudentEnrollment.objects.filter(
+                    academic_year=academic_year,
+                ).select_related('group', 'academic_year'),
+                to_attr='journal_enrollments',
+            ),
+        )
+    )
     defaults = {}
-    if student is not None and student.group_id:
-        defaults['group_id'] = student.group_id
-        if student.group.academic_year_id:
-            defaults['academic_year_id'] = student.group.academic_year_id
+    enrollment = student.enrollment_for_year(academic_year) if student is not None else None
+    if enrollment is not None:
+        defaults['group_id'] = enrollment.group_id
+        defaults['academic_year_id'] = enrollment.academic_year_id
     elif group is not None and group.academic_year_id:
         defaults['academic_year_id'] = group.academic_year_id
+
+    student_options = []
+    for option_student in students:
+        option_enrollment = option_student.enrollment_for_year(academic_year)
+        student_options.append({
+            'id': option_student.pk,
+            'label': option_student.full_name,
+            'group_id': option_enrollment.group_id if option_enrollment is not None else None,
+            'academic_year_id': academic_year.pk if academic_year is not None else None,
+        })
 
     return JsonResponse({
         'groups': [
@@ -195,15 +234,7 @@ def _grade_options_api_sync(request):
             }
             for group in groups
         ],
-        'students': [
-            {
-                'id': student.pk,
-                'label': student.full_name,
-                'group_id': student.group_id,
-                'academic_year_id': student.group.academic_year_id if student.group_id else None,
-            }
-            for student in students
-        ],
+        'students': student_options,
         'subjects': [
             {'id': subject.pk, 'label': subject.name}
             for subject in subjects
@@ -442,32 +473,58 @@ def _redirect_journal(*, group=None, subject=None, academic_year=None):
     return redirect(url)
 
 
-def _student_subject_allowed_for_teacher(student: Student, subject: Subject, teacher: Teacher | None = None) -> bool:
+def _student_subject_allowed_for_teacher(
+    student: Student,
+    subject: Subject,
+    teacher: Teacher | None = None,
+    academic_year: AcademicYear | None = None,
+) -> bool:
     if not student or not subject:
         return False
 
     if teacher is None:
-        return get_student_allowed_subjects(student).filter(pk=subject.pk).exists()
+        return get_student_allowed_subjects(
+            student,
+            academic_year,
+        ).filter(pk=subject.pk).exists()
 
-    return get_student_subject_teachers(student, subject).filter(pk=teacher.pk).exists()
+    return get_student_subject_teachers(
+        student,
+        subject,
+        academic_year,
+    ).filter(pk=teacher.pk).exists()
 
 
-def _subjects_for_groups(groups, *, teacher: Teacher | None = None):
+def _subjects_for_groups(
+    groups,
+    *,
+    teacher: Teacher | None = None,
+    academic_year: AcademicYear | None = None,
+):
     group_ids = [group.pk for group in groups if group is not None]
     if not group_ids:
         return Subject.objects.none()
 
+    academic_year = academic_year or groups[0].academic_year
     group_assignments = GroupSubject.objects.filter(
         group_id__in=group_ids,
         is_active=True,
-        subject__is_active=True,
     )
+    enrollment_student_ids = StudentEnrollment.objects.filter(
+        academic_year=academic_year,
+        group_id__in=group_ids,
+    ).values_list('student_id', flat=True)
     individual_assignments = StudentSubject.objects.filter(
-        student__group_id__in=group_ids,
+        academic_year=academic_year,
+        student_id__in=enrollment_student_ids,
         is_active=True,
-        subject__is_active=True,
-        student__is_active=True,
     )
+    if academic_year.is_active:
+        group_assignments = group_assignments.filter(subject__is_active=True)
+        individual_assignments = individual_assignments.filter(
+            subject__is_active=True,
+            student__is_active=True,
+        )
 
     if teacher is not None:
         group_assignments = group_assignments.filter(teacher=teacher)
@@ -488,10 +545,10 @@ def _students_for_table(
     *,
     group: StudyGroup,
     subject: Subject,
-    students_by_group: dict[int, list[Student]],
+    enrollments_by_group: dict[int, list[StudentEnrollment]],
     group_subject_pairs: set[tuple[int, int]],
     individual_students_by_pair: dict[tuple[int, int], set[int]],
-) -> list[Student]:
+) -> list[StudentEnrollment]:
     """
     Возвращает учеников, которые должны попасть в таблицу конкретного предмета.
 
@@ -501,33 +558,46 @@ def _students_for_table(
 
     Карты назначений уже отфильтрованы по роли и выбранному преподавателю.
     """
-    group_students = students_by_group.get(group.pk, [])
-    if not group_students:
+    group_enrollments = enrollments_by_group.get(group.pk, [])
+    if not group_enrollments:
         return []
 
     assignment_key = (group.pk, subject.pk)
     table_student_ids: set[int] = set()
     if assignment_key in group_subject_pairs:
-        table_student_ids.update(student.pk for student in group_students)
+        table_student_ids.update(
+            enrollment.student_id
+            for enrollment in group_enrollments
+        )
 
     table_student_ids.update(individual_students_by_pair.get(assignment_key, set()))
 
     if not table_student_ids:
         return []
 
-    return [student for student in group_students if student.pk in table_student_ids]
+    return [
+        enrollment
+        for enrollment in group_enrollments
+        if enrollment.student_id in table_student_ids
+    ]
 
 
 def _table_assignment_maps(
     *,
     groups,
     subjects,
+    academic_year: AcademicYear,
+    enrollment_group_by_student: dict[int, int | None],
     teacher: Teacher | None = None,
-) -> tuple[set[tuple[int, int]], dict[tuple[int, int], set[int]]]:
+) -> tuple[
+    set[tuple[int, int]],
+    dict[tuple[int, int], set[int]],
+    dict[tuple[int, int], tuple[str, str]],
+]:
     group_ids = {group.pk for group in groups if group is not None}
     subject_ids = {subject.pk for subject in subjects if subject is not None}
     if not group_ids or not subject_ids:
-        return set(), defaultdict(set)
+        return set(), defaultdict(set), {}
 
     group_assignments = GroupSubject.objects.filter(
         group_id__in=group_ids,
@@ -535,33 +605,60 @@ def _table_assignment_maps(
         is_active=True,
     )
     individual_assignments = StudentSubject.objects.filter(
-        student__group_id__in=group_ids,
+        academic_year=academic_year,
+        student_id__in=enrollment_group_by_student,
         subject_id__in=subject_ids,
         is_active=True,
-        student__is_active=True,
     )
 
     if teacher is not None:
         group_assignments = group_assignments.filter(teacher=teacher)
         individual_assignments = individual_assignments.filter(teacher=teacher)
 
-    group_subject_pairs = set(group_assignments.values_list('group_id', 'subject_id'))
-    individual_students_by_pair: dict[tuple[int, int], set[int]] = defaultdict(set)
-    for group_id, subject_id, student_id in individual_assignments.values_list(
-        'student__group_id',
+    group_assignment_rows = list(group_assignments.values_list(
+        'group_id',
         'subject_id',
+        'subject_name_snapshot',
+        'final_grade_type_snapshot',
+    ))
+    group_subject_pairs = {
+        (group_id, subject_id)
+        for group_id, subject_id, _subject_name, _final_grade_type in group_assignment_rows
+    }
+    individual_students_by_pair: dict[tuple[int, int], set[int]] = defaultdict(set)
+    assignment_metadata: dict[tuple[int, int], tuple[str, str]] = {
+        (group_id, subject_id): (subject_name, final_grade_type)
+        for group_id, subject_id, subject_name, final_grade_type in group_assignment_rows
+    }
+    for student_id, subject_id, subject_name, final_grade_type in individual_assignments.values_list(
         'student_id',
+        'subject_id',
+        'subject_name_snapshot',
+        'final_grade_type_snapshot',
     ):
+        group_id = enrollment_group_by_student.get(student_id)
+        if group_id not in group_ids:
+            continue
         individual_students_by_pair[(group_id, subject_id)].add(student_id)
+        assignment_metadata.setdefault(
+            (group_id, subject_id),
+            (subject_name, final_grade_type),
+        )
 
-    return group_subject_pairs, individual_students_by_pair
+    return group_subject_pairs, individual_students_by_pair, assignment_metadata
+
+
+def _final_grade_options(final_grade_type: str) -> list[str]:
+    if final_grade_type == Subject.FINAL_GRADE_TYPE_PASS_FAIL:
+        return ['Зачет', 'Незачет']
+    return ['1', '2', '3', '4', '5', 'Н']
 
 
 def _build_journal_tables(
     *,
     groups,
     subjects,
-    students,
+    enrollments,
     grade_qs,
     results_qs,
     selected_academic_year: AcademicYear | None = None,
@@ -569,23 +666,33 @@ def _build_journal_tables(
 ):
     journal_tables = []
 
-    students_by_group: dict[int, list[Student]] = defaultdict(list)
-    for student in students:
-        if student.group_id:
-            students_by_group[student.group_id].append(student)
+    enrollments_by_group: dict[int, list[StudentEnrollment]] = defaultdict(list)
+    enrollment_group_by_student: dict[int, int | None] = {}
+    for enrollment in enrollments:
+        enrollment_group_by_student[enrollment.student_id] = enrollment.group_id
+        if enrollment.group_id:
+            enrollments_by_group[enrollment.group_id].append(enrollment)
 
     grades_map: dict[tuple[int, int], list[Grade]] = defaultdict(list)
     for grade in grade_qs:
-        if grade.student and grade.student.group_id:
-            grades_map[(grade.student.group_id, grade.subject_id)].append(grade)
+        if grade.enrollment_id and grade.enrollment.group_id:
+            grades_map[(grade.enrollment.group_id, grade.subject_id)].append(grade)
 
     result_map: dict[tuple[int, int, int], SubjectResult] = {}
     for result in results_qs:
         result_map[(result.student_id, result.subject_id, result.academic_year_id)] = result
 
-    group_subject_pairs, individual_students_by_pair = _table_assignment_maps(
+    if selected_academic_year is None:
+        return []
+    (
+        group_subject_pairs,
+        individual_students_by_pair,
+        assignment_metadata,
+    ) = _table_assignment_maps(
         groups=groups,
         subjects=subjects,
+        academic_year=selected_academic_year,
+        enrollment_group_by_student=enrollment_group_by_student,
         teacher=teacher,
     )
 
@@ -597,31 +704,41 @@ def _build_journal_tables(
             if subject is None:
                 continue
 
-            table_students = _students_for_table(
+            table_enrollments = _students_for_table(
                 group=group,
                 subject=subject,
-                students_by_group=students_by_group,
+                enrollments_by_group=enrollments_by_group,
                 group_subject_pairs=group_subject_pairs,
                 individual_students_by_pair=individual_students_by_pair,
             )
-            if not table_students:
+            if not table_enrollments:
                 continue
 
-            table_student_ids = {student.pk for student in table_students}
+            table_student_ids = {
+                enrollment.student_id
+                for enrollment in table_enrollments
+            }
             subject_grades = [
                 grade
                 for grade in grades_map.get((group.pk, subject.pk), [])
                 if grade.student_id in table_student_ids
             ]
             dates = sorted({grade.date for grade in subject_grades})
-            row_map = {student.pk: {lesson_date: '' for lesson_date in dates} for student in table_students}
+            row_map = {
+                enrollment.student_id: {
+                    lesson_date: ''
+                    for lesson_date in dates
+                }
+                for enrollment in table_enrollments
+            }
 
             for grade in subject_grades:
                 if grade.student_id in row_map:
                     row_map[grade.student_id][grade.date] = str(grade.value)
 
             rows = []
-            for student in table_students:
+            for enrollment in table_enrollments:
+                student = enrollment.student
                 grades_by_date = {}
                 grade_values = []
                 for lesson_date in dates:
@@ -630,14 +747,15 @@ def _build_journal_tables(
                     if value:
                         grade_values.append(value)
 
-                result_year = _result_year_for_student(student, selected_academic_year)
-                subject_result = None
-                if result_year is not None:
-                    subject_result = result_map.get((student.pk, subject.pk, result_year.pk))
+                subject_result = result_map.get(
+                    (student.pk, subject.pk, selected_academic_year.pk),
+                )
 
                 rows.append(
                     {
                         'student': student,
+                        'student_name': enrollment.full_name,
+                        'enrollment': enrollment,
                         'grades_by_date': grades_by_date,
                         'average_grade': _calculate_average(grade_values),
                         'exam_grade': '' if subject_result is None or subject_result.exam_grade is None else subject_result.exam_grade,
@@ -645,14 +763,21 @@ def _build_journal_tables(
                     }
                 )
 
+            subject_name, final_grade_type = assignment_metadata.get(
+                (group.pk, subject.pk),
+                (subject.name, subject.final_grade_type),
+            )
             journal_tables.append(
                 {
                     'group': group,
                     'subject': subject,
+                    'subject_name': subject_name or subject.name,
                     'dates': dates,
                     'rows': rows,
-                    'final_grade_options': sorted(subject.get_final_grade_allowed_values()),
-                    'academic_year': selected_academic_year or group.academic_year,
+                    'final_grade_options': _final_grade_options(
+                        final_grade_type or subject.final_grade_type,
+                    ),
+                    'academic_year': selected_academic_year,
                 }
             )
 
@@ -678,7 +803,7 @@ def _save_inline_grades(
     changed = 0
     student_map = {
         student.pk: student
-        for student in students.select_related('group', 'group__academic_year')
+        for student in students
     }
     subject_map = {
         subject.pk: subject
@@ -686,6 +811,12 @@ def _save_inline_grades(
     }
     student_ids = set(student_map)
     subject_ids = set(subject_map)
+    enrollment_group_by_student = dict(
+        StudentEnrollment.objects.filter(
+            academic_year=selected_academic_year,
+            student_id__in=student_ids,
+        ).values_list('student_id', 'group_id')
+    )
     teacher_group_subject_pairs: set[tuple[int, int]] = set()
     teacher_individual_subject_pairs: set[tuple[int, int]] = set()
 
@@ -693,9 +824,14 @@ def _save_inline_grades(
         teacher_group_subject_pairs = set(
             GroupSubject.objects
             .filter(
-                group_id__in={student.group_id for student in student_map.values()},
+                group_id__in={
+                    group_id
+                    for group_id in enrollment_group_by_student.values()
+                    if group_id is not None
+                },
                 subject_id__in=subject_ids,
                 teacher=teacher,
+                group__academic_year=selected_academic_year,
                 is_active=True,
             )
             .values_list('group_id', 'subject_id')
@@ -706,6 +842,7 @@ def _save_inline_grades(
                 student_id__in=student_ids,
                 subject_id__in=subject_ids,
                 teacher=teacher,
+                academic_year=selected_academic_year,
                 is_active=True,
             )
             .values_list('student_id', 'subject_id')
@@ -746,7 +883,10 @@ def _save_inline_grades(
                 if (
                     role_mode == 'teacher'
                     and (
-                        (student.group_id, subject_id) not in teacher_group_subject_pairs
+                        (
+                            enrollment_group_by_student.get(student_id),
+                            subject_id,
+                        ) not in teacher_group_subject_pairs
                         and (student_id, subject_id) not in teacher_individual_subject_pairs
                     )
                 ):
@@ -759,7 +899,7 @@ def _save_inline_grades(
                     transaction.set_rollback(True)
                     return False
 
-                academic_year = _result_year_for_student(student, selected_academic_year)
+                academic_year = selected_academic_year
                 if academic_year is None:
                     messages.error(request, 'Не удалось определить учебный год для итоговой оценки.')
                     transaction.set_rollback(True)
@@ -941,53 +1081,72 @@ def _journal_for_admin(
 
     groups = (
         StudyGroup.objects
-        .filter(is_active=True)
+        .all()
         .select_related('academic_year')
         .order_by('academic_year__name', 'name')
     )
     groups = _filter_groups_by_academic_year(groups, selected_academic_year)
-    subjects = Subject.objects.filter(is_active=True).order_by('name')
+    if selected_academic_year and selected_academic_year.is_active:
+        groups = groups.filter(is_active=True)
+    subjects = get_grade_subjects(academic_year=selected_academic_year)
     can_edit_journal = _can_edit_academic_year(selected_academic_year)
 
     selected_group = _get_selected_object(groups, selected_group_id)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
 
-    groups_to_show = [selected_group] if selected_group else list(groups)
+    groups_to_show = [selected_group] if selected_group else []
 
     if selected_subject:
         subjects_to_show = [selected_subject]
     elif selected_group:
-        subjects_to_show = list(_subjects_for_groups(groups_to_show))
+        subjects_to_show = list(_subjects_for_groups(
+            groups_to_show,
+            academic_year=selected_academic_year,
+        ))
     else:
-        subjects_to_show = list(subjects)
+        subjects_to_show = []
 
-    students_qs = (
-        Student.objects
-        .filter(is_active=True, group__in=groups_to_show)
-        .select_related('group', 'group__academic_year', 'instrument', 'user')
+    enrollments_qs = (
+        StudentEnrollment.objects
+        .filter(
+            academic_year=selected_academic_year,
+            group__in=groups_to_show,
+        )
+        .select_related('student', 'student__instrument', 'student__user', 'group', 'academic_year')
         .order_by('full_name')
     )
+    if can_edit_journal:
+        enrollments_qs = enrollments_qs.filter(is_active=True, student__is_active=True)
+    enrollments = list(enrollments_qs)
+    student_ids = [enrollment.student_id for enrollment in enrollments]
+    students_qs = Student.objects.filter(pk__in=student_ids).order_by('full_name')
     students = list(students_qs)
 
     grade_qs = (
         Grade.objects
-        .filter(student__in=students_qs, subject__in=subjects_to_show)
-        .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
+        .filter(
+            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
+            subject__in=subjects_to_show,
+            academic_year=selected_academic_year,
+        )
+        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
     )
-    if selected_academic_year is not None:
-        grade_qs = grade_qs.filter(academic_year=selected_academic_year)
 
     result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
     results_qs = (
         SubjectResult.objects
-        .filter(student__in=students_qs, subject__in=subjects_to_show, academic_year_id__in=result_year_ids)
-        .select_related('student', 'student__group', 'subject', 'academic_year')
+        .filter(
+            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
+            subject__in=subjects_to_show,
+            academic_year_id__in=result_year_ids,
+        )
+        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
     )
 
     journal_tables = _build_journal_tables(
         groups=groups_to_show,
         subjects=subjects_to_show,
-        students=students,
+        enrollments=enrollments,
         grade_qs=grade_qs,
         results_qs=results_qs,
         selected_academic_year=selected_academic_year,
@@ -1064,45 +1223,69 @@ def _journal_for_teacher(
 
     groups = get_grade_groups(teacher=teacher, academic_year=selected_academic_year).select_related('academic_year')
     selected_group = _get_selected_object(groups, selected_group_id)
-    groups_to_show = [selected_group] if selected_group else list(groups)
+    groups_to_show = [selected_group] if selected_group else []
     can_edit_journal = _can_edit_academic_year(selected_academic_year)
 
-    subjects = get_teacher_subjects(teacher, selected_group) if selected_group else _subjects_for_groups(groups_to_show, teacher=teacher)
+    subjects = get_teacher_subjects(
+        teacher,
+        selected_group,
+        selected_academic_year,
+    )
     selected_subject = _get_selected_object(subjects, selected_subject_id)
-    subjects_to_show = [selected_subject] if selected_subject else list(subjects)
+    subjects_to_show = (
+        [selected_subject]
+        if selected_subject
+        else (list(subjects) if selected_group else [])
+    )
 
-    students_qs = (
-        Student.objects
-        .filter(is_active=True, group__in=groups_to_show)
+    eligible_students = get_grade_students(
+        group=selected_group,
+        teacher=teacher,
+        academic_year=selected_academic_year,
+    )
+    enrollments_qs = (
+        StudentEnrollment.objects
         .filter(
-            Q(group__group_subjects__teacher=teacher, group__group_subjects__is_active=True)
-            | Q(individual_subjects__teacher=teacher, individual_subjects__is_active=True)
+            academic_year=selected_academic_year,
+            group__in=groups_to_show,
+            student_id__in=eligible_students.values_list('pk', flat=True),
         )
-        .select_related('group', 'group__academic_year', 'instrument', 'user')
-        .distinct()
+        .select_related('student', 'student__instrument', 'student__user', 'group', 'academic_year')
         .order_by('full_name')
     )
+    if can_edit_journal:
+        enrollments_qs = enrollments_qs.filter(is_active=True, student__is_active=True)
+    enrollments = list(enrollments_qs)
+    student_ids = [enrollment.student_id for enrollment in enrollments]
+    students_qs = Student.objects.filter(pk__in=student_ids).order_by('full_name')
     students = list(students_qs)
 
     grade_qs = (
         Grade.objects
-        .filter(teacher=teacher, student__in=students_qs, subject__in=subjects_to_show)
-        .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
+        .filter(
+            teacher=teacher,
+            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
+            subject__in=subjects_to_show,
+            academic_year=selected_academic_year,
+        )
+        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
     )
-    if selected_academic_year is not None:
-        grade_qs = grade_qs.filter(academic_year=selected_academic_year)
 
     result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
     results_qs = (
         SubjectResult.objects
-        .filter(student__in=students_qs, subject__in=subjects_to_show, academic_year_id__in=result_year_ids)
-        .select_related('student', 'student__group', 'subject', 'academic_year')
+        .filter(
+            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
+            subject__in=subjects_to_show,
+            academic_year_id__in=result_year_ids,
+        )
+        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
     )
 
     journal_tables = _build_journal_tables(
         groups=groups_to_show,
         subjects=subjects_to_show,
-        students=students,
+        enrollments=enrollments,
         grade_qs=grade_qs,
         results_qs=results_qs,
         selected_academic_year=selected_academic_year,
@@ -1178,14 +1361,13 @@ def _journal_for_student(
     selected_academic_year: AcademicYear | None,
 ):
     role_mode = 'student'
-    selected_group = student.group if student.group_id else None
+    enrollment = student.enrollment_for_year(selected_academic_year)
+    selected_group = enrollment.group if enrollment is not None else None
     groups = [selected_group] if selected_group is not None else []
-    if selected_academic_year is not None and selected_group is not None:
-        if selected_group.academic_year_id != selected_academic_year.pk:
-            groups = []
     students = [student]
+    enrollments = [enrollment] if enrollment is not None else []
 
-    subjects = get_student_allowed_subjects(student)
+    subjects = get_student_allowed_subjects(student, selected_academic_year)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
     subjects_to_show = [selected_subject] if selected_subject else list(subjects)
 
@@ -1195,23 +1377,29 @@ def _journal_for_student(
 
     grade_qs = (
         Grade.objects
-        .filter(student=student, subject__in=subjects_to_show)
-        .select_related('student', 'student__group', 'subject', 'teacher', 'academic_year')
+        .filter(
+            enrollment=enrollment,
+            subject__in=subjects_to_show,
+            academic_year=selected_academic_year,
+        )
+        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
     )
-    if selected_academic_year is not None:
-        grade_qs = grade_qs.filter(academic_year=selected_academic_year)
 
     result_year_ids = _result_year_ids(groups, selected_academic_year)
     results_qs = (
         SubjectResult.objects
-        .filter(student=student, subject__in=subjects_to_show, academic_year_id__in=result_year_ids)
-        .select_related('student', 'student__group', 'subject', 'academic_year')
+        .filter(
+            enrollment=enrollment,
+            subject__in=subjects_to_show,
+            academic_year_id__in=result_year_ids,
+        )
+        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
     )
 
     journal_tables = _build_journal_tables(
         groups=groups,
         subjects=subjects_to_show,
-        students=students,
+        enrollments=enrollments,
         grade_qs=grade_qs,
         results_qs=results_qs,
         selected_academic_year=selected_academic_year,
@@ -1278,6 +1466,7 @@ def _handle_grade_form(
                 group=posted_group,
                 subject=posted_subject,
                 teacher=teacher,
+                academic_year=selected_academic_year,
             )
 
         grade_form = GradeCreateForm(
@@ -1308,6 +1497,7 @@ def _handle_grade_form(
             group=selected_group,
             subject=selected_subject,
             teacher=teacher,
+            academic_year=selected_academic_year,
         )
 
     return GradeCreateForm(
@@ -1378,8 +1568,8 @@ def _get_client_ip(request) -> str:
     return request.META.get('REMOTE_ADDR', '') or 'unknown'
 
 
-def _registration_api_is_throttled(request) -> bool:
-    cache_key = f'course_registration_api:{_get_client_ip(request)}'
+def _registration_is_throttled(request) -> bool:
+    cache_key = f'course_registration:{_get_client_ip(request)}'
     now = timezone.now()
     window_start_limit = now - timedelta(seconds=COURSE_REGISTRATION_API_THROTTLE_WINDOW)
 
@@ -1448,8 +1638,40 @@ def _course_registration_view_sync(request):
     )
     redirect_url = _get_telegram_redirect_url(registration_settings)
 
+    if request.method == 'POST' and _registration_is_throttled(request):
+        form.add_error(
+            None,
+            'Слишком много попыток регистрации. Подождите минуту и попробуйте снова.',
+        )
+        return render(
+            request,
+            'journal/course_registration.html',
+            {
+                'form': form,
+                'submitted': False,
+                'redirect_url': redirect_url,
+            },
+            status=429,
+        )
+
     if request.method == 'POST' and form.is_valid():
-        application = form.save()
+        try:
+            application = form.save()
+        except IntegrityError:
+            form.add_error(
+                'student_phone',
+                'Заявка с этим номером телефона уже зарегистрирована на текущий учебный год.',
+            )
+            return render(
+                request,
+                'journal/course_registration.html',
+                {
+                    'form': form,
+                    'submitted': False,
+                    'redirect_url': redirect_url,
+                },
+                status=409,
+            )
         credential = _get_application_credential(application)
         return render(
             request,
@@ -1481,7 +1703,7 @@ def _course_registration_api_sync(request):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
 
-    if _registration_api_is_throttled(request):
+    if _registration_is_throttled(request):
         return JsonResponse(
             {
                 'success': False,
@@ -1499,7 +1721,24 @@ def _course_registration_api_sync(request):
     redirect_url = _get_telegram_redirect_url(registration_settings)
 
     if form.is_valid():
-        application = form.save()
+        try:
+            application = form.save()
+        except IntegrityError:
+            return JsonResponse(
+                {
+                    'success': False,
+                    'message': (
+                        'Заявка с этим номером телефона уже зарегистрирована '
+                        'на текущий учебный год.'
+                    ),
+                    'errors': {
+                        'student_phone': [
+                            'Этот номер телефона уже используется в заявке.',
+                        ],
+                    },
+                },
+                status=409,
+            )
         credential = _get_application_credential(application)
         return JsonResponse(
             {

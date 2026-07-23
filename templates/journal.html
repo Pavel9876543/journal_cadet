@@ -1312,7 +1312,7 @@
                         {% for table in journal_tables %}
                             <a class="journal-tab" href="#journal-{{ table.group.id }}-{{ table.subject.id }}">
                                 <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
-                                <strong>{{ table.subject.name }}</strong>
+                                <strong>{{ table.subject_name }}</strong>
                                 <span>{{ table.group.name }}</span>
                             </a>
                         {% endfor %}
@@ -1323,7 +1323,7 @@
                         <section class="table-panel" id="journal-{{ table.group.id }}-{{ table.subject.id }}">
                             <div class="table-panel-head">
                                 <div class="table-title">
-                                    <h3>{{ table.subject.name }}</h3>
+                                    <h3>{{ table.subject_name }}</h3>
                                     <p>{{ table.group.name }}</p>
                                 </div>
                                 <div class="table-meta">
@@ -1356,7 +1356,7 @@
                             {% else %}
                                 <div class="table-form">
                             {% endif %}
-                                <div class="table-scroll" tabindex="0" role="region" aria-label="{{ table.subject.name }}, {{ table.group.name }}">
+                                <div class="table-scroll" tabindex="0" role="region" aria-label="{{ table.subject_name }}, {{ table.group.name }}">
                                     <table>
                                         <thead>
                                         <tr>
@@ -1377,7 +1377,7 @@
                                                         <span class="student-avatar">
                                                             <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
                                                         </span>
-                                                        <span>{{ row.student.full_name }}</span>
+                                                        <span>{{ row.student_name }}</span>
                                                     </span>
                                                 </th>
                                                 {% for lesson_date in table.dates %}
@@ -1391,7 +1391,7 @@
                                                                         pattern="[1-5Нн]"
                                                                         name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
                                                                         value="{{ cell }}"
-                                                                        aria-label="{{ row.student.full_name }}: {{ lesson_date|date:'d.m.Y' }}"
+                                                                        aria-label="{{ row.student_name }}: {{ lesson_date|date:'d.m.Y' }}"
                                                                     >
                                                                 {% else %}
                                                                     <span class="muted">-</span>
@@ -1415,7 +1415,7 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <select name="exam__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student.full_name }}: экзамен">
+                                                        <select name="exam__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student_name }}: экзамен">
                                                             <option value="">-</option>
                                                             {% for option in table.final_grade_options %}
                                                                 <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
@@ -1431,7 +1431,7 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <select name="final__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student.full_name }}: итоговая оценка">
+                                                        <select name="final__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student_name }}: итоговая оценка">
                                                             <option value="">-</option>
                                                             {% for option in table.final_grade_options %}
                                                                 <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>

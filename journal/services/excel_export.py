@@ -27,6 +27,7 @@ JOURNAL_MODEL_SHEETS = [
     ('Группы', 'journal', 'StudyGroup'),
     ('Преподаватели', 'journal', 'Teacher'),
     ('Ученики', 'journal', 'Student'),
+    ('Зачисления учеников', 'journal', 'StudentEnrollment'),
     ('Предметы групп', 'journal', 'GroupSubject'),
     ('Индивидуальные предметы', 'journal', 'StudentSubject'),
     ('Квалификации', 'journal', 'TeacherSubject'),
@@ -196,7 +197,10 @@ def format_value(value):
 
 
 def clean_excel_text(value: str) -> str:
-    return ILLEGAL_CHARACTERS_RE.sub('', value)
+    value = ILLEGAL_CHARACTERS_RE.sub('', value)
+    if value.lstrip().startswith(('=', '+', '-', '@')):
+        return f"'{value}"
+    return value
 
 
 def yes_no(value: bool) -> str:

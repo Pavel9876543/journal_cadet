@@ -32,6 +32,7 @@ from .models import (
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentEnrollment,
     StudentSubject,
     StudyGroup,
     Subject,
@@ -52,7 +53,11 @@ DATA_TOOLS_PASSWORD_FIELD = 'pas_key_data'
 
 
 async def _run_db_sync(func, *args, **kwargs):
-    return await sync_to_async(func, thread_sensitive=True)(*args, **kwargs)
+    database_engine = settings.DATABASES['default']['ENGINE']
+    return await sync_to_async(
+        func,
+        thread_sensitive=database_engine.endswith('sqlite3'),
+    )(*args, **kwargs)
 
 
 @superuser_required
@@ -111,6 +116,7 @@ def _admin_data_tools_view_sync(request: HttpRequest) -> HttpResponse:
         'delete_database_url': reverse('admin_delete_database'),
         'export_all_data_url': safe_reverse('admin_export_all_data_excel'),
         'data_tools_password_field': DATA_TOOLS_PASSWORD_FIELD,
+        'destructive_tools_enabled': settings.ENABLE_DESTRUCTIVE_DATA_TOOLS,
     }
 
     return render(request, 'admin/journal/data_tools.html', context)
@@ -132,6 +138,8 @@ def _admin_seed_test_data_view_sync(request: HttpRequest) -> HttpResponse:
     """
     if not request.user.is_superuser:
         raise PermissionDenied('Создание тестовых данных доступно только суперпользователю.')
+    if not settings.ENABLE_DESTRUCTIVE_DATA_TOOLS:
+        raise PermissionDenied('Создание тестовых данных отключено в этом окружении.')
 
     if request.method != 'POST':
         context = {
@@ -178,6 +186,8 @@ def _admin_delete_database_view_sync(request: HttpRequest) -> HttpResponse:
     """
     if not request.user.is_superuser:
         raise PermissionDenied('Удаление базы данных доступно только суперпользователю.')
+    if not settings.ENABLE_DESTRUCTIVE_DATA_TOOLS:
+        raise PermissionDenied('Удаление данных отключено в этом окружении.')
 
     if request.method != 'POST':
         return redirect('admin_data_tools')
@@ -243,6 +253,7 @@ def clear_database_data() -> dict[str, int]:
             StudentSubject,
             GroupSubject,
             TeacherSubject,
+            StudentEnrollment,
             Student,
             Teacher,
             StudyGroup,
@@ -326,9 +337,9 @@ def build_temporary_credentials_workbook() -> Workbook:
 
     for credential in queryset:
         worksheet.append([
-            get_credential_login(credential),
-            get_credential_password(credential),
-            get_credential_role(credential),
+            clean_excel_text(get_credential_login(credential)),
+            clean_excel_text(get_credential_password(credential)),
+            clean_excel_text(get_credential_role(credential)),
         ])
 
     format_sheet(worksheet)
@@ -475,7 +486,10 @@ def clean_excel_text(value: str) -> str:
     """
     Удаляет символы, которые Excel не принимает.
     """
-    return ILLEGAL_CHARACTERS_RE.sub('', value)
+    value = ILLEGAL_CHARACTERS_RE.sub('', value)
+    if value.lstrip().startswith(('=', '+', '-', '@')):
+        return f"'{value}"
+    return value
 
 
 def format_sheet(worksheet) -> None:

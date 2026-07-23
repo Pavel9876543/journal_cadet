@@ -9,6 +9,27 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: journal_test
+          POSTGRES_USER: journal
+          POSTGRES_PASSWORD: journal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U journal -d journal_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_ENGINE: django.db.backends.postgresql
+      DB_NAME: journal_test
+      DB_USER: journal
+      DB_PASSWORD: journal
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
 
     steps:
       - name: Checkout
