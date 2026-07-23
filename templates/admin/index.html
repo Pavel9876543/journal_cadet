@@ -1,5 +1,5 @@
 {% extends "admin/base_site.html" %}
-{% load i18n log admin_dashboard %}
+{% load i18n log admin_dashboard admin_academic_year %}
 
 {% block bodyclass %}{{ block.super }} dashboard journal-admin-page{% endblock %}
 
@@ -14,6 +14,8 @@
 
 {% block content %}
     {% journal_admin_dashboard as dashboard %}
+    {% admin_academic_year_context as year_context %}
+    {% include "admin/journal/academic_year_selector.html" with admin_academic_years=year_context.admin_academic_years admin_selected_academic_year=year_context.admin_selected_academic_year admin_selected_year_is_archived=year_context.admin_selected_year_is_archived admin_academic_year_param=year_context.admin_academic_year_param %}
 
     <div class="col-12">
         <div class="journal-dashboard">
@@ -86,8 +88,8 @@
                             <div>
                                 <dt>Учебный год</dt>
                                 <dd>
-                                    {% if dashboard.active_year %}
-                                        {{ dashboard.active_year.name }}
+                                    {% if dashboard.selected_year %}
+                                        {{ dashboard.selected_year.name }}
                                     {% else %}
                                         Не выбран
                                     {% endif %}

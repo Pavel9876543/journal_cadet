@@ -1128,3 +1128,76 @@ body.change-form .inline-group table {
         text-align: left;
     }
 }
+
+.journal-year-selector {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #d9e2ec;
+    border-left: 5px solid #2f80ed;
+    border-radius: 8px;
+    display: flex;
+    gap: 20px;
+    justify-content: space-between;
+    margin: 0 0 18px;
+    padding: 14px 18px;
+}
+
+.journal-year-selector--archived {
+    background: #fff8e8;
+    border-left-color: #d97706;
+}
+
+.journal-year-selector strong,
+.journal-year-selector small {
+    display: block;
+}
+
+.journal-year-selector small {
+    color: #5f6b7a;
+    margin-top: 3px;
+}
+
+.journal-year-selector__form select {
+    min-width: 220px;
+}
+
+@media (max-width: 767.98px) {
+    .journal-year-selector {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .journal-year-selector__form select {
+        min-width: 0;
+        width: 100%;
+    }
+}
+
+/* Long location/church values must remain readable in forms and inlines. */
+.city-church-field,
+.field-city_church input,
+.field-city_church textarea,
+td.field-city_church input {
+    min-width: min(560px, 70vw) !important;
+    width: min(100%, 760px) !important;
+}
+
+.field-city_church,
+th.column-city_church,
+td.field-city_church {
+    min-width: 300px;
+}
+
+@media (min-width: 992px) {
+    .journal-student-related-modal .modal-dialog,
+    .modal:has(iframe[src*="/admin/journal/student/"]) .modal-dialog {
+        max-width: min(1280px, 94vw) !important;
+        width: min(1280px, 94vw) !important;
+    }
+
+    .journal-student-related-modal iframe,
+    .modal:has(iframe[src*="/admin/journal/student/"]) iframe {
+        min-height: 78vh !important;
+    }
+}

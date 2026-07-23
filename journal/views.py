@@ -24,6 +24,7 @@ from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
 
+from .academic_year_context import academic_year_ids_for_user
 from .account_utils import user_has_temporary_credential
 from .assignment_options import (
     active_group_queryset,
@@ -1013,8 +1014,25 @@ def _journal_view_sync(request):
     selected_subject_id = request.GET.get('subject')
     selected_year_id = request.GET.get('academic_year') or request.GET.get('year')
 
-    academic_years = AcademicYear.objects.all().order_by('-starts_on')
-    selected_academic_year = _get_selected_object(academic_years, selected_year_id) if selected_year_id else _current_academic_year()
+    all_academic_years = AcademicYear.objects.all().order_by('-starts_on', '-ends_on', '-pk')
+    if request.user.is_superuser:
+        academic_years = all_academic_years
+    else:
+        academic_years = all_academic_years.filter(
+            pk__in=academic_year_ids_for_user(request.user),
+        )
+
+    selected_academic_year = (
+        _get_selected_object(academic_years, selected_year_id)
+        if selected_year_id
+        else None
+    )
+    if selected_academic_year is None:
+        active_year = AcademicYear.get_active()
+        selected_academic_year = (
+            academic_years.filter(pk=getattr(active_year, 'pk', None)).first()
+            or academic_years.first()
+        )
 
     if request.user.is_superuser:
         return _journal_for_admin(

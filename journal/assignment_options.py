@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from django.db.models import Q, QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet
 
-from .models import Student, StudyGroup, Subject, Teacher
+from .models import AcademicYear, Student, StudyGroup, Subject, Teacher, TeacherEnrollment
 
 
 def is_default_specialty_assignment(subject: Subject | None) -> bool:
@@ -37,4 +37,20 @@ def active_student_queryset() -> QuerySet[Student]:
 
 
 def assignment_teacher_queryset(subject: Subject | None = None) -> QuerySet[Teacher]:
-    return Teacher.objects.filter(is_active=True).order_by('full_name')
+    # A historical teacher may be enrolled into the new active year by making
+    # an assignment. A teacher explicitly deactivated in the current year must
+    # stay unavailable until reactivated deliberately.
+    active_year = AcademicYear.get_active()
+    if active_year is None:
+        return Teacher.objects.filter(is_active=True).order_by('full_name')
+
+    current_membership = TeacherEnrollment.objects.filter(
+        teacher_id=OuterRef('pk'),
+        academic_year=active_year,
+    )
+    return (
+        Teacher.objects
+        .annotate(_has_current_membership=Exists(current_membership))
+        .filter(Q(is_active=True) | Q(_has_current_membership=False))
+        .order_by('full_name')
+    )

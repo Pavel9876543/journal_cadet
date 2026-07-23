@@ -16,11 +16,12 @@ from django.core.exceptions import ValidationError
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import Count, Q
-from django.test import Client, TestCase, TransactionTestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
 
+from journal.assignment_options import assignment_teacher_queryset
 from journal.account_utils import (
     build_course_application_login,
     build_display_name_from_full_name,
@@ -30,11 +31,19 @@ from journal.account_utils import (
     generate_temporary_password,
 )
 from journal.admin import (
+    AcademicYearAdmin,
+    CourseRegistrationSettingsAdmin,
     GradeAdmin,
     GradeAdminForm,
     GroupSubjectAdminForm,
+    StudentAdmin,
     StudentAdminForm,
+    StudentInline,
     StudentSubjectAdminForm,
+    StudyGroupAdmin,
+    PasswordRecoveryContactAdmin,
+    TemporaryCredentialAdmin,
+    TeacherAdmin,
     SubjectResultAdminForm,
     TeacherAdminForm,
 )
@@ -2353,6 +2362,249 @@ class CourseApplicationConcurrencyTests(JournalTestDataMixin, TransactionTestCas
             ).count(),
             1,
         )
+
+
+class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
+    def test_student_can_select_only_years_with_enrollment(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(academic_year=old_year)
+        student = self.create_student(group=old_group)
+        new_year = self.create_academic_year(name='2026/2027')
+        self.client.force_login(student.user)
+
+        response = self.client.get(reverse('journal'), {'academic_year': new_year.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected_academic_year'], old_year)
+        self.assertEqual(list(response.context['academic_years']), [old_year])
+
+    def test_later_application_adds_existing_student_year_without_duplicate_account(self):
+        first_year = self.create_academic_year(name='2025/2026')
+        first_application = CourseApplication.objects.create(**self.application_payload())
+        second_year = self.create_academic_year(name='2026/2027')
+        second_application = CourseApplication.objects.create(
+            **self.application_payload(student_phone='+7 (999) 765-43-21'),
+        )
+        self.client.force_login(first_application.user)
+
+        response = self.client.get(reverse('journal'), {'academic_year': first_year.pk})
+        available_ids = set(response.context['academic_years'].values_list('pk', flat=True))
+
+        self.assertEqual(first_application.student_id, second_application.student_id)
+        self.assertEqual(first_application.user_id, second_application.user_id)
+        self.assertEqual(available_ids, {first_year.pk, second_year.pk})
+        self.assertEqual(response.context['selected_academic_year'], first_year)
+
+    def test_teacher_sees_only_membership_years(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        teacher = self.create_teacher()
+        new_year = self.create_academic_year(name='2026/2027')
+        self.client.force_login(teacher.user)
+
+        response = self.client.get(reverse('journal'), {'academic_year': new_year.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected_academic_year'], old_year)
+        self.assertEqual(list(response.context['academic_years']), [old_year])
+
+
+class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            username='year_admin',
+            email='admin@example.com',
+            password='AdminPass123!',
+        )
+        self.factory = RequestFactory()
+
+    def admin_request(self, academic_year):
+        request = self.factory.get('/admin/', {'academic_year': academic_year.pk})
+        request.user = self.superuser
+        request.session = {}
+        return request
+
+    def test_student_queryset_contains_only_people_from_selected_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(name='Старая группа', academic_year=old_year)
+        instrument = self.create_instrument()
+        old_student = self.create_student(
+            full_name='Старый Ученик',
+            group=old_group,
+            instrument=instrument,
+            username='old_student',
+        )
+        new_year = self.create_academic_year(name='2026/2027')
+        new_group = self.create_group(name='Новая группа', academic_year=new_year)
+        new_student = self.create_student(
+            full_name='Новый Ученик',
+            group=new_group,
+            instrument=instrument,
+            username='new_student',
+        )
+
+        model_admin = StudentAdmin(Student, django_admin.site)
+        queryset = model_admin.get_queryset(self.admin_request(old_year))
+
+        self.assertIn(old_student, queryset)
+        self.assertNotIn(new_student, queryset)
+
+    def test_archived_year_blocks_mutating_academic_data_but_allows_profile_edit(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(academic_year=old_year)
+        instrument = self.create_instrument()
+        student = self.create_student(group=old_group, instrument=instrument)
+        self.create_academic_year(name='2026/2027')
+        request = self.admin_request(old_year)
+
+        group_admin = StudyGroupAdmin(StudyGroup, django_admin.site)
+        student_admin = StudentAdmin(Student, django_admin.site)
+        temporary_admin = TemporaryCredentialAdmin(TemporaryCredential, django_admin.site)
+        student_inline = StudentInline(StudyGroup, django_admin.site)
+
+        self.assertFalse(group_admin.has_add_permission(request))
+        self.assertFalse(group_admin.has_change_permission(request, old_group))
+        self.assertFalse(group_admin.has_delete_permission(request, old_group))
+        self.assertTrue(student_admin.has_change_permission(request, student))
+        self.assertFalse(student_admin.has_add_permission(request))
+        self.assertFalse(student_admin.has_delete_permission(request, student))
+        self.assertFalse(temporary_admin.has_add_permission(request))
+        self.assertFalse(temporary_admin.has_change_permission(request))
+        self.assertFalse(student_inline.has_add_permission(request, old_group))
+        self.assertFalse(student_inline.has_change_permission(request, old_group))
+        self.assertFalse(student_inline.has_delete_permission(request, old_group))
+
+    def test_archived_student_form_keeps_profile_tabs_but_replaces_year_fields(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(academic_year=old_year)
+        student = self.create_student(group=old_group)
+        self.create_academic_year(name='2026/2027')
+        model_admin = StudentAdmin(Student, django_admin.site)
+
+        fieldsets = model_admin.get_fieldsets(self.admin_request(old_year), student)
+        flattened_fields = {
+            field
+            for _title, options in fieldsets
+            for field in options['fields']
+        }
+
+        self.assertIn('full_name', flattened_fields)
+        self.assertIn('city_church', flattened_fields)
+        self.assertIn('user', flattened_fields)
+        self.assertIn('selected_year_group_display', flattened_fields)
+        self.assertIn('selected_year_active_display', flattened_fields)
+        self.assertNotIn('group', flattened_fields)
+        self.assertNotIn('is_active', flattened_fields)
+
+    def test_archived_course_application_change_page_does_not_raise_key_error(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        application = CourseApplication.objects.create(**self.application_payload())
+        self.create_academic_year(name='2026/2027')
+        self.client.force_login(self.superuser)
+
+        response = self.client.get(
+            reverse('admin:journal_courseapplication_change', args=[application.pk]),
+            {'academic_year': old_year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, application.full_name)
+
+    def test_group_student_inline_exposes_related_student_controls_and_card_link(self):
+        year = self.create_academic_year()
+        group = self.create_group(academic_year=year)
+        student = self.create_student(group=group)
+        enrollment = StudentEnrollment.objects.get(student=student, academic_year=year)
+        request = self.admin_request(year)
+        inline = StudentInline(StudyGroup, django_admin.site)
+        formset_class = inline.get_formset(request, group)
+        form = formset_class(instance=group).forms[0]
+
+        self.assertIn('student_card_link', inline.fields)
+        self.assertTrue(form.fields['student'].widget.can_add_related)
+        self.assertTrue(form.fields['student'].widget.can_change_related)
+        self.assertTrue(form.fields['student'].widget.can_delete_related)
+        self.assertIn(student.full_name, str(inline.student_card_link(enrollment)))
+
+    def test_active_group_can_enroll_student_from_previous_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(academic_year=old_year)
+        student = self.create_student(group=old_group)
+        new_year = self.create_academic_year(name='2026/2027')
+        new_group = self.create_group(name='Новая группа', academic_year=new_year)
+        student.refresh_from_db()
+        self.assertIsNone(student.group_id)
+        self.assertFalse(student.is_active)
+
+        request = self.admin_request(new_year)
+        inline = StudentInline(StudyGroup, django_admin.site)
+        formset = inline.get_formset(request, new_group)(instance=new_group)
+        enrollment = formset._move_student_enrollment(student, commit=True)
+
+        student.refresh_from_db()
+        self.assertEqual(enrollment.academic_year, new_year)
+        self.assertEqual(enrollment.group, new_group)
+        self.assertTrue(enrollment.is_active)
+        self.assertEqual(student.group, new_group)
+        self.assertTrue(student.is_active)
+
+    def test_old_teacher_can_be_reused_in_active_year_assignment(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        teacher = self.create_teacher()
+        new_year = self.create_academic_year(name='2026/2027')
+        new_group = self.create_group(academic_year=new_year)
+        subject = self.create_subject()
+        teacher.refresh_from_db()
+        self.assertFalse(teacher.is_active)
+        self.assertIn(teacher, assignment_teacher_queryset())
+
+        GroupSubject.objects.create(group=new_group, subject=subject, teacher=teacher)
+
+        teacher.refresh_from_db()
+        self.assertTrue(teacher.is_active)
+        self.assertTrue(
+            TeacherEnrollment.objects.filter(
+                teacher=teacher,
+                academic_year=new_year,
+                is_active=True,
+            ).exists(),
+        )
+
+    def test_global_registration_and_recovery_settings_remain_editable_in_archive_mode(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        self.create_academic_year(name='2026/2027')
+        request = self.admin_request(old_year)
+        registration_admin = CourseRegistrationSettingsAdmin(
+            CourseRegistrationSettings,
+            django_admin.site,
+        )
+        recovery_admin = PasswordRecoveryContactAdmin(
+            PasswordRecoveryContact,
+            django_admin.site,
+        )
+
+        self.assertTrue(registration_admin.has_change_permission(request))
+        self.assertTrue(recovery_admin.has_add_permission(request))
+
+    def test_inactive_academic_year_is_read_only_even_when_active_year_is_selected(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        active_year = self.create_academic_year(name='2026/2027')
+        request = self.admin_request(active_year)
+        year_admin = AcademicYearAdmin(AcademicYear, django_admin.site)
+
+        self.assertFalse(year_admin.has_change_permission(request, old_year))
+        self.assertFalse(year_admin.has_delete_permission(request, old_year))
+
+    def test_city_church_fields_are_wide_in_admin_and_registration_forms(self):
+        year = self.create_academic_year()
+        group = self.create_group(academic_year=year)
+        student_form = StudentAdminForm()
+        application_form = CourseApplicationPublicForm()
+        inline = StudentInline(StudyGroup, django_admin.site)
+        inline_form = inline.get_formset(self.admin_request(year), group)(instance=group).empty_form
+
+        self.assertIn('city-church-field', student_form.fields['city_church'].widget.attrs.get('class', ''))
+        self.assertEqual(application_form.fields['city_church'].widget.attrs.get('size'), '80')
+        self.assertEqual(inline_form.fields['city_church'].widget.attrs.get('size'), '80')
 
 
 class AdminDashboardTests(JournalTestDataMixin, TestCase):

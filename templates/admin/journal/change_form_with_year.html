@@ -1,16 +1,8 @@
-{% extends "admin/change_list.html" %}
+{% extends "admin/change_form.html" %}
 {% load admin_academic_year %}
 
 {% block content %}
     {% admin_academic_year_context as year_context %}
     {% include "admin/journal/academic_year_selector.html" with admin_academic_years=year_context.admin_academic_years admin_selected_academic_year=year_context.admin_selected_academic_year admin_selected_year_is_archived=year_context.admin_selected_year_is_archived admin_academic_year_param=year_context.admin_academic_year_param %}
-    {% if changelist_description %}
-        <div class="col-12">
-            <section class="journal-changelist-description">
-                <i class="fas fa-info-circle" aria-hidden="true"></i>
-                <p>{{ changelist_description }}</p>
-            </section>
-        </div>
-    {% endif %}
     {{ block.super }}
 {% endblock %}

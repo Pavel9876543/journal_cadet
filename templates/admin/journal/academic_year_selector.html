@@ -1,0 +1,28 @@
+{% if admin_academic_years %}
+<section class="journal-year-selector{% if admin_selected_year_is_archived %} journal-year-selector--archived{% endif %}">
+    <div>
+        <strong>Учебный год</strong>
+        <small>
+            {% if admin_selected_year_is_archived %}
+                Архивный режим: учебные данные доступны только для просмотра.
+            {% else %}
+                Активный учебный год: учебные данные можно редактировать.
+            {% endif %}
+        </small>
+    </div>
+    <form method="get" class="journal-year-selector__form">
+        {# A year switch must clear stale group/year/list filters. Keep only search and ordering. #}
+        {% if request.GET.q %}<input type="hidden" name="q" value="{{ request.GET.q }}">{% endif %}
+        {% if request.GET.o %}<input type="hidden" name="o" value="{{ request.GET.o }}">{% endif %}
+        <label class="sr-only" for="journal-admin-academic-year">Выберите учебный год</label>
+        <select id="journal-admin-academic-year" name="{{ admin_academic_year_param }}" onchange="this.form.submit()">
+            {% for academic_year in admin_academic_years %}
+                <option value="{{ academic_year.pk }}"{% if admin_selected_academic_year.pk == academic_year.pk %} selected{% endif %}>
+                    {{ academic_year.name }}{% if academic_year.is_active %} — активный{% endif %}
+                </option>
+            {% endfor %}
+        </select>
+        <noscript><button type="submit">Показать</button></noscript>
+    </form>
+</section>
+{% endif %}

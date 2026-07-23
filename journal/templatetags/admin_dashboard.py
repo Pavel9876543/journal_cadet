@@ -7,6 +7,7 @@ from django import template
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
+from journal.academic_year_context import get_selected_admin_academic_year
 from journal.models import (
     AcademicYear,
     CourseApplication,
@@ -84,22 +85,23 @@ def journal_admin_dashboard(context):
     request = context.get('request')
     user = getattr(request, 'user', None) or context.get('user')
     today = timezone.localdate()
-    active_year = AcademicYear.get_for_date(today) or AcademicYear.get_active()
+    selected_year = get_selected_admin_academic_year(request)
+    active_year = AcademicYear.get_active()
 
     journal_home_url = _reverse('journal')
+    if selected_year and journal_home_url != '#':
+        journal_home_url = f'{journal_home_url}?academic_year={selected_year.pk}'
+    archive_mode = bool(selected_year and not selected_year.is_active)
     active_groups_params = {'is_active__exact': '1'}
-    active_students_params = {'is_active__exact': '1'}
-    active_teachers_params = {'is_active__exact': '1'}
+    active_students_params = {'selected_year_student_active': '1'}
+    active_teachers_params = {'selected_year_teacher_active': '1'}
     active_subjects_params = {'is_active__exact': '1'}
 
-    if active_year:
-        active_groups_params['academic_year__id__exact'] = active_year.pk
-        active_students_params['group__academic_year__id__exact'] = active_year.pk
 
     stats = [
         _stat(
             'Учебный год',
-            active_year.name if active_year else 'Не выбран',
+            selected_year.name if selected_year else 'Не выбран',
             _admin_url('journal', 'academicyear'),
             'fas fa-calendar-alt',
             user,
@@ -107,7 +109,7 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Активные группы',
-            StudyGroup.objects.filter(is_active=True).count(),
+            StudyGroup.objects.filter(academic_year=selected_year, is_active=True).count() if selected_year else 0,
             _admin_url('journal', 'studygroup', params=active_groups_params),
             'fas fa-layer-group',
             user,
@@ -115,7 +117,7 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Активные ученики',
-            Student.objects.filter(is_active=True).count(),
+            Student.objects.filter(enrollments__academic_year=selected_year, enrollments__is_active=True).distinct().count() if selected_year else 0,
             _admin_url('journal', 'student', params=active_students_params),
             'fas fa-user-graduate',
             user,
@@ -123,7 +125,7 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Активные преподаватели',
-            Teacher.objects.filter(is_active=True).count(),
+            Teacher.objects.filter(academic_year_memberships__academic_year=selected_year, academic_year_memberships__is_active=True).distinct().count() if selected_year else 0,
             _admin_url('journal', 'teacher', params=active_teachers_params),
             'fas fa-chalkboard-teacher',
             user,
@@ -139,7 +141,7 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Оценки за 30 дней',
-            Grade.objects.filter(date__gte=today - timedelta(days=30)).count(),
+            Grade.objects.filter(academic_year=selected_year, date__gte=today - timedelta(days=30)).count() if selected_year else 0,
             _admin_url('journal', 'grade'),
             'fas fa-pen',
             user,
@@ -147,7 +149,7 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Заявки на курсы',
-            CourseApplication.objects.count(),
+            CourseApplication.objects.filter(academic_year=selected_year).count() if selected_year else 0,
             _admin_url('journal', 'courseapplication'),
             'fas fa-file-signature',
             user,
@@ -180,7 +182,7 @@ def journal_admin_dashboard(context):
             user,
             None,
         ),
-        _item(
+        None if archive_mode else _item(
             'Добавить ученика',
             _admin_url('journal', 'student', 'add'),
             'fas fa-user-plus',
@@ -188,7 +190,7 @@ def journal_admin_dashboard(context):
             user,
             'journal.add_student',
         ),
-        _item(
+        None if archive_mode else _item(
             'Добавить группу',
             _admin_url('journal', 'studygroup', 'add'),
             'fas fa-plus-square',
@@ -196,7 +198,7 @@ def journal_admin_dashboard(context):
             user,
             'journal.add_studygroup',
         ),
-        _item(
+        None if archive_mode else _item(
             'Новая заявка',
             _admin_url('journal', 'courseapplication', 'add'),
             'fas fa-plus-circle',
@@ -315,7 +317,7 @@ def journal_admin_dashboard(context):
                     'Настройки регистрации',
                     _admin_url('journal', 'courseregistrationsettings'),
                     'fas fa-cog',
-                    'Возраст, даты курсов и ссылка на Telegram-группу.',
+                    'Минимальный возраст и ссылка на Telegram-группу.',
                     user,
                     'journal.view_courseregistrationsettings',
                 ),
@@ -425,6 +427,7 @@ def journal_admin_dashboard(context):
 
     return {
         'active_year': active_year,
+        'selected_year': selected_year,
         'today': today,
         'stats': [stat for stat in stats if stat is not None],
         'quick_actions': [action for action in quick_actions if action is not None],
