@@ -1,4 +1,5 @@
 from datetime import date
+from hashlib import blake2b
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -197,9 +198,8 @@ class AcademicYear(models.Model):
             latest_year.is_active = True
 
             if active_changed:
-                sync_students_with_active_academic_year(latest_year.pk)
+                sync_people_with_active_academic_year(latest_year.pk)
 
-            CourseRegistrationSettings.sync_active_year(latest_year)
             return latest_year
 
     @classmethod
@@ -462,8 +462,42 @@ class Teacher(models.Model):
             self.comments = self.comments.strip()
 
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
         self.full_clean()
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            self.sync_active_year_membership(create_if_missing=is_new or self.is_active)
+
+    def sync_active_year_membership(self, *, create_if_missing: bool = False):
+        academic_year = AcademicYear.get_active()
+        if academic_year is None:
+            return None
+
+        membership = self.academic_year_memberships.filter(academic_year=academic_year).first()
+        if membership is None and not create_if_missing:
+            return None
+        if membership is None:
+            membership = TeacherEnrollment(
+                teacher=self,
+                academic_year=academic_year,
+                is_active=self.is_active,
+            )
+        else:
+            membership.is_active = self.is_active
+        membership.save()
+        return membership
+
+    def membership_for_year(self, academic_year=None):
+        academic_year = academic_year or AcademicYear.get_active()
+        if academic_year is None or not self.pk:
+            return None
+        prefetched = getattr(self, 'journal_year_memberships', None)
+        if prefetched is not None:
+            return next(
+                (item for item in prefetched if item.academic_year_id == academic_year.pk),
+                None,
+            )
+        return self.academic_year_memberships.filter(academic_year=academic_year).first()
 
     @property
     def group_subjects_display(self) -> str:
@@ -482,6 +516,77 @@ class Teacher(models.Model):
         from .registration_utils import calculate_age
 
         return calculate_age(self.birth_date)
+
+
+class TeacherEnrollment(models.Model):
+    teacher = models.ForeignKey(
+        Teacher,
+        on_delete=models.PROTECT,
+        related_name='academic_year_memberships',
+        verbose_name='Преподаватель',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='teacher_enrollments',
+        verbose_name='Учебный год',
+    )
+    is_active = models.BooleanField('Активен в учебном году', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Участие преподавателя в учебном году'
+        verbose_name_plural = 'Участие преподавателей в учебных годах'
+        ordering = ['-academic_year__starts_on', 'teacher__full_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['teacher', 'academic_year'],
+                name='unique_teacher_academic_year',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['academic_year', 'teacher'], name='teacher_year_membership_idx'),
+            models.Index(fields=['is_active'], name='teacher_year_active_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.teacher} — {self.academic_year}'
+
+    def clean(self):
+        super().clean()
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        validate_active_academic_year(self.academic_year)
+        teacher_id = self.teacher_id
+        result = super().delete(*args, **kwargs)
+        if not TeacherEnrollment.objects.filter(
+            teacher_id=teacher_id,
+            academic_year__is_active=True,
+        ).exists():
+            Teacher.objects.filter(pk=teacher_id).update(is_active=False)
+        return result
+
+
+def ensure_teacher_academic_year_membership(teacher_id: int | None, academic_year_id: int | None) -> None:
+    if not teacher_id or not academic_year_id:
+        return
+    membership, created = TeacherEnrollment.objects.get_or_create(
+        teacher_id=teacher_id,
+        academic_year_id=academic_year_id,
+        defaults={'is_active': True},
+    )
+    if not created and not membership.is_active:
+        membership.is_active = True
+        membership.save(update_fields=['is_active', 'updated_at'])
+    if AcademicYear.objects.filter(pk=academic_year_id, is_active=True).exists():
+        Teacher.objects.filter(pk=teacher_id).update(is_active=True)
 
 
 class TeacherSubject(models.Model):
@@ -602,14 +707,32 @@ class Student(models.Model):
             self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
         if self.comments:
             self.comments = self.comments.strip()
+        if self.full_name and self.birth_date:
+            identity_name = normalize_student_identity_name(self.full_name)
+            candidates = Student.objects.filter(birth_date=self.birth_date)
+            if self.pk:
+                candidates = candidates.exclude(pk=self.pk)
+            if any(
+                normalize_student_identity_name(candidate_name) == identity_name
+                for candidate_name in candidates.values_list('full_name', flat=True)
+            ):
+                raise ValidationError({
+                    'full_name': (
+                        'Ученик с таким ФИО и датой рождения уже существует. '
+                        'Используйте существующую карточку ученика.'
+                    ),
+                })
         if self.group_id:
             validate_active_academic_year(self.group.academic_year, 'group')
 
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
         self.full_clean()
         with transaction.atomic():
             super().save(*args, **kwargs)
-            self.sync_active_enrollment()
+            self.sync_active_enrollment(
+                create_if_missing=is_new or self.group_id is not None or self.is_active,
+            )
 
     def delete(self, *args, **kwargs):
         if self.enrollments.exists():
@@ -621,20 +744,23 @@ class Student(models.Model):
             validate_active_academic_year(self.group.academic_year, 'group')
         return super().delete(*args, **kwargs)
 
-    def sync_active_enrollment(self):
+    def sync_active_enrollment(self, *, create_if_missing: bool = False):
         academic_year = self.group.academic_year if self.group_id else AcademicYear.get_active()
         if academic_year is None or not academic_year_is_active(academic_year):
             return None
 
+        enrollment = self.enrollments.filter(academic_year=academic_year).first()
+        if enrollment is None and not create_if_missing:
+            return None
+
         snapshot_values = StudentEnrollment.snapshot_values_for_student(self)
-        enrollment, _created = StudentEnrollment.objects.get_or_create(
-            student=self,
-            academic_year=academic_year,
-            defaults={
-                'group': self.group,
+        if enrollment is None:
+            enrollment = StudentEnrollment(
+                student=self,
+                academic_year=academic_year,
+                group=self.group,
                 **snapshot_values,
-            },
-        )
+            )
         enrollment.group = self.group
         for field_name, value in snapshot_values.items():
             setattr(enrollment, field_name, value)
@@ -918,6 +1044,10 @@ class GroupSubject(models.Model):
             super().save(*args, **kwargs)
 
             if self.is_active:
+                ensure_teacher_academic_year_membership(
+                    self.teacher_id,
+                    self.group.academic_year_id,
+                )
                 ensure_teacher_subject(self.teacher_id, self.subject_id)
                 if (
                     previous
@@ -1072,6 +1202,10 @@ class StudentSubject(models.Model):
             super().save(*args, **kwargs)
 
             if self.is_active:
+                ensure_teacher_academic_year_membership(
+                    self.teacher_id,
+                    self.academic_year_id,
+                )
                 ensure_teacher_subject(self.teacher_id, self.subject_id)
                 if (
                     previous
@@ -1563,15 +1697,7 @@ class CourseRegistrationSettings(models.Model):
     minimum_registration_age = models.PositiveSmallIntegerField(
         'Минимальный возраст для регистрации',
         default=14,
-        help_text='Возраст считается на дату начала курсов.',
-    )
-    course_starts_on = models.DateField(
-        'Дата начала курсов',
-        default=default_course_starts_on,
-    )
-    course_ends_on = models.DateField(
-        'Дата окончания курсов',
-        default=default_course_ends_on,
+        help_text='Возраст считается на дату начала активного учебного года.',
     )
     updated_at = models.DateTimeField('Дата изменения', auto_now=True)
 
@@ -1585,34 +1711,7 @@ class CourseRegistrationSettings(models.Model):
     @classmethod
     def load(cls):
         settings_obj, _created = cls.objects.get_or_create(pk=1)
-        active_year = AcademicYear.get_active()
-        if active_year and (
-            settings_obj.course_starts_on != active_year.starts_on
-            or settings_obj.course_ends_on != active_year.ends_on
-        ):
-            cls.objects.filter(pk=settings_obj.pk).update(
-                course_starts_on=active_year.starts_on,
-                course_ends_on=active_year.ends_on,
-            )
-            settings_obj.course_starts_on = active_year.starts_on
-            settings_obj.course_ends_on = active_year.ends_on
         return settings_obj
-
-    @classmethod
-    def sync_active_year(cls, academic_year):
-        defaults = {
-            'course_starts_on': academic_year.starts_on,
-            'course_ends_on': academic_year.ends_on,
-        }
-        settings_obj = cls.objects.filter(pk=1).first()
-        if settings_obj is None:
-            defaults.update({
-                'telegram_group_url': '',
-                'minimum_registration_age': 14,
-            })
-            cls.objects.create(pk=1, **defaults)
-        else:
-            cls.objects.filter(pk=1).update(**defaults)
 
     def clean(self) -> None:
         super().clean()
@@ -1626,17 +1725,10 @@ class CourseRegistrationSettings(models.Model):
         elif self.minimum_registration_age > 120:
             errors['minimum_registration_age'] = 'Минимальный возраст не должен быть больше 120 лет.'
 
-        if self.course_starts_on and self.course_ends_on and self.course_starts_on >= self.course_ends_on:
-            errors['course_ends_on'] = 'Дата окончания курсов должна быть позже даты начала.'
-
         if errors:
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
-        active_year = AcademicYear.get_active()
-        if active_year is not None:
-            self.course_starts_on = active_year.starts_on
-            self.course_ends_on = active_year.ends_on
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -1746,6 +1838,25 @@ class CourseRegistrationRateLimit(models.Model):
         return self.cache_key
 
 
+def normalize_student_identity_name(value: str) -> str:
+    return ' '.join((value or '').split()).casefold().replace('ё', 'е')
+
+
+def student_identity_lock_key(full_name: str, birth_date: date) -> int:
+    identity = f'{normalize_student_identity_name(full_name)}|{birth_date.isoformat()}'.encode('utf-8')
+    return int.from_bytes(blake2b(identity, digest_size=8).digest(), 'big', signed=True)
+
+
+def lock_student_identity(full_name: str, birth_date: date) -> None:
+    if connection.vendor != 'postgresql':
+        return
+    with connection.cursor() as cursor:
+        cursor.execute(
+            'SELECT pg_advisory_xact_lock(%s)',
+            [student_identity_lock_key(full_name, birth_date)],
+        )
+
+
 class CourseApplication(models.Model):
     STUDENT_COURSE_GROUP_NAME = 'Ученики курсов'
     DEFAULT_INSTRUMENT_NAME = 'Не указан'
@@ -1812,21 +1923,21 @@ class CourseApplication(models.Model):
         help_text='Учебный год, в рамках которого подана заявка.',
     )
 
-    student = models.OneToOneField(
+    student = models.ForeignKey(
         Student,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='course_application',
+        related_name='course_applications',
         verbose_name='Ученик в журнале',
         editable=False,
     )
-    user = models.OneToOneField(
+    user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='course_application',
+        related_name='course_applications',
         verbose_name='Пользователь ученика',
         editable=False,
     )
@@ -1907,12 +2018,6 @@ class CourseApplication(models.Model):
 
         if self.academic_year_id is None:
             self.academic_year = AcademicYear.get_active()
-        if self.academic_year_id is None:
-            settings_obj = CourseRegistrationSettings.load()
-            self.academic_year, _created = AcademicYear.get_or_create_for_dates(
-                settings_obj.course_starts_on,
-                settings_obj.course_ends_on,
-            )
 
         if self.academic_year_id is None:
             raise ValidationError('Сначала создайте активный учебный год.')
@@ -1967,8 +2072,11 @@ class CourseApplication(models.Model):
             return
 
         UserModel = get_user_model()
-        existing_user = self._get_existing_user(UserModel)
+        lock_student_identity(self.full_name, self.birth_date)
         existing_student = self._get_existing_student()
+        existing_user = self._get_existing_user(UserModel)
+        if existing_user is None and existing_student is not None and existing_student.user_id:
+            existing_user = existing_student.user
 
         created_user = None
         created_student = None
@@ -2005,17 +2113,7 @@ class CourseApplication(models.Model):
 
         course_year = self.academic_year or AcademicYear.get_active()
         if course_year is None:
-            settings_obj = CourseRegistrationSettings.load()
-            course_year, _ = AcademicYear.objects.get_or_create(
-                name=academic_year_name_for_dates(settings_obj.course_starts_on, settings_obj.course_ends_on),
-                defaults={
-                    'starts_on': settings_obj.course_starts_on,
-                    'ends_on': settings_obj.course_ends_on,
-                    'is_active': True,
-                },
-            )
-            AcademicYear.activate_latest()
-            course_year.refresh_from_db(fields=['is_active'])
+            raise ValidationError('Сначала создайте активный учебный год.')
         validate_active_academic_year(course_year)
 
         group, _ = StudyGroup.objects.get_or_create(
@@ -2028,6 +2126,14 @@ class CourseApplication(models.Model):
             group.save(update_fields=['is_active'])
         instrument_name = self.instrument.strip() or self.DEFAULT_INSTRUMENT_NAME
         instrument, _ = Instrument.objects.get_or_create(name=instrument_name)
+
+        enrollment_existed = (
+            existing_student is not None
+            and StudentEnrollment.objects.filter(
+                student=existing_student,
+                academic_year=course_year,
+            ).exists()
+        )
 
         if existing_student is None:
             existing_student = Student.objects.create(
@@ -2077,7 +2183,10 @@ class CourseApplication(models.Model):
             if temporary_credential.login != login:
                 temporary_credential.login = login
                 updates.append('login')
-            if temporary_credential.course_application_id != self.pk:
+            if (
+                temporary_password is not None
+                and temporary_credential.course_application_id != self.pk
+            ):
                 temporary_credential.course_application = self
                 updates.append('course_application')
             if temporary_credential.student_phone != self.student_phone:
@@ -2091,7 +2200,11 @@ class CourseApplication(models.Model):
             user=existing_user,
             generated_login=login,
             academic_year=course_year,
-            journal_created_at=timezone.now() if created_user or created_student else self.journal_created_at,
+            journal_created_at=(
+                timezone.now()
+                if created_user or created_student or not enrollment_existed
+                else self.journal_created_at
+            ),
             journal_removed_at=None,
         )
 
@@ -2099,7 +2212,7 @@ class CourseApplication(models.Model):
         self.user = existing_user
         self.generated_login = login
         self.academic_year = course_year
-        if created_user or created_student:
+        if created_user or created_student or not enrollment_existed:
             self.journal_created_at = timezone.now()
         self.journal_removed_at = None
 
@@ -2115,12 +2228,7 @@ class CourseApplication(models.Model):
         student = self._get_existing_student()
         user = self._get_existing_user(get_user_model())
 
-        credential_filter = Q(course_application_id=self.pk) | Q(login=login)
-        if self.student_phone and self.academic_year_id:
-            credential_filter |= Q(
-                student_phone=self.student_phone,
-                course_application__academic_year_id=self.academic_year_id,
-            )
+        credential_filter = Q(course_application_id=self.pk)
         credential_qs = TemporaryCredential.objects.filter(credential_filter)
         credential_qs.delete()
 
@@ -2185,6 +2293,19 @@ class CourseApplication(models.Model):
             if student is not None:
                 return student
 
+        if self.birth_date and self.full_name:
+            candidates = (
+                Student.objects
+                .select_for_update()
+                .filter(birth_date=self.birth_date)
+                .select_related('user')
+                .order_by('pk')
+            )
+            identity_name = normalize_student_identity_name(self.full_name)
+            for student in candidates:
+                if normalize_student_identity_name(student.full_name) == identity_name:
+                    return student
+
         return None
 
     def _get_existing_temporary_credential(self, login: str):
@@ -2197,17 +2318,11 @@ class CourseApplication(models.Model):
             if credential is not None:
                 return credential
 
-        if self.student_phone and self.academic_year_id:
-            return TemporaryCredential.objects.filter(
-                student_phone=self.student_phone,
-                course_application__academic_year_id=self.academic_year_id,
-            ).first()
-
         return None
 
 
-def sync_students_with_active_academic_year(academic_year_id: int) -> None:
-    """Restore current student state from enrollments of the active year."""
+def sync_people_with_active_academic_year(academic_year_id: int) -> None:
+    """Restore current student and teacher state for the active academic year."""
     enrolled_student_ids = StudentEnrollment.objects.filter(
         academic_year_id=academic_year_id,
     ).values('student_id')
@@ -2224,9 +2339,6 @@ def sync_students_with_active_academic_year(academic_year_id: int) -> None:
         .filter(academic_year_id=academic_year_id)
         .only('student_id', 'group_id', 'is_active')
     )
-    if not enrollments:
-        return
-
     students_by_id = {
         student.pk: student
         for student in Student.objects.filter(
@@ -2248,6 +2360,13 @@ def sync_students_with_active_academic_year(academic_year_id: int) -> None:
             ('group', 'is_active'),
             batch_size=500,
         )
+
+    active_teacher_ids = TeacherEnrollment.objects.filter(
+        academic_year_id=academic_year_id,
+        is_active=True,
+    ).values('teacher_id')
+    Teacher.objects.exclude(pk__in=active_teacher_ids).update(is_active=False)
+    Teacher.objects.filter(pk__in=active_teacher_ids).update(is_active=True)
 
 
 def finalize_academic_year_snapshots(academic_year_id: int) -> None:

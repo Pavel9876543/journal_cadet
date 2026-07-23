@@ -85,8 +85,6 @@ class Command(BaseCommand):
             defaults={
                 'telegram_group_url': 'https://t.me/cadet_journal_demo',
                 'minimum_registration_age': 14,
-                'course_starts_on': date(2025, 9, 1),
-                'course_ends_on': date(2026, 8, 31),
             },
         )
         for contact_data in (
@@ -873,11 +871,6 @@ class Command(BaseCommand):
             registration_settings = CourseRegistrationSettings.objects.filter(pk=1).first()
             if registration_settings is None:
                 errors.append('Не найдены настройки регистрации.')
-            elif (
-                registration_settings.course_starts_on != active_year.starts_on
-                or registration_settings.course_ends_on != active_year.ends_on
-            ):
-                errors.append('Даты регистрации не совпадают с активным учебным годом.')
 
             if StudyGroup.objects.exclude(academic_year=active_year).exists():
                 errors.append('В тестовых данных есть группы вне активного учебного года.')

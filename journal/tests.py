@@ -76,6 +76,7 @@ from journal.models import (
     Subject,
     SubjectResult,
     Teacher,
+    TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
 )
@@ -315,6 +316,69 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
             academic_year=data['year'],
         )
         self.assertEqual(old_enrollment.full_name, old_name)
+
+    def test_new_year_resets_group_for_every_student_from_previous_year(self):
+        year = self.create_academic_year()
+        first_group = self.create_group(name='Первая группа', academic_year=year)
+        second_group = self.create_group(name='Вторая группа', academic_year=year)
+        instrument = self.create_instrument()
+        first = self.create_student(
+            full_name='Первый Ученик',
+            group=first_group,
+            instrument=instrument,
+            username='first_student',
+        )
+        second = self.create_student(
+            full_name='Второй Ученик',
+            group=second_group,
+            instrument=instrument,
+            username='second_student',
+        )
+
+        self.create_academic_year(name='2026/2027')
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        self.assertIsNone(first.group_id)
+        self.assertIsNone(second.group_id)
+        self.assertFalse(first.is_active)
+        self.assertFalse(second.is_active)
+
+    def test_teacher_membership_is_scoped_to_academic_year(self):
+        old_year = self.create_academic_year()
+        teacher = self.create_teacher()
+
+        self.assertTrue(
+            TeacherEnrollment.objects.filter(
+                teacher=teacher,
+                academic_year=old_year,
+                is_active=True,
+            ).exists(),
+        )
+
+        new_year = self.create_academic_year(name='2026/2027')
+        teacher.refresh_from_db()
+        self.assertFalse(teacher.is_active)
+        self.assertFalse(
+            TeacherEnrollment.objects.filter(
+                teacher=teacher,
+                academic_year=new_year,
+            ).exists(),
+        )
+
+        new_group = self.create_group(name='Новая группа', academic_year=new_year)
+        subject = self.create_subject()
+        GroupSubject.objects.create(group=new_group, subject=subject, teacher=teacher)
+
+        teacher.refresh_from_db()
+        self.assertTrue(teacher.is_active)
+        self.assertTrue(
+            TeacherEnrollment.objects.filter(
+                teacher=teacher,
+                academic_year=new_year,
+                is_active=True,
+            ).exists(),
+        )
 
     def test_new_year_finalizes_current_names_before_archiving(self):
         data = self.create_base_journal()
@@ -964,6 +1028,63 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credential.temporary_password, original_temporary_password)
         self.assertTrue(user.check_password(original_temporary_password))
 
+    def test_same_person_in_later_year_reuses_student_and_user(self):
+        first_year = self.create_academic_year(name='2025/2026')
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            first_application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
+
+        original_student_id = first_application.student_id
+        original_user_id = first_application.user_id
+        original_password_hash = first_application.user.password
+
+        second_year = self.create_academic_year(name='2026/2027')
+        second_application = CourseApplication.objects.create(
+            **self.application_payload(
+                student_phone='+7 (999) 765-43-21',
+                city_church='Новый город / Новая церковь',
+            ),
+        )
+
+        second_application.refresh_from_db()
+        second_application.user.refresh_from_db()
+        self.assertEqual(second_application.student_id, original_student_id)
+        self.assertEqual(second_application.user_id, original_user_id)
+        self.assertEqual(second_application.user.password, original_password_hash)
+        self.assertEqual(Student.objects.count(), 1)
+        self.assertEqual(User.objects.filter(pk=original_user_id).count(), 1)
+        self.assertEqual(TemporaryCredential.objects.count(), 1)
+        self.assertTrue(
+            StudentEnrollment.objects.filter(
+                student_id=original_student_id,
+                academic_year=first_year,
+            ).exists(),
+        )
+        self.assertTrue(
+            StudentEnrollment.objects.filter(
+                student_id=original_student_id,
+                academic_year=second_year,
+            ).exists(),
+        )
+
+    def test_different_birth_date_creates_different_student_even_with_same_name(self):
+        self.create_academic_year(name='2025/2026')
+        first_application = CourseApplication.objects.create(**self.application_payload())
+        self.create_academic_year(name='2026/2027')
+        second_application = CourseApplication.objects.create(
+            **self.application_payload(
+                birth_date=date(2001, 1, 1),
+                student_phone='+7 (999) 765-43-21',
+            ),
+        )
+
+        self.assertNotEqual(first_application.student_id, second_application.student_id)
+        self.assertEqual(Student.objects.count(), 2)
+
     def test_confirmed_applications_add_suffix_for_duplicate_login(self):
         with patch(
             'journal.account_utils.generate_temporary_password',
@@ -1208,12 +1329,11 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIn('birth_date', form.errors)
 
     def test_public_course_application_form_uses_registration_settings_age_and_course_start(self):
+        self.create_academic_year(name='2025/2026')
         registration_settings = CourseRegistrationSettings.objects.create(
             pk=1,
             telegram_group_url='https://t.me/test_group',
             minimum_registration_age=15,
-            course_starts_on=date(2025, 9, 1),
-            course_ends_on=date(2026, 8, 31),
         )
 
         too_young_form = CourseApplicationPublicForm(
@@ -1259,8 +1379,9 @@ class FormTests(JournalTestDataMixin, TestCase):
         settings_obj = form.save()
         self.assertEqual(settings_obj.telegram_group_url, 'https://t.me/test_group')
         self.assertEqual(settings_obj.minimum_registration_age, 16)
-        self.assertEqual(settings_obj.course_starts_on, academic_year.starts_on)
-        self.assertEqual(settings_obj.course_ends_on, academic_year.ends_on)
+        self.assertFalse(hasattr(settings_obj, 'course_starts_on'))
+        self.assertFalse(hasattr(settings_obj, 'course_ends_on'))
+        self.assertEqual(AcademicYear.get_active(), academic_year)
 
     def test_course_registration_settings_form_does_not_accept_course_dates(self):
         form = CourseRegistrationSettingsForm(
@@ -3220,12 +3341,11 @@ class PasswordRecoveryViewTests(TestCase):
 
 class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
     def setUp(self):
+        self.create_academic_year(name='2025/2026')
         CourseRegistrationSettings.objects.create(
             pk=1,
             telegram_group_url='https://t.me/test_group',
             minimum_registration_age=14,
-            course_starts_on=date(2025, 9, 1),
-            course_ends_on=date(2026, 8, 31),
         )
 
     def test_registration_page_creates_confirmed_application_and_shows_credentials(
@@ -4394,8 +4514,8 @@ class SeedDataCommandTests(TestCase):
             'https://t.me/cadet_journal_demo',
         )
         self.assertEqual(registration_settings.minimum_registration_age, 14)
-        self.assertEqual(registration_settings.course_starts_on, date(2025, 9, 1))
-        self.assertEqual(registration_settings.course_ends_on, date(2026, 8, 31))
+        self.assertFalse(hasattr(registration_settings, 'course_starts_on'))
+        self.assertFalse(hasattr(registration_settings, 'course_ends_on'))
 
         self.assertFalse(Teacher.objects.filter(birth_date__isnull=True).exists())
         for field_name in ('phone', 'email', 'comments'):

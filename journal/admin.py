@@ -50,6 +50,7 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
+    TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
     object_is_in_archived_academic_year,
@@ -1891,11 +1892,18 @@ class StudentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     def course_application_link(self, obj):
         if not obj:
             return '—'
-        try:
-            application = obj.course_application
-        except CourseApplication.DoesNotExist:
-            application = None
-        return admin_change_link(application)
+        application = (
+            obj.course_applications
+            .select_related('academic_year')
+            .order_by('-academic_year__starts_on', '-registration_date', '-pk')
+            .first()
+        )
+        label = (
+            f'{application.academic_year}: {application.full_name}'
+            if application is not None and application.academic_year_id
+            else None
+        )
+        return admin_change_link(application, label=label)
 
     @admin.display(description='Преподаватель по специальности')
     def specialty_teacher_display(self, obj):
@@ -2547,33 +2555,41 @@ class TemporaryCredentialAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
 @admin.register(CourseRegistrationSettings)
 class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
-        'Единая таблица настроек публичной регистрации: возраст, даты начала и окончания курсов, '
-        'ссылка на Telegram-группу.'
+        'Единые настройки публичной регистрации: минимальный возраст и ссылка на Telegram-группу. '
+        'Даты регистрации всегда берутся из активного учебного года.'
     )
     form = CourseRegistrationSettingsForm
     list_display = (
         'telegram_group_url',
         'minimum_registration_age',
-        'course_starts_on',
-        'course_ends_on',
+        'active_academic_year_display',
         'updated_at',
     )
-    readonly_fields = ('course_starts_on', 'course_ends_on', 'updated_at')
+    readonly_fields = ('active_academic_year_display', 'updated_at')
     fieldsets = (
         ('Регистрация на курсы', {
             'fields': (
                 'telegram_group_url',
                 'minimum_registration_age',
-                'course_starts_on',
-                'course_ends_on',
+                'active_academic_year_display',
                 'updated_at',
             ),
             'description': (
-                'Ссылка и минимальный возраст настраиваются здесь. Даты берутся из активного '
-                'учебного года и показаны только для справки.'
+                'Минимальный возраст и ссылка общие для всех учебных лет. '
+                'Даты начала и окончания курсов задаются только в таблице «Учебные годы».'
             ),
         }),
     )
+
+    @admin.display(description='Активный учебный год')
+    def active_academic_year_display(self, obj=None):
+        academic_year = AcademicYear.get_active()
+        if academic_year is None:
+            return 'Не создан'
+        return (
+            f'{academic_year.name}: '
+            f'{academic_year.starts_on:%d.%m.%Y} — {academic_year.ends_on:%d.%m.%Y}'
+        )
 
     def has_add_permission(self, request):
         return not CourseRegistrationSettings.objects.exists()

@@ -629,61 +629,81 @@ class BaseCourseApplicationForm(forms.ModelForm):
             self.age_reference_date = (
                 active_year.starts_on
                 if active_year is not None
-                else self.registration_settings.course_starts_on
+                else date.today()
             )
 
         if 'status' in self.fields and not include_status:
             self.fields.pop('status')
 
-        self.fields['last_name'].widget.attrs.update({
-            'autocomplete': 'family-name',
-            'placeholder': 'Фамилия',
-        })
-        self.fields['first_name'].widget.attrs.update({
-            'autocomplete': 'given-name',
-            'placeholder': 'Имя',
-        })
-        self.fields['middle_name'].widget.attrs.update({
-            'autocomplete': 'additional-name',
-            'placeholder': 'Отчество, если есть',
-        })
-        self.fields['gender'].widget = forms.RadioSelect(choices=CourseApplication.GENDER_CHOICES)
-        self.fields['birth_date'].widget = html_date_input()
-        self.fields['city_church'].widget.attrs.update({
-            'placeholder': 'Например: Тамбов или Воронеж, Отрожка',
-        })
-        self.fields['instrument'].help_text = (
-            'Укажите музыкальный инструмент или партию в оркестре. '
-            'Если ранее не играли, укажите инструмент, на котором планируете обучаться.'
-        )
-        instrument_choices = self._instrument_choices()
-        if instrument_choices:
-            self.fields['instrument'].widget = forms.Select(
-                choices=[('', 'Выберите инструмент')] + instrument_choices,
-            )
-        else:
-            self.fields['instrument'].widget.attrs.update({
-                'placeholder': 'Например: Баян, Домра малая II, Фортепиано',
-            })
-        self.fields['music_education'].widget = forms.Select(choices=CourseApplication.MUSIC_EDUCATION_CHOICES)
-        self.fields['student_phone'].widget = forms.TextInput(attrs={
-            'type': 'tel',
-            'inputmode': 'tel',
-            'placeholder': '+7 (999) 123-45-67',
-            'autocomplete': 'tel',
-        })
-        self.fields['parent_contacts'].widget = forms.Textarea(attrs={
-            'rows': 4,
-            'placeholder': 'Иванов Иван Иванович — +7 (999) 123-45-67\nИванова Мария Петровна — +7 (999) 987-65-43',
-        })
-        self.fields['comments'].widget = forms.Textarea(attrs={
-            'rows': 4,
-            'placeholder': 'Дополнительные вопросы или комментарии',
-        })
-        self.fields['comments'].required = False
-        self.fields['parent_contacts'].required = False
+        field_attrs = {
+            'last_name': {
+                'autocomplete': 'family-name',
+                'placeholder': 'Фамилия',
+            },
+            'first_name': {
+                'autocomplete': 'given-name',
+                'placeholder': 'Имя',
+            },
+            'middle_name': {
+                'autocomplete': 'additional-name',
+                'placeholder': 'Отчество, если есть',
+            },
+            'city_church': {
+                'placeholder': 'Например: Тамбов или Воронеж, Отрожка',
+                'class': 'city-church-field',
+                'size': '80',
+            },
+        }
+        for field_name, attrs in field_attrs.items():
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs.update(attrs)
 
-        if self.age_limit:
+        if 'gender' in self.fields:
+            self.fields['gender'].widget = forms.RadioSelect(choices=CourseApplication.GENDER_CHOICES)
+        if 'birth_date' in self.fields:
+            self.fields['birth_date'].widget = html_date_input()
+        if 'instrument' in self.fields:
+            self.fields['instrument'].help_text = (
+                'Укажите музыкальный инструмент или партию в оркестре. '
+                'Если ранее не играли, укажите инструмент, на котором планируете обучаться.'
+            )
+            instrument_choices = self._instrument_choices()
+            if instrument_choices:
+                self.fields['instrument'].widget = forms.Select(
+                    choices=[('', 'Выберите инструмент')] + instrument_choices,
+                )
+            else:
+                self.fields['instrument'].widget.attrs.update({
+                    'placeholder': 'Например: Баян, Домра малая II, Фортепиано',
+                })
+        if 'music_education' in self.fields:
+            self.fields['music_education'].widget = forms.Select(
+                choices=CourseApplication.MUSIC_EDUCATION_CHOICES,
+            )
+        if 'student_phone' in self.fields:
+            self.fields['student_phone'].widget = forms.TextInput(attrs={
+                'type': 'tel',
+                'inputmode': 'tel',
+                'placeholder': '+7 (999) 123-45-67',
+                'autocomplete': 'tel',
+            })
+        if 'parent_contacts' in self.fields:
+            self.fields['parent_contacts'].widget = forms.Textarea(attrs={
+                'rows': 4,
+                'placeholder': (
+                    'Иванов Иван Иванович — +7 (999) 123-45-67\n'
+                    'Иванова Мария Петровна — +7 (999) 987-65-43'
+                ),
+            })
+            self.fields['parent_contacts'].required = False
+        if 'comments' in self.fields:
+            self.fields['comments'].widget = forms.Textarea(attrs={
+                'rows': 4,
+                'placeholder': 'Дополнительные вопросы или комментарии',
+            })
+            self.fields['comments'].required = False
+
+        if self.age_limit and 'birth_date' in self.fields:
             minimum_birth_date = minimum_birth_date_for_age(
                 self.minimum_registration_age,
                 today=self.age_reference_date,
