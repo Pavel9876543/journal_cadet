@@ -2228,8 +2228,32 @@ class CourseApplication(models.Model):
         student = self._get_existing_student()
         user = self._get_existing_user(get_user_model())
 
-        credential_filter = Q(course_application_id=self.pk)
-        credential_qs = TemporaryCredential.objects.filter(credential_filter)
+        replacement_application = self._other_confirmed_application(
+            student=student,
+            user=user,
+        )
+        credential_qs = TemporaryCredential.objects.filter(course_application_id=self.pk)
+        if replacement_application is not None:
+            # One person may have more than one application in the same year
+            # (for example, after correcting the phone number). Rejecting or
+            # deleting one of them must not remove the shared account,
+            # enrollment or the only temporary credential used by the other
+            # confirmed application.
+            credential_qs.update(
+                course_application=replacement_application,
+                student_phone=replacement_application.student_phone,
+            )
+            if clear_application_links:
+                CourseApplication.objects.filter(pk=self.pk).update(
+                    student=None,
+                    user=None,
+                    journal_removed_at=timezone.now(),
+                )
+                self.student = None
+                self.user = None
+                self.journal_removed_at = timezone.now()
+            return
+
         credential_qs.delete()
 
         if student is not None:
@@ -2263,6 +2287,28 @@ class CourseApplication(models.Model):
             self.student = None
             self.user = None
             self.journal_removed_at = timezone.now()
+
+    def _other_confirmed_application(self, *, student, user):
+        if self.academic_year_id is None:
+            return None
+
+        candidates = (
+            CourseApplication.objects
+            .select_for_update()
+            .filter(
+                academic_year_id=self.academic_year_id,
+                status=self.STATUS_CONFIRMED,
+            )
+            .exclude(pk=self.pk)
+        )
+        shared_identity = Q()
+        if student is not None:
+            shared_identity |= Q(student_id=student.pk)
+        if user is not None:
+            shared_identity |= Q(user_id=user.pk)
+        if not shared_identity:
+            return None
+        return candidates.filter(shared_identity).order_by('registration_date', 'pk').first()
 
     def _get_existing_user(self, UserModel):
         if self.user_id:

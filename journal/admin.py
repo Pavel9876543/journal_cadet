@@ -1793,7 +1793,9 @@ class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
         'students__full_name',
         'student_enrollments__full_name',
         'group_subjects__subject__name',
+        'group_subjects__subject_name_snapshot',
         'group_subjects__teacher__full_name',
+        'group_subjects__teacher_name_snapshot',
     )
     autocomplete_fields = ('academic_year',)
     inlines = (GroupSubjectInline, StudentInline)
@@ -1835,8 +1837,13 @@ class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
 
     @admin.display(description='Предметы')
     def subjects_display_short(self, obj):
+        archived = not obj.academic_year.is_active
         subjects = [
-            item.subject.name
+            (
+                item.subject_name_snapshot or item.subject.name
+                if archived
+                else item.subject.name
+            )
             for item in obj.group_subjects.all()
             if item.is_active and item.subject_id
         ]
@@ -1844,8 +1851,14 @@ class StudyGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
 
     @admin.display(description='Преподаватели')
     def teachers_display_short(self, obj):
+        archived = not obj.academic_year.is_active
         pairs = [
-            f'{item.subject.name}: {item.teacher.full_name}'
+            (
+                f'{item.subject_name_snapshot or item.subject.name}: '
+                f'{item.teacher_name_snapshot or item.teacher.full_name}'
+                if archived
+                else f'{item.subject.name}: {item.teacher.full_name}'
+            )
             for item in obj.group_subjects.all()
             if item.is_active and item.subject_id and item.teacher_id
         ]
@@ -1889,6 +1902,8 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'user__email',
         'group_subjects__group__name',
         'group_subjects__subject__name',
+        'group_subjects__subject_name_snapshot',
+        'group_subjects__teacher_name_snapshot',
         'individual_subjects__student__full_name',
     )
     autocomplete_fields = ('user',)
@@ -2038,7 +2053,11 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     @admin.display(description='Группы и предметы')
     def group_subjects_short(self, obj):
         items = [
-            f'{item.group.name}: {item.subject.name}'
+            (
+                f'{item.group.name}: {item.subject_name_snapshot or item.subject.name}'
+                if not item.group.academic_year.is_active
+                else f'{item.group.name}: {item.subject.name}'
+            )
             for item in getattr(obj, 'selected_year_group_subjects', ())
             if item.is_active and item.group_id and item.subject_id
         ]
@@ -2082,7 +2101,9 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'group__name',
         'instrument__name',
         'individual_subjects__teacher__full_name',
+        'individual_subjects__teacher_name_snapshot',
         'individual_subjects__subject__name',
+        'individual_subjects__subject_name_snapshot',
     )
     autocomplete_fields = ('user', 'group', 'instrument')
     inlines = (StudentSubjectInline, SubjectResultInline)
@@ -2275,12 +2296,22 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     @admin.display(description='Преподаватель по специальности')
     def specialty_teacher_display(self, obj):
         assignments = getattr(obj, 'selected_year_specialty_assignments', ())
-        return assignments[0].teacher if assignments else '—'
+        if not assignments:
+            return '—'
+        assignment = assignments[0]
+        if assignment.academic_year.is_active:
+            return assignment.teacher
+        return assignment.teacher_name_snapshot or assignment.teacher.full_name
 
     @admin.display(description='Предмет специальности')
     def specialty_subject_display(self, obj):
         assignments = getattr(obj, 'selected_year_specialty_assignments', ())
-        return assignments[0].subject if assignments else '—'
+        if not assignments:
+            return '—'
+        assignment = assignments[0]
+        if assignment.academic_year.is_active:
+            return assignment.subject
+        return assignment.subject_name_snapshot or assignment.subject.name
 
 
 @admin.register(TeacherSubject)

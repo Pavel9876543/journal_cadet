@@ -1105,6 +1105,7 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
             )
             second = CourseApplication.objects.create(
                 **self.application_payload(
+                    birth_date=date(2001, 1, 1),
                     student_phone='+7 (999) 123-45-68',
                 ),
             )
@@ -1120,6 +1121,66 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
             ),
             ['Иванов Иван', 'Иванов Иван 2'],
         )
+
+    def test_rejecting_one_of_two_confirmed_applications_preserves_shared_account(self):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            first = CourseApplication.objects.create(**self.application_payload())
+        second = CourseApplication.objects.create(
+            **self.application_payload(student_phone='+7 (999) 765-43-21'),
+        )
+        student_id = first.student_id
+        user_id = first.user_id
+        enrollment_id = StudentEnrollment.objects.get(
+            student_id=student_id,
+            academic_year=first.academic_year,
+        ).pk
+
+        first.status = CourseApplication.STATUS_REJECTED
+        first.save()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        credential = TemporaryCredential.objects.get(user_id=user_id)
+
+        self.assertIsNone(first.student_id)
+        self.assertIsNone(first.user_id)
+        self.assertEqual(second.student_id, student_id)
+        self.assertEqual(second.user_id, user_id)
+        self.assertTrue(Student.objects.filter(pk=student_id).exists())
+        self.assertTrue(User.objects.filter(pk=user_id).exists())
+        self.assertTrue(StudentEnrollment.objects.filter(pk=enrollment_id).exists())
+        self.assertEqual(credential.course_application, second)
+        self.assertEqual(credential.temporary_password, 'Temp12345!')
+
+    def test_deleting_one_of_two_confirmed_applications_preserves_shared_account(self):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            first = CourseApplication.objects.create(**self.application_payload())
+        second = CourseApplication.objects.create(
+            **self.application_payload(student_phone='+7 (999) 765-43-21'),
+        )
+        student_id = first.student_id
+        user_id = first.user_id
+
+        first.delete()
+        second.refresh_from_db()
+        credential = TemporaryCredential.objects.get(user_id=user_id)
+
+        self.assertEqual(second.student_id, student_id)
+        self.assertEqual(second.user_id, user_id)
+        self.assertTrue(Student.objects.filter(pk=student_id).exists())
+        self.assertTrue(User.objects.filter(pk=user_id).exists())
+        self.assertTrue(
+            StudentEnrollment.objects.filter(
+                student_id=student_id,
+                academic_year=second.academic_year,
+            ).exists(),
+        )
+        self.assertEqual(credential.course_application, second)
 
     def test_rejected_application_does_not_create_journal_records(self):
         application = CourseApplication.objects.create(
@@ -2740,6 +2801,55 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('min-width: min(680px, 74vw)', css)
         self.assertIn('max-width: min(1440px, 96vw)', css)
         self.assertIn("window.django.jQuery(document).on('shown.bs.modal'", javascript)
+
+    def test_archived_admin_lists_use_assignment_snapshots(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(academic_year=old_year)
+        teacher = self.create_teacher(full_name='Старое имя преподавателя')
+        student = self.create_student(group=old_group)
+        group_subject = GroupSubject.objects.create(
+            group=old_group,
+            subject=self.create_subject(name='Старое название предмета'),
+            teacher=teacher,
+        )
+        specialty_subject = self.create_subject(
+            name='Старая специальность',
+            is_specialty=True,
+        )
+        specialty = StudentSubject.objects.create(
+            student=student,
+            subject=specialty_subject,
+            teacher=teacher,
+            academic_year=old_year,
+            is_specialty=True,
+        )
+        self.create_academic_year(name='2026/2027')
+
+        group_subject.subject.name = 'Новое название предмета'
+        group_subject.subject.save()
+        specialty_subject.name = 'Новая специальность'
+        specialty_subject.save()
+        teacher.full_name = 'Новое имя преподавателя'
+        teacher.save()
+
+        group_admin = StudyGroupAdmin(StudyGroup, django_admin.site)
+        teacher_admin = TeacherAdmin(Teacher, django_admin.site)
+        student_admin = StudentAdmin(Student, django_admin.site)
+        group = group_admin.get_queryset(self.admin_request(old_year)).get(pk=old_group.pk)
+        selected_teacher = teacher_admin.get_queryset(self.admin_request(old_year)).get(pk=teacher.pk)
+        selected_student = student_admin.get_queryset(self.admin_request(old_year)).get(pk=student.pk)
+
+        self.assertIn('Старое название предмета', str(group_admin.subjects_display_short(group)))
+        self.assertIn('Старое имя преподавателя', str(group_admin.teachers_display_short(group)))
+        self.assertIn('Старое название предмета', str(teacher_admin.group_subjects_short(selected_teacher)))
+        self.assertEqual(
+            str(student_admin.specialty_subject_display(selected_student)),
+            specialty.subject_name_snapshot,
+        )
+        self.assertEqual(
+            str(student_admin.specialty_teacher_display(selected_student)),
+            specialty.teacher_name_snapshot,
+        )
 
     def test_temporary_credentials_are_scoped_to_selected_academic_year(self):
         old_year = self.create_academic_year(name='2025/2026')
