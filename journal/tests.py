@@ -67,6 +67,7 @@ from journal.grade_options import (
     get_grade_teachers,
 )
 from journal.registration_utils import minimum_birth_date_for_age, normalize_parent_contacts
+from journal.templatetags.admin_dashboard import journal_admin_dashboard
 from journal.views import (
     _build_journal_tables,
     _is_duplicate_course_application_phone_error,
@@ -2956,6 +2957,23 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, archived_subject_name)
         self.assertNotContains(response, 'name="student_enrollments-0-student"')
         self.assertNotContains(response, 'name="group_subjects-0-subject"')
+
+    def test_admin_dashboard_counts_only_subjects_assigned_in_selected_year(self):
+        data = self.create_base_journal()
+        self.create_subject(name='Не назначенный предмет')
+        request = RequestFactory().get('/admin/')
+        request.user = self.admin_user
+        request.session = {
+            'journal_admin_academic_year_id': data['year'].pk,
+        }
+
+        dashboard = journal_admin_dashboard({'request': request})
+        subject_stat = next(
+            stat for stat in dashboard['stats']
+            if stat['label'] == 'Предметы выбранного года'
+        )
+
+        self.assertEqual(subject_stat['value'], 3)
 
     def test_admin_dashboard_links_recovery_settings_and_related_data(self):
         self.create_base_journal()

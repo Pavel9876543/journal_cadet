@@ -2685,7 +2685,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
     academic_year_lookup = 'academic_year'
     changelist_description = (
         'Заявки с публичной регистрации. Подтвержденная заявка создает ученика, пользователя '
-        'и временный пароль; отклоненная заявка удаляет связанные учебные записи.'
+        'и временный пароль; отклоненная заявка удаляет только неиспользуемые связанные записи.'
     )
     form = CourseApplicationAdminForm
     list_display = (
@@ -2748,7 +2748,8 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
             ),
             'description': (
                 'Подтвержденная заявка автоматически создает ученика, пользователя '
-                'и временный пароль. При отклонении связанные записи удаляются из журнала.'
+                'и временный пароль. При отклонении удаляются только записи, '
+                'не используемые другими подтвержденными заявками.'
             ),
         }),
         ('Связанные записи', {
@@ -2860,7 +2861,13 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
             application.status = CourseApplication.STATUS_REJECTED
             application.save()
             processed += 1
-        self.message_user(request, f'Отклонено заявок: {processed}. Ученики удалены из журнала.')
+        self.message_user(
+            request,
+            (
+                f'Отклонено заявок: {processed}. Неиспользуемые связанные записи '
+                'удалены; общие аккаунты и зачисления сохранены.'
+            ),
+        )
         if skipped:
             self.message_user(request, f'Архивные заявки пропущены: {skipped}.', level='ERROR')
 

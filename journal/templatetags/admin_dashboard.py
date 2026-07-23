@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlencode
 
 from django import template
+from django.db.models import Q
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
@@ -134,8 +135,25 @@ def journal_admin_dashboard(context):
             'journal.view_teacher',
         ),
         _stat(
-            'Активные предметы',
-            Subject.objects.filter(is_active=True).count(),
+            'Предметы выбранного года',
+            (
+                Subject.objects
+                .filter(is_active=True)
+                .filter(
+                    Q(
+                        group_subjects__group__academic_year=selected_year,
+                        group_subjects__is_active=True,
+                    )
+                    | Q(
+                        individual_students__academic_year=selected_year,
+                        individual_students__is_active=True,
+                    )
+                )
+                .distinct()
+                .count()
+                if selected_year
+                else 0
+            ),
             _admin_url('journal', 'subject', params=active_subjects_params),
             'fas fa-book',
             user,
