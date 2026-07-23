@@ -3,13 +3,18 @@ import os
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.core.management.base import BaseCommand
+from django.db import transaction
 
-from journal.account_utils import ensure_temporary_credential_for_user
+from journal.account_utils import (
+    ensure_temporary_credential_for_user,
+    user_has_temporary_credential,
+)
 
 
 class Command(BaseCommand):
     help = "Create or update a superuser from environment variables."
 
+    @transaction.atomic
     def handle(self, *args, **options):
         username = os.getenv("DJANGO_SUPERUSER_USERNAME", "").strip()
         email = os.getenv("DJANGO_SUPERUSER_EMAIL", "").strip()
@@ -61,8 +66,17 @@ class Command(BaseCommand):
         admin_group, _created = Group.objects.get_or_create(name="Администратор")
         user.groups.add(admin_group)
 
-        if created or os.getenv("DJANGO_SUPERUSER_ROTATE_PASSWORD", "0") == "1":
-            ensure_temporary_credential_for_user(user, password=password)
+        rotate_password = os.getenv("DJANGO_SUPERUSER_ROTATE_PASSWORD", "0") == "1"
+        credential_password = None
+        if created or rotate_password:
+            credential_password = password
+        elif not user_has_temporary_credential(user) and user.check_password(password):
+            # Recreate a deleted row only when the configured password is still
+            # the user's real password. Never store a password that cannot log in.
+            credential_password = password
+
+        if credential_password is not None:
+            ensure_temporary_credential_for_user(user, password=credential_password)
 
         # Defensive: explicitly grant every model permission in addition to is_superuser.
         all_perms = Permission.objects.all()

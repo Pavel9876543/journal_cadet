@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+from threading import Barrier, Lock, Thread
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.contrib import admin as django_admin
@@ -12,9 +14,9 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.core.management import CommandError, call_command
-from django.db import connection
+from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import Count, Q
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
@@ -2123,6 +2125,60 @@ class ViewTests(JournalTestDataMixin, TestCase):
         )
 
 
+@skipUnless(connection.vendor == 'postgresql', 'PostgreSQL concurrency test')
+class CourseApplicationConcurrencyTests(JournalTestDataMixin, TransactionTestCase):
+    reset_sequences = True
+
+    def test_concurrent_same_phone_creates_exactly_one_application(self):
+        year = self.create_academic_year()
+        barrier = Barrier(2)
+        result_lock = Lock()
+        results = []
+        original_full_clean = CourseApplication.full_clean
+
+        def synchronized_full_clean(instance, *args, **kwargs):
+            original_full_clean(instance, *args, **kwargs)
+            barrier.wait(timeout=10)
+
+        def create_application(last_name):
+            close_old_connections()
+            try:
+                payload = self.application_payload(
+                    last_name=last_name,
+                    academic_year_id=year.pk,
+                )
+                with transaction.atomic():
+                    CourseApplication.objects.create(**payload)
+            except IntegrityError:
+                outcome = 'duplicate'
+            else:
+                outcome = 'created'
+            finally:
+                close_old_connections()
+            with result_lock:
+                results.append(outcome)
+
+        with patch.object(CourseApplication, 'full_clean', synchronized_full_clean):
+            threads = [
+                Thread(target=create_application, args=('Иванов',), daemon=True),
+                Thread(target=create_application, args=('Петров',), daemon=True),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertCountEqual(results, ['created', 'duplicate'])
+        self.assertEqual(
+            CourseApplication.objects.filter(
+                academic_year=year,
+                student_phone='+7 (999) 123-45-67',
+            ).count(),
+            1,
+        )
+
+
 class AdminDashboardTests(JournalTestDataMixin, TestCase):
     def setUp(self):
         self.admin_user = User.objects.create_superuser(
@@ -2757,6 +2813,50 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         existing_user.refresh_from_db()
 
         self.assertEqual(existing_user.password, original_password_hash)
+        self.assertFalse(TemporaryCredential.objects.filter(user=existing_user).exists())
+
+    def test_student_admin_creates_user_and_temporary_credentials_on_manual_add(self):
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Student]
+        student = Student(
+            full_name='Новый Ученик',
+            group=self.create_group(),
+            instrument=self.create_instrument(),
+            student_phone='+7 (999) 111-22-33',
+        )
+
+        model_admin.save_model(request, student, form=None, change=False)
+
+        student.refresh_from_db()
+        self.assertIsNotNone(student.user)
+        self.assertEqual(student.user.username, 'Ученик Новый')
+        self.assertTrue(student.user.groups.filter(name='Ученик').exists())
+        credential = TemporaryCredential.objects.get(login=student.user.username)
+        self.assertEqual(credential.user, student.user)
+        self.assertEqual(credential.student_phone, '+7 (999) 111-22-33')
+        self.assertTrue(credential.temporary_password)
+        self.assertTrue(student.user.check_password(credential.temporary_password))
+
+    def test_student_admin_does_not_reset_password_of_selected_existing_user(self):
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Student]
+        existing_user = User.objects.create_user(
+            username='existing student account',
+            password='ExistingPass123!',
+        )
+        original_password_hash = existing_user.password
+        student = Student(
+            full_name='Ученик с аккаунтом',
+            group=self.create_group(),
+            instrument=self.create_instrument(),
+            user=existing_user,
+        )
+
+        model_admin.save_model(request, student, form=None, change=False)
+        existing_user.refresh_from_db()
+
+        self.assertEqual(existing_user.password, original_password_hash)
+        self.assertTrue(existing_user.groups.filter(name='Ученик').exists())
         self.assertFalse(TemporaryCredential.objects.filter(user=existing_user).exists())
 
     def test_teacher_admin_allows_adding_group_and_individual_subjects_inline(self):
@@ -3756,6 +3856,74 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credential.user, user)
         self.assertEqual(credential.temporary_password, 'AdminTemp123!')
         self.assertTrue(user.check_password(credential.temporary_password))
+
+
+class UserCreationCredentialTests(JournalTestDataMixin, TestCase):
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_user_admin_creation_stores_temporary_credentials(self):
+        admin_user = User.objects.create_superuser(
+            username='admin creator',
+            password='Pass12345!',
+        )
+        request = type('Request', (), {'user': admin_user})()
+        model_admin = django_admin.site._registry[User]
+        form = model_admin.add_form(data={
+            'username': 'created in admin',
+            'password1': 'AdminCreated123!',
+            'password2': 'AdminCreated123!',
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save(commit=False)
+
+        model_admin.save_model(request, user, form, change=False)
+
+        credential = TemporaryCredential.objects.get(user=user)
+        self.assertEqual(credential.login, 'created in admin')
+        self.assertEqual(credential.temporary_password, 'AdminCreated123!')
+        self.assertTrue(user.check_password(credential.temporary_password))
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_ensure_superuser_creation_stores_temporary_credentials(self):
+        env = {
+            'DJANGO_SUPERUSER_USERNAME': 'container admin',
+            'DJANGO_SUPERUSER_EMAIL': 'container-admin@example.com',
+            'DJANGO_SUPERUSER_PASSWORD': 'ContainerAdmin123!',
+        }
+        with patch.dict('os.environ', env, clear=False):
+            call_command('ensure_superuser', stdout=StringIO())
+
+        user = User.objects.get(username='container admin')
+        credential = TemporaryCredential.objects.get(user=user)
+        self.assertTrue(user.is_superuser)
+        self.assertEqual(credential.temporary_password, 'ContainerAdmin123!')
+        self.assertTrue(user.check_password(credential.temporary_password))
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_ensure_superuser_restores_missing_credential_only_for_matching_password(self):
+        user = User.objects.create_superuser(
+            username='existing container admin',
+            password='ActualAdmin123!',
+        )
+        matching_env = {
+            'DJANGO_SUPERUSER_USERNAME': user.username,
+            'DJANGO_SUPERUSER_PASSWORD': 'ActualAdmin123!',
+            'DJANGO_SUPERUSER_ROTATE_PASSWORD': '0',
+        }
+        with patch.dict('os.environ', matching_env, clear=False):
+            call_command('ensure_superuser', stdout=StringIO())
+        self.assertTrue(TemporaryCredential.objects.filter(user=user).exists())
+
+        TemporaryCredential.objects.filter(user=user).delete()
+        wrong_env = {
+            'DJANGO_SUPERUSER_USERNAME': user.username,
+            'DJANGO_SUPERUSER_PASSWORD': 'WrongPassword123!',
+            'DJANGO_SUPERUSER_ROTATE_PASSWORD': '0',
+        }
+        with patch.dict('os.environ', wrong_env, clear=False):
+            call_command('ensure_superuser', stdout=StringIO())
+        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('ActualAdmin123!'))
 
 
 class SeedDataCommandTests(TestCase):

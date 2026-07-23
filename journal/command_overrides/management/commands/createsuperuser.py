@@ -5,6 +5,7 @@ import os
 from django.contrib.auth.management.commands import createsuperuser as django_createsuperuser
 from django.contrib.auth.management.commands.createsuperuser import Command as DjangoCreateSuperUserCommand
 from django.contrib.auth.models import Group
+from django.db import transaction
 
 from journal.account_utils import ensure_temporary_credential_for_user
 
@@ -17,9 +18,16 @@ class Command(DjangoCreateSuperUserCommand):
         if options.get('interactive'):
             original_getpass = django_createsuperuser.getpass.getpass
 
+            captured_passwords = []
+
             def capture_password(prompt='Password: ', *password_args, **password_kwargs):
                 value = original_getpass(prompt, *password_args, **password_kwargs)
-                if 'again' in str(prompt).lower():
+                captured_passwords.append(value)
+                if (
+                    value
+                    and len(captured_passwords) >= 2
+                    and captured_passwords[-2] == value
+                ):
                     self._captured_superuser_password = value
                 return value
 
@@ -45,6 +53,7 @@ class Command(DjangoCreateSuperUserCommand):
             self._created_superuser_username = value
         return value
 
+    @transaction.atomic
     def _store_temporary_credential(self) -> None:
         username = self._created_superuser_username
         if not username:

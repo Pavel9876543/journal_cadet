@@ -1842,6 +1842,36 @@ class StudentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
             ),
         )
 
+    def save_model(self, request, obj, form, change):
+        temporary_password = None
+        if not change and obj.user_id is None:
+            username = build_username_from_full_name(
+                obj.full_name,
+                existing_usernames=set(AuthUser.objects.values_list('username', flat=True)),
+            )
+            temporary_password = generate_temporary_password()
+            first_name, last_name = split_user_name(obj.full_name)
+            obj.user = AuthUser.objects.create_user(
+                username=username,
+                password=temporary_password,
+                first_name=first_name,
+                last_name=last_name,
+            )
+        if obj.user_id:
+            student_group, _created = AuthGroup.objects.get_or_create(name='Ученик')
+            obj.user.groups.add(student_group)
+
+        super().save_model(request, obj, form, change)
+
+        if obj.user_id and (
+            temporary_password is not None
+            or user_has_temporary_credential(obj.user)
+        ):
+            ensure_temporary_credential_for_user(
+                obj.user,
+                password=temporary_password,
+            )
+
     @admin.display(description='Пользователь')
     def user_link(self, obj):
         return admin_change_link(obj.user)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.validators import RegexValidator
+from django.db import transaction
 from django.db.models import Q
 from django.utils.crypto import get_random_string
 
@@ -79,6 +80,7 @@ def user_student_phone(user: User) -> str:
     return getattr(student, 'student_phone', '') or ''
 
 
+@transaction.atomic
 def ensure_temporary_credential_for_user(
     user: User,
     *,
@@ -86,6 +88,13 @@ def ensure_temporary_credential_for_user(
     reset_missing_password: bool = False,
 ):
     from .models import TemporaryCredential
+
+    if user.pk is None:
+        raise ValueError('User must be saved before temporary credentials are created.')
+
+    # Serialize credential creation for one user. This prevents two concurrent
+    # administrative operations from racing into the unique constraints.
+    user = User.objects.select_for_update().get(pk=user.pk)
 
     credential = (
         TemporaryCredential.objects
