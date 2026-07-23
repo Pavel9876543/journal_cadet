@@ -3375,6 +3375,18 @@ class SeedDataCommandTests(TestCase):
         self.assertEqual(credential_user_ids, set(User.objects.values_list('id', flat=True)))
 
     def test_seed_data_has_no_assignment_or_grade_contradictions(self):
+        active_year = AcademicYear.objects.get(is_active=True)
+
+        self.assertFalse(StudyGroup.objects.exclude(academic_year=active_year).exists())
+        self.assertFalse(CourseApplication.objects.exclude(academic_year=active_year).exists())
+        self.assertFalse(Grade.objects.exclude(academic_year=active_year).exists())
+        self.assertFalse(SubjectResult.objects.exclude(academic_year=active_year).exists())
+        self.assertFalse(
+            Grade.objects.filter(
+                Q(date__lt=active_year.starts_on) | Q(date__gt=active_year.ends_on),
+            ).exists(),
+        )
+
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
         self.assertFalse(
@@ -3484,6 +3496,12 @@ class SeedDataCommandTests(TestCase):
             .exists(),
         )
         self.assertFalse(Grade.objects.exclude(academic_year__name='2025/2026').exists())
+        self.assertFalse(CourseApplication.objects.exclude(academic_year__name='2025/2026').exists())
+        self.assertFalse(
+            Grade.objects.filter(
+                Q(date__lt=date(2025, 9, 1)) | Q(date__gt=date(2026, 8, 31)),
+            ).exists(),
+        )
 
         registration_settings = CourseRegistrationSettings.objects.get(pk=1)
         self.assertEqual(

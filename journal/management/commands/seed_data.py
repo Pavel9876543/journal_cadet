@@ -846,6 +846,39 @@ class Command(BaseCommand):
 
     def _validate_demo_data(self) -> None:
         errors: list[str] = []
+        active_year = AcademicYear.objects.filter(is_active=True).first()
+
+        if AcademicYear.objects.filter(is_active=True).count() != 1:
+            errors.append('Должен быть ровно один активный учебный год.')
+
+        if active_year is None:
+            errors.append('Не найден активный учебный год.')
+        else:
+            registration_settings = CourseRegistrationSettings.objects.filter(pk=1).first()
+            if registration_settings is None:
+                errors.append('Не найдены настройки регистрации.')
+            elif (
+                registration_settings.course_starts_on != active_year.starts_on
+                or registration_settings.course_ends_on != active_year.ends_on
+            ):
+                errors.append('Даты регистрации не совпадают с активным учебным годом.')
+
+            if StudyGroup.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть группы вне активного учебного года.')
+
+            if CourseApplication.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть заявки вне активного учебного года.')
+
+            if Grade.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть оценки вне активного учебного года.')
+
+            if Grade.objects.filter(
+                Q(date__lt=active_year.starts_on) | Q(date__gt=active_year.ends_on),
+            ).exists():
+                errors.append('В тестовых данных есть оценки вне дат активного учебного года.')
+
+            if SubjectResult.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть итоги вне активного учебного года.')
 
         if GroupSubject.objects.filter(subject__is_specialty=True).exists():
             errors.append('Индивидуальные предметы назначены группам.')
