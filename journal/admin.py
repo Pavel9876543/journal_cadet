@@ -229,6 +229,7 @@ class UserAdmin(JournalAdminDescriptionMixin, BaseUserAdmin):
                 ensure_temporary_credential_for_user(
                     obj,
                     password=temporary_password,
+                    user_was_created=True,
                 )
         elif user_has_temporary_credential(obj):
             # Keep login/profile metadata in sync without ever rotating the
@@ -1720,6 +1721,7 @@ class TeacherAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
             ensure_temporary_credential_for_user(
                 obj.user,
                 password=temporary_password,
+                user_was_created=temporary_password is not None,
             )
 
     @admin.display(description='Пользователь')
@@ -1874,6 +1876,7 @@ class StudentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
             ensure_temporary_credential_for_user(
                 obj.user,
                 password=temporary_password,
+                user_was_created=temporary_password is not None,
             )
 
     @admin.display(description='Пользователь')

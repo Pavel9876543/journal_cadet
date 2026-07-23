@@ -26,6 +26,7 @@ from journal.account_utils import (
     build_display_name_from_full_name,
     build_username_from_full_name,
     display_name_for_user,
+    ensure_temporary_credential_for_user,
     generate_temporary_password,
 )
 from journal.admin import (
@@ -3935,6 +3936,59 @@ class AccountCommandTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(user.password, original_password_hash)
         self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_temporary_password_cannot_be_reassigned_to_existing_user(self):
+        user = User.objects.create_user(
+            username='immutable temporary password',
+            password='InitialPass123!',
+        )
+        credential = TemporaryCredential.objects.create(
+            user=user,
+            login=user.username,
+            temporary_password='InitialPass123!',
+        )
+        original_password_hash = user.password
+
+        with self.assertRaisesRegex(
+            ValueError,
+            'only be stored when a new user is created',
+        ):
+            ensure_temporary_credential_for_user(
+                user,
+                password='ReplacementPass123!',
+            )
+
+        user.refresh_from_db()
+        credential.refresh_from_db()
+        self.assertEqual(user.password, original_password_hash)
+        self.assertEqual(credential.temporary_password, 'InitialPass123!')
+        self.assertTrue(user.check_password('InitialPass123!'))
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_createsuperuser_rolls_back_if_credentials_cannot_be_stored(self):
+        with (
+            patch.dict(
+                'os.environ',
+                {'DJANGO_SUPERUSER_PASSWORD': 'AdminTemp123!'},
+            ),
+            patch(
+                'journal.command_overrides.management.commands.createsuperuser.'
+                'ensure_temporary_credential_for_user',
+                side_effect=RuntimeError('credential failure'),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'credential failure'):
+                call_command(
+                    'createsuperuser',
+                    interactive=False,
+                    username='rolled back admin',
+                    email='rollback@example.com',
+                    stdout=StringIO(),
+                )
+
+        self.assertFalse(User.objects.filter(username='rolled back admin').exists())
+        self.assertFalse(TemporaryCredential.objects.filter(login='rolled back admin').exists())
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
     def test_createsuperuser_stores_temporary_credentials(self):

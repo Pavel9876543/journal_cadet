@@ -61,7 +61,11 @@ class Command(BaseCommand):
         user.groups.add(admin_group)
 
         if created:
-            ensure_temporary_credential_for_user(user, password=password)
+            ensure_temporary_credential_for_user(
+                user,
+                password=password,
+                user_was_created=True,
+            )
 
         # Defensive: explicitly grant every model permission in addition to is_superuser.
         all_perms = Permission.objects.all()

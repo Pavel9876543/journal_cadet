@@ -46,7 +46,11 @@ class Command(BaseCommand):
             student.save(update_fields=['user'])
             used_usernames.add(username)
 
-            account_utils.ensure_temporary_credential_for_user(user, password=password)
+            account_utils.ensure_temporary_credential_for_user(
+                user,
+                password=password,
+                user_was_created=user_is_new,
+            )
 
             credentials.append(
                 {

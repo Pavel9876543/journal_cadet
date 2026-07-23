@@ -85,11 +85,16 @@ def ensure_temporary_credential_for_user(
     user: User,
     *,
     password: str | None = None,
+    user_was_created: bool = False,
 ):
     from .models import TemporaryCredential
 
     if user.pk is None:
         raise ValueError('User must be saved before temporary credentials are created.')
+    if password is not None and not user_was_created:
+        raise ValueError(
+            'A temporary password may only be stored when a new user is created.'
+        )
 
     # Serialize credential creation for one user. This prevents two concurrent
     # administrative operations from racing into the unique constraints.
@@ -104,7 +109,7 @@ def ensure_temporary_credential_for_user(
     student_phone = user_student_phone(user)
 
     if credential is None:
-        if password is None:
+        if password is None or not user_was_created:
             return None
         credential = TemporaryCredential.objects.create(
             user=user,
@@ -120,7 +125,11 @@ def ensure_temporary_credential_for_user(
         if credential.login != user.username:
             credential.login = user.username
             update_fields.append('login')
-        if password is not None and credential.temporary_password != password:
+        if (
+            user_was_created
+            and password is not None
+            and credential.temporary_password != password
+        ):
             credential.temporary_password = password
             update_fields.append('temporary_password')
         if credential.student_phone != student_phone:

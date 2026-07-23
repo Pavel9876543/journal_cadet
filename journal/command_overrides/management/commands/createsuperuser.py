@@ -11,6 +11,7 @@ from journal.account_utils import ensure_temporary_credential_for_user
 
 
 class Command(DjangoCreateSuperUserCommand):
+    @transaction.atomic
     def handle(self, *args, **options):
         self._created_superuser_username = options.get(self.UserModel.USERNAME_FIELD)
         self._captured_superuser_password = None
@@ -53,7 +54,6 @@ class Command(DjangoCreateSuperUserCommand):
             self._created_superuser_username = value
         return value
 
-    @transaction.atomic
     def _store_temporary_credential(self) -> None:
         username = self._created_superuser_username
         if not username:
@@ -74,4 +74,5 @@ class Command(DjangoCreateSuperUserCommand):
         ensure_temporary_credential_for_user(
             user,
             password=self._captured_superuser_password,
+            user_was_created=True,
         )
