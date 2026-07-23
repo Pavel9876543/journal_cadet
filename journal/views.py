@@ -1550,11 +1550,12 @@ COURSE_REGISTRATION_API_THROTTLE_WINDOW = 60
 
 
 def _load_registration_payload(request):
-    if 'application/json' in request.headers.get('Content-Type', ''):
+    if request.content_type == 'application/json':
         try:
-            return json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return None
+        return payload if isinstance(payload, dict) else None
     return request.POST
 
 

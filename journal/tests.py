@@ -3116,6 +3116,34 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('login', payload)
         self.assertNotIn('temporary_password', payload)
 
+    def test_registration_api_rejects_non_object_json_payload(self):
+        response = self.client.post(
+            reverse('course_registration_api'),
+            data='[]',
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {'success': False, 'message': 'Неверный формат запроса.'},
+        )
+        self.assertFalse(CourseApplication.objects.exists())
+
+    def test_registration_api_rejects_invalid_utf8_json_payload(self):
+        response = self.client.post(
+            reverse('course_registration_api'),
+            data=b'{"student_phone": "\xff"}',
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {'success': False, 'message': 'Неверный формат запроса.'},
+        )
+        self.assertFalse(CourseApplication.objects.exists())
+
     def test_registration_api_requires_csrf_cookie(self):
         csrf_client = Client(enforce_csrf_checks=True, HTTP_HOST='127.0.0.1')
 
