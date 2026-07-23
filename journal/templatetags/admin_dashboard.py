@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import timedelta
 from urllib.parse import urlencode
 
 from django import template
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
-from journal.academic_year_context import get_selected_admin_academic_year
+from journal.academic_year_context import (
+    filter_temporary_credentials_for_year,
+    get_selected_admin_academic_year,
+)
 from journal.models import (
     AcademicYear,
     CourseApplication,
@@ -140,8 +142,8 @@ def journal_admin_dashboard(context):
             'journal.view_subject',
         ),
         _stat(
-            'Оценки за 30 дней',
-            Grade.objects.filter(academic_year=selected_year, date__gte=today - timedelta(days=30)).count() if selected_year else 0,
+            'Оценки выбранного года',
+            Grade.objects.filter(academic_year=selected_year).count() if selected_year else 0,
             _admin_url('journal', 'grade'),
             'fas fa-pen',
             user,
@@ -157,7 +159,10 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Временные доступы',
-            TemporaryCredential.objects.count(),
+            filter_temporary_credentials_for_year(
+                TemporaryCredential.objects.all(),
+                selected_year,
+            ).count(),
             _admin_url('journal', 'temporarycredential'),
             'fas fa-key',
             user,

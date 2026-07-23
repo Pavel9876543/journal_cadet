@@ -89,3 +89,22 @@ def academic_year_ids_for_user(user) -> Iterable[int]:
         )
 
     return year_ids
+
+
+def filter_temporary_credentials_for_year(queryset, academic_year):
+    """Limit temporary credentials to people/applications visible in a year."""
+    from django.db.models import Q
+
+    if academic_year is None:
+        return queryset.none()
+
+    year_filter = (
+        Q(course_application__academic_year=academic_year)
+        | Q(user__student_profile__enrollments__academic_year=academic_year)
+        | Q(user__teacher_profile__academic_year_memberships__academic_year=academic_year)
+    )
+    # Staff accounts are not tied to a study year. Show them only in the
+    # active context so that archived-year lists contain historical users only.
+    if academic_year.is_active:
+        year_filter |= Q(user__is_staff=True)
+    return queryset.filter(year_filter).distinct()

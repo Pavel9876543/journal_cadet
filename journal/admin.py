@@ -13,6 +13,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 
 from .academic_year_context import (
+    filter_temporary_credentials_for_year,
     get_admin_academic_year_context,
     get_selected_admin_academic_year,
 )
@@ -2892,16 +2893,7 @@ class TemporaryCredentialAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescr
             )
             .prefetch_related('user__groups')
         )
-        if academic_year is None:
-            return queryset.none()
-        year_filter = (
-            Q(course_application__academic_year=academic_year)
-            | Q(user__student_profile__enrollments__academic_year=academic_year)
-            | Q(user__teacher_profile__academic_year_memberships__academic_year=academic_year)
-        )
-        if academic_year.is_active:
-            year_filter |= Q(user__is_staff=True)
-        return queryset.filter(year_filter).distinct()
+        return filter_temporary_credentials_for_year(queryset, academic_year)
 
     @admin.display(description='Заявка')
     def course_application_link(self, obj):

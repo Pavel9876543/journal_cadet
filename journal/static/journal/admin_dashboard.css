@@ -1179,25 +1179,25 @@ body.change-form .inline-group table {
 .field-city_church input,
 .field-city_church textarea,
 td.field-city_church input {
-    min-width: min(560px, 70vw) !important;
-    width: min(100%, 760px) !important;
+    min-width: min(680px, 74vw) !important;
+    width: min(100%, 860px) !important;
 }
 
 .field-city_church,
 th.column-city_church,
 td.field-city_church {
-    min-width: 300px;
+    min-width: 380px;
 }
 
 @media (min-width: 992px) {
     .journal-student-related-modal .modal-dialog,
     .modal:has(iframe[src*="/admin/journal/student/"]) .modal-dialog {
-        max-width: min(1280px, 94vw) !important;
-        width: min(1280px, 94vw) !important;
+        max-width: min(1440px, 96vw) !important;
+        width: min(1440px, 96vw) !important;
     }
 
     .journal-student-related-modal iframe,
     .modal:has(iframe[src*="/admin/journal/student/"]) iframe {
-        min-height: 78vh !important;
+        min-height: 84vh !important;
     }
 }

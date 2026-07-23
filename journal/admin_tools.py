@@ -24,6 +24,10 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from .academic_year_context import (
+    filter_temporary_credentials_for_year,
+    get_selected_admin_academic_year,
+)
 from .models import (
     AcademicYear,
     CourseApplication,
@@ -101,7 +105,11 @@ def _admin_data_tools_view_sync(request: HttpRequest) -> HttpResponse:
     - перейти к просмотру временных доступов;
     - скачать полную Excel-выгрузку, если соответствующий URL подключен.
     """
-    temporary_credentials_count = TemporaryCredential.objects.count()
+    selected_academic_year = get_selected_admin_academic_year(request)
+    temporary_credentials_count = filter_temporary_credentials_for_year(
+        TemporaryCredential.objects.all(),
+        selected_academic_year,
+    ).count()
 
     context = {
         'title': 'Инструменты данных',

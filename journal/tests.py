@@ -21,6 +21,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
 
+from journal.academic_year_context import filter_temporary_credentials_for_year
 from journal.assignment_options import assignment_teacher_queryset
 from journal.account_utils import (
     build_course_application_login,
@@ -2363,6 +2364,65 @@ class CourseApplicationConcurrencyTests(JournalTestDataMixin, TransactionTestCas
             1,
         )
 
+    def test_concurrent_same_identity_reuses_one_student_and_account(self):
+        year = self.create_academic_year()
+        barrier = Barrier(2)
+        result_lock = Lock()
+        results = []
+        original_full_clean = CourseApplication.full_clean
+
+        def synchronized_full_clean(instance, *args, **kwargs):
+            original_full_clean(instance, *args, **kwargs)
+            barrier.wait(timeout=10)
+
+        def create_application(phone):
+            close_old_connections()
+            try:
+                application = CourseApplication.objects.create(
+                    **self.application_payload(
+                        student_phone=phone,
+                        academic_year_id=year.pk,
+                    ),
+                )
+                outcome = (
+                    application.pk,
+                    application.student_id,
+                    application.user_id,
+                )
+            except Exception as exc:  # Stored for an explicit assertion in the main thread.
+                outcome = exc
+            finally:
+                close_old_connections()
+            with result_lock:
+                results.append(outcome)
+
+        with patch.object(CourseApplication, 'full_clean', synchronized_full_clean):
+            threads = [
+                Thread(
+                    target=create_application,
+                    args=(phone,),
+                    daemon=True,
+                )
+                for phone in ('+7 (999) 123-45-67', '+7 (999) 765-43-21')
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(len(results), 2)
+        self.assertFalse([result for result in results if isinstance(result, Exception)], results)
+        student_ids = {result[1] for result in results}
+        user_ids = {result[2] for result in results}
+        self.assertEqual(len(student_ids), 1)
+        self.assertEqual(len(user_ids), 1)
+        self.assertNotIn(None, student_ids)
+        self.assertNotIn(None, user_ids)
+        self.assertEqual(CourseApplication.objects.filter(academic_year=year).count(), 2)
+        self.assertEqual(Student.objects.filter(pk__in=student_ids).count(), 1)
+        self.assertEqual(TemporaryCredential.objects.filter(user_id__in=user_ids).count(), 1)
+
 
 class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
     def test_student_can_select_only_years_with_enrollment(self):
@@ -2674,6 +2734,48 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('city-church-field', student_form.fields['city_church'].widget.attrs.get('class', ''))
         self.assertEqual(application_form.fields['city_church'].widget.attrs.get('size'), '80')
         self.assertEqual(inline_form.fields['city_church'].widget.attrs.get('size'), '80')
+
+        css = Path('journal/static/journal/admin_dashboard.css').read_text(encoding='utf-8')
+        javascript = Path('journal/static/journal/group_student_inline.js').read_text(encoding='utf-8')
+        self.assertIn('min-width: min(680px, 74vw)', css)
+        self.assertIn('max-width: min(1440px, 96vw)', css)
+        self.assertIn("window.django.jQuery(document).on('shown.bs.modal'", javascript)
+
+    def test_temporary_credentials_are_scoped_to_selected_academic_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_application = CourseApplication.objects.create(**self.application_payload())
+        active_year = self.create_academic_year(name='2026/2027')
+        active_application = CourseApplication.objects.create(
+            **self.application_payload(
+                last_name='Петров',
+                student_phone='+7 (999) 765-43-21',
+            ),
+        )
+        staff_user = User.objects.create_user(
+            username='yearless_staff',
+            password='Pass12345!',
+            is_staff=True,
+        )
+        staff_credential = TemporaryCredential.objects.create(
+            user=staff_user,
+            login=staff_user.username,
+            temporary_password='StaffTemp123!',
+        )
+
+        old_credentials = filter_temporary_credentials_for_year(
+            TemporaryCredential.objects.all(),
+            old_year,
+        )
+        active_credentials = filter_temporary_credentials_for_year(
+            TemporaryCredential.objects.all(),
+            active_year,
+        )
+
+        self.assertIn(old_application.temporary_credential, old_credentials)
+        self.assertNotIn(active_application.temporary_credential, old_credentials)
+        self.assertNotIn(staff_credential, old_credentials)
+        self.assertIn(active_application.temporary_credential, active_credentials)
+        self.assertIn(staff_credential, active_credentials)
 
 
 class AdminDashboardTests(JournalTestDataMixin, TestCase):

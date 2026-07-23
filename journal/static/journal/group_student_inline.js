@@ -77,12 +77,24 @@
         return originalWindowOpen.call(window, url, target, features);
     };
 
-    document.addEventListener('shown.bs.modal', function (event) {
-        var modal = event.target;
-        var iframe = modal && modal.querySelector('iframe');
+    function markStudentRelatedModal(modal) {
+        var iframe = modal && modal.querySelector && modal.querySelector('iframe');
         if (!iframe || iframe.src.indexOf('/admin/journal/student/') === -1) {
             return;
         }
         modal.classList.add('journal-student-related-modal');
+    }
+
+    document.addEventListener('shown.bs.modal', function (event) {
+        markStudentRelatedModal(event.target);
     });
+
+    // Jazzmin/AdminLTE emits Bootstrap modal events through jQuery. Keep the
+    // native listener above for newer Bootstrap builds and register this hook
+    // for the production admin theme used by the project.
+    if (window.django && window.django.jQuery) {
+        window.django.jQuery(document).on('shown.bs.modal', '.modal', function () {
+            markStudentRelatedModal(this);
+        });
+    }
 })();
