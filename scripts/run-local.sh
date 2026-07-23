@@ -19,6 +19,6 @@ fi
   --env-file .env.dev \
   -f docker-compose.yml \
   -f docker-compose.dev.yml \
-  up -d --build --remove-orphans
+  up -d --build --remove-orphans --wait --wait-timeout 180
 
 echo "Локальный запуск выполнен: http://localhost:8000"

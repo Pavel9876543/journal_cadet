@@ -114,6 +114,8 @@ http://127.0.0.1:8000/admin/
 
 Перед запуском настройте `.env.prod`: поменяйте `SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, пароли БД и данные суперпользователя. С placeholder-значением `SECRET_KEY` production-запуск будет остановлен.
 
+Production-контейнер доступен только на `127.0.0.1:8000`. Для внешнего доступа обязателен HTTPS reverse proxy (например, Nginx или Caddy), который проксирует запросы на этот адрес, передаёт `X-Forwarded-Proto` и корректно формирует `X-Forwarded-For`. По умолчанию приложение доверяет одному proxy-hop (`TRUSTED_PROXY_COUNT=1`).
+
 ```bash
 ./scripts/run-prod.sh
 ```

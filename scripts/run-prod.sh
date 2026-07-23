@@ -19,6 +19,6 @@ fi
   --env-file .env.prod \
   -f docker-compose.yml \
   -f docker-compose.prod.yml \
-  up -d --build --remove-orphans
+  up -d --build --remove-orphans --wait --wait-timeout 180
 
 echo "Продакшен-стек собран и запущен."

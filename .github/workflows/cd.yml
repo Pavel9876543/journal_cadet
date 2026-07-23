@@ -1,7 +1,9 @@
 name: CD
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: ["main"]
   workflow_dispatch:
 
@@ -10,10 +12,13 @@ permissions:
 
 concurrency:
   group: deploy-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -24,6 +29,7 @@ jobs:
         env:
           APP_DIR: ${{ vars.APP_DIR || '/opt/cadet_journal' }}
           REPO_CLONE_URL: ${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}
+          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
           DJANGO_CSRF_TRUSTED_ORIGINS: ${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}
@@ -41,7 +47,7 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || '22' }}
           command_timeout: 25m
-          envs: APP_DIR,REPO_CLONE_URL,DJANGO_SECRET_KEY,DJANGO_ALLOWED_HOSTS,DJANGO_CSRF_TRUSTED_ORIGINS,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,DJANGO_SUPERUSER_USERNAME,DJANGO_SUPERUSER_EMAIL,DJANGO_SUPERUSER_PASSWORD,DJANGO_SUPERUSER_ROTATE_PASSWORD,DATA_TOOLS_PASSWORD
+          envs: APP_DIR,REPO_CLONE_URL,DEPLOY_SHA,DJANGO_SECRET_KEY,DJANGO_ALLOWED_HOSTS,DJANGO_CSRF_TRUSTED_ORIGINS,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,DJANGO_SUPERUSER_USERNAME,DJANGO_SUPERUSER_EMAIL,DJANGO_SUPERUSER_PASSWORD,DJANGO_SUPERUSER_ROTATE_PASSWORD,DATA_TOOLS_PASSWORD
           script: |
             set -eu
 
@@ -54,8 +60,21 @@ jobs:
               fi
             }
 
+            write_env_line() {
+              key="$1"
+              value="$2"
+              sanitized_value="$(printf '%s' "$value" | tr -d '\r\n')"
+              if [ "$sanitized_value" != "$value" ]; then
+                echo "Ошибка: значение $key содержит перевод строки."
+                exit 1
+              fi
+              escaped_value="$(printf '%s' "$value" | sed "s/'/\\\\'/g")"
+              printf "%s='%s'\n" "$key" "$escaped_value" >> "$env_tmp"
+            }
+
             require_value "${APP_DIR:-}" APP_DIR
             require_value "${REPO_CLONE_URL:-}" REPO_CLONE_URL
+            require_value "${DEPLOY_SHA:-}" DEPLOY_SHA
             require_value "${DJANGO_SECRET_KEY:-}" DJANGO_SECRET_KEY
             require_value "${DJANGO_ALLOWED_HOSTS:-}" DJANGO_ALLOWED_HOSTS
             require_value "${POSTGRES_DB:-}" POSTGRES_DB
@@ -169,11 +188,16 @@ jobs:
             cd "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
 
-            echo "=== Сброс локальных изменений на сервере ==="
-            git fetch origin
-            git checkout main
-            git reset --hard origin/main
+            echo "=== Сброс к проверенному CI-коммиту ==="
+            git fetch origin main
+            git reset --hard
             git clean -fd
+            git checkout -B main "$DEPLOY_SHA"
+
+            if [ "$(git rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
+              echo "Ошибка: не удалось переключиться на проверенный коммит $DEPLOY_SHA."
+              exit 1
+            fi
 
             echo "=== Создание .env.prod ==="
             umask 077
@@ -186,39 +210,40 @@ jobs:
             trap cleanup_env_tmp EXIT HUP INT TERM
             env_tmp="$(mktemp .env.prod.XXXXXX)"
 
-            printf '%s\n' \
-              "DJANGO_ENV=production" \
-              "DEBUG=0" \
-              "ALLOW_EMBEDDED_PREVIEW=0" \
-              "SECRET_KEY=$DJANGO_SECRET_KEY" \
-              "ALLOWED_HOSTS=$DJANGO_ALLOWED_HOSTS" \
-              "CSRF_TRUSTED_ORIGINS=${DJANGO_CSRF_TRUSTED_ORIGINS:-}" \
-              "SECURE_SSL_REDIRECT=1" \
-              "SESSION_COOKIE_SECURE=1" \
-              "CSRF_COOKIE_SECURE=1" \
-              "SECURE_HSTS_SECONDS=31536000" \
-              "SECURE_HSTS_INCLUDE_SUBDOMAINS=1" \
-              "SECURE_HSTS_PRELOAD=1" \
-              "USE_X_FORWARDED_PROTO=1" \
-              "TRUST_X_FORWARDED_FOR=0" \
-              "DB_ENGINE=django.db.backends.postgresql" \
-              "DB_NAME=$POSTGRES_DB" \
-              "DB_USER=$POSTGRES_USER" \
-              "DB_PASSWORD=$POSTGRES_PASSWORD" \
-              "DB_HOST=db" \
-              "DB_PORT=5432" \
-              "WAIT_FOR_DB=1" \
-              "POSTGRES_DB=$POSTGRES_DB" \
-              "POSTGRES_USER=$POSTGRES_USER" \
-              "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
-              "DJANGO_SUPERUSER_USERNAME=$DJANGO_SUPERUSER_USERNAME" \
-              "DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL:-}" \
-              "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" \
-              "DJANGO_SUPERUSER_ROTATE_PASSWORD=${DJANGO_SUPERUSER_ROTATE_PASSWORD:-0}" \
-              "DATA_TOOLS_PASSWORD=${DATA_TOOLS_PASSWORD:-}" \
-              "ENABLE_DESTRUCTIVE_DATA_TOOLS=0" \
-              "BACKUP_RETENTION_DAYS=30" \
-              "APP_IMAGE=cadet-journal:web" > "$env_tmp"
+            : > "$env_tmp"
+            write_env_line DJANGO_ENV production
+            write_env_line DEBUG 0
+            write_env_line ALLOW_EMBEDDED_PREVIEW 0
+            write_env_line SECRET_KEY "$DJANGO_SECRET_KEY"
+            write_env_line ALLOWED_HOSTS "$DJANGO_ALLOWED_HOSTS"
+            write_env_line CSRF_TRUSTED_ORIGINS "${DJANGO_CSRF_TRUSTED_ORIGINS:-}"
+            write_env_line SECURE_SSL_REDIRECT 1
+            write_env_line SESSION_COOKIE_SECURE 1
+            write_env_line CSRF_COOKIE_SECURE 1
+            write_env_line SECURE_HSTS_SECONDS 31536000
+            write_env_line SECURE_HSTS_INCLUDE_SUBDOMAINS 1
+            write_env_line SECURE_HSTS_PRELOAD 1
+            write_env_line USE_X_FORWARDED_PROTO 1
+            write_env_line TRUST_X_FORWARDED_FOR 1
+            write_env_line TRUSTED_PROXY_COUNT 1
+            write_env_line DB_ENGINE django.db.backends.postgresql
+            write_env_line DB_NAME "$POSTGRES_DB"
+            write_env_line DB_USER "$POSTGRES_USER"
+            write_env_line DB_PASSWORD "$POSTGRES_PASSWORD"
+            write_env_line DB_HOST db
+            write_env_line DB_PORT 5432
+            write_env_line WAIT_FOR_DB 1
+            write_env_line POSTGRES_DB "$POSTGRES_DB"
+            write_env_line POSTGRES_USER "$POSTGRES_USER"
+            write_env_line POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+            write_env_line DJANGO_SUPERUSER_USERNAME "$DJANGO_SUPERUSER_USERNAME"
+            write_env_line DJANGO_SUPERUSER_EMAIL "${DJANGO_SUPERUSER_EMAIL:-}"
+            write_env_line DJANGO_SUPERUSER_PASSWORD "$DJANGO_SUPERUSER_PASSWORD"
+            write_env_line DJANGO_SUPERUSER_ROTATE_PASSWORD "${DJANGO_SUPERUSER_ROTATE_PASSWORD:-0}"
+            write_env_line DATA_TOOLS_PASSWORD "${DATA_TOOLS_PASSWORD:-}"
+            write_env_line ENABLE_DESTRUCTIVE_DATA_TOOLS 0
+            write_env_line BACKUP_RETENTION_DAYS 30
+            write_env_line APP_IMAGE cadet-journal:web
 
             mv "$env_tmp" .env.prod
             env_tmp=""
