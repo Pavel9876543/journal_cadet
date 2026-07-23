@@ -1910,7 +1910,10 @@ class CourseApplication(models.Model):
         max_length=20,
         choices=STATUS_CHOICES,
         default=STATUS_CONFIRMED,
-        help_text='Если заявка отклонена, ученик, пользователь и временные учетные данные удаляются из журнала.',
+        help_text=(
+            'При отклонении удаляются только неиспользуемые записи этого учебного года; '
+            'общий аккаунт и данные прошлых лет сохраняются.'
+        ),
     )
     academic_year = models.ForeignKey(
         AcademicYear,
