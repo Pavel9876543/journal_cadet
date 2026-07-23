@@ -263,7 +263,14 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+_static_root_value = os.getenv('STATIC_ROOT', '').strip()
+STATIC_ROOT = (
+    Path(_static_root_value).expanduser()
+    if _static_root_value
+    else BASE_DIR / 'staticfiles'
+)
+if not STATIC_ROOT.is_absolute():
+    STATIC_ROOT = BASE_DIR / STATIC_ROOT
 if HAS_WHITENOISE:
     STORAGES = {
         'default': {

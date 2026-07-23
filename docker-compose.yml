@@ -7,6 +7,8 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    environment:
+      STATIC_ROOT: /var/lib/cadet-journal/staticfiles
     healthcheck:
       test: ["CMD", "python", "/app/docker/healthcheck.py"]
       interval: 30s

@@ -101,7 +101,7 @@ jobs:
 
       - name: Runtime image check
         run: |
-          docker run --rm --entrypoint sh cadet-journal:ci -c 'test -w /app && test -w /app/staticfiles'
+          docker run --rm --entrypoint sh cadet-journal:ci -c 'test -w /app && test -w "$STATIC_ROOT" && test "$STATIC_ROOT" = /var/lib/cadet-journal/staticfiles'
           docker run --rm --entrypoint python cadet-journal:ci manage.py check
           docker run --rm --entrypoint python cadet-journal:ci manage.py collectstatic --noinput --clear
 

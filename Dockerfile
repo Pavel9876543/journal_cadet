@@ -16,7 +16,8 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    STATIC_ROOT=/var/lib/cadet-journal/staticfiles
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
@@ -32,8 +33,8 @@ RUN pip install --no-index --find-links=/wheels /wheels/* && rm -rf /wheels
 
 COPY --chown=app:app . .
 COPY --chown=app:app docker/entrypoint.sh /entrypoint.sh
-RUN mkdir -p /app/staticfiles \
-    && chown -R app:app /app \
+RUN mkdir -p /var/lib/cadet-journal/staticfiles \
+    && chown -R app:app /app /var/lib/cadet-journal \
     && sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 USER app
