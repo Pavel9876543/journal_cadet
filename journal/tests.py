@@ -4399,6 +4399,7 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertFalse(Instrument.objects.exists())
         self.assertFalse(Subject.objects.exists())
         self.assertFalse(Teacher.objects.exists())
+        self.assertFalse(TeacherEnrollment.objects.exists())
         self.assertFalse(Student.objects.exists())
         self.assertFalse(GroupSubject.objects.exists())
         self.assertFalse(StudentSubject.objects.exists())

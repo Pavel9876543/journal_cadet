@@ -43,6 +43,7 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
+    TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
 )
@@ -263,6 +264,7 @@ def clear_database_data() -> dict[str, int]:
             GroupSubject,
             TeacherSubject,
             StudentEnrollment,
+            TeacherEnrollment,  # удалить участия раньше преподавателей и годов
             Student,
             Teacher,
             StudyGroup,

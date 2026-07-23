@@ -2347,7 +2347,6 @@ class CourseApplication(models.Model):
                 Student.objects
                 .select_for_update()
                 .filter(birth_date=self.birth_date)
-                .select_related('user')
                 .order_by('pk')
             )
             identity_name = normalize_student_identity_name(self.full_name)

@@ -35,6 +35,7 @@ from journal.models import (
     Subject,
     SubjectResult,
     Teacher,
+    TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
 )
@@ -188,6 +189,7 @@ class Command(BaseCommand):
         GroupSubject.objects.all().delete()
         TeacherSubject.objects.all().delete()
         StudentEnrollment.objects.all().delete()
+        TeacherEnrollment.objects.all().delete()
 
         # Запоминаем пользователей учеников и преподавателей,
         # чтобы удалить только неадминские аккаунты.
