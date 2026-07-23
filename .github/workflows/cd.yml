@@ -177,6 +177,13 @@ jobs:
 
             echo "=== Создание .env.prod ==="
             umask 077
+            env_tmp=""
+            cleanup_env_tmp() {
+              if [ -n "$env_tmp" ]; then
+                rm -f "$env_tmp"
+              fi
+            }
+            trap cleanup_env_tmp EXIT HUP INT TERM
             env_tmp="$(mktemp .env.prod.XXXXXX)"
 
             printf '%s\n' \
@@ -208,12 +215,14 @@ jobs:
               "DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL:-}" \
               "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" \
               "DJANGO_SUPERUSER_ROTATE_PASSWORD=${DJANGO_SUPERUSER_ROTATE_PASSWORD:-0}" \
-              "pas_key_data=${DATA_TOOLS_PASSWORD:-}" \
+              "DATA_TOOLS_PASSWORD=${DATA_TOOLS_PASSWORD:-}" \
               "ENABLE_DESTRUCTIVE_DATA_TOOLS=0" \
               "BACKUP_RETENTION_DAYS=30" \
               "APP_IMAGE=cadet-journal:web" > "$env_tmp"
 
             mv "$env_tmp" .env.prod
+            env_tmp=""
+            trap - EXIT HUP INT TERM
 
             echo "=== Запуск production-стека ==="
             chmod +x ./scripts/run-prod.sh

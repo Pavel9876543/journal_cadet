@@ -89,6 +89,12 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+Для разработки и линтинга установите также закреплённые dev-зависимости:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 Если нужен SQLite, можно не задавать `DB_ENGINE`: по умолчанию используется `django.db.backends.sqlite3`, а файл БД создается как `db.sqlite3`.
 
 Примените миграции и запустите сервер:
@@ -136,10 +142,15 @@ python manage.py collectstatic --noinput
 
 Команда создаёт насыщенный демо-набор для проверки админки и журнала: учебные годы, группы, инструменты, предметы, преподавателей, учеников с полными карточками, групповые и индивидуальные назначения, оценки с комментариями, итоги, заявки на курсы и временные учетные данные.
 
-Скрипт выполняет:
+Скрипт сначала применяет миграции, затем запускает `seed_data`. Он работает:
+
+- напрямую, если запущен внутри контейнера или активного Python-окружения с Django;
+- через development Docker Compose, если запускается на хосте без установленного Django.
+
+Выполняемые Django-команды:
 
 ```bash
-python manage.py migrate
+python manage.py migrate --noinput
 python manage.py seed_data
 ```
 
@@ -154,11 +165,11 @@ python manage.py create_student_accounts
 python manage.py ensure_superuser
 ```
 
-Для Docker-запуска добавляйте `exec web`:
+Для Docker можно использовать как общий скрипт на хосте, так и запуск внутри контейнера:
 
 ```bash
+./scripts/seed_all.sh
 docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml exec web ./scripts/seed_all.sh
-docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml exec web python manage.py seed_data
 ```
 
 После `seed_data` создается тестовый администратор:
@@ -218,6 +229,13 @@ login,temporary_password,student_phone
 
 Команды экспорта не удаляют записи из базы.
 
+Для production-контейнера доступен вспомогательный скрипт. Необязательный аргумент задаёт путь итогового файла:
+
+```bash
+./scripts/exp_tc.sh
+./scripts/exp_tc.sh exports/students.csv
+```
+
 Для Docker-запуска:
 
 ```bash
@@ -233,7 +251,7 @@ docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.y
 /admin/student-credentials/export.xlsx
 ```
 
-Доступ разрешен только сотруднику (`is_staff=True`). Файл содержит логин, временный пароль и телефон ученика.
+Доступ разрешён только суперпользователю. Файл содержит логин, временный пароль, телефон ученика и связанную заявку, если она есть. Экспорт принимает только GET-запросы.
 
 ## Тесты и проверки
 
@@ -249,10 +267,11 @@ Django system check:
 python manage.py check
 ```
 
-Линтинг в CI выполняется через `ruff`:
+Линтинг в CI выполняется через закреплённую версию Ruff из `requirements-dev.txt`:
 
 ```bash
-pip install ruff
+pip install -r requirements-dev.txt
+pip check
 ruff check .
 ```
 

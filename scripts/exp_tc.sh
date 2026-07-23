@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-output="export.csv"
+output="${1:-export.csv}"
 
 if [ ! -f ".env.prod" ]; then
   echo "Ошибка: файл .env.prod не найден в корне проекта."
@@ -27,11 +27,13 @@ COMPOSE_CMD=(
   -f docker-compose.prod.yml
 )
 
+container_output="/tmp/$(basename "$output")"
+
 echo "=== Экспорт временных учетных данных ==="
 
 "${COMPOSE_CMD[@]}" exec -T web \
   python manage.py export_student_credentials_with_phone \
-  --output "/tmp/$output"
+  --output "$container_output"
 
 container_id="$("${COMPOSE_CMD[@]}" ps -q web)"
 
@@ -40,8 +42,8 @@ if [ -z "$container_id" ]; then
   exit 1
 fi
 
-"${DOCKER_CMD[@]}" cp "$container_id:/tmp/$output" "$output"
+mkdir -p "$(dirname "$output")"
+"${DOCKER_CMD[@]}" cp "$container_id:$container_output" "$output"
+"${COMPOSE_CMD[@]}" exec -T web rm -f "$container_output"
 
 echo "Экспорт выполнен: $output"
-
-nano "$output"

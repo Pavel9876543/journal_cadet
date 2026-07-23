@@ -2,37 +2,37 @@
 
 ## Что реализовано
 
-- CI: линтинг + проверки Django + тесты + проверка сборки Docker-образа
-- CD: при push в `main` обновляет код на сервере по SSH и запускает production-стек
-- Для production образ собирается на сервере из текущего кода
-- Суперпользователь создаётся/проверяется автоматически при старте контейнера
-- Контейнеры автоматически поднимаются после перезагрузки через `restart: unless-stopped`
+- CI: закреплённые зависимости, Ruff, проверки миграций и Django, тесты, production security check, сборка статики и проверка запуска Docker-образа.
+- CD: при push в `main` обновляет код на сервере по SSH, атомарно формирует `.env.prod` и запускает production-стек.
+- Production-образ собирается на сервере из текущего коммита; внешний container registry не требуется.
+- Суперпользователь создаётся или проверяется автоматически при старте контейнера.
+- Контейнеры автоматически поднимаются после перезагрузки через `restart: unless-stopped`.
+- Опасные инструменты создания тестовых данных и очистки базы в production принудительно отключены.
 
 ## Поведение файлов окружения
 
-Каждый Docker-скрипт запуска готовит только свой env-файл:
+Каждый Docker-скрипт использует только свой env-файл:
 
-- Локальный запуск использует только `.env.dev` (если файла нет, создаётся из `.env.dev.example`)
-- Продакшен-запуск использует только `.env.prod` (если файла нет, создаётся из `.env.prod.example`)
-- Если целевой файл уже существует, он не перезаписывается
+- локальный запуск — `.env.dev`;
+- production-запуск — `.env.prod`;
+- если файла нет, он создаётся из соответствующего `.example`;
+- существующий файл не перезаписывается локальными скриптами;
+- CD создаёт новый `.env.prod` во временном файле с правами текущего пользователя и затем атомарно заменяет рабочий файл.
 
-Это означает, что перед запуском через скрипты не нужно вручную копировать env-файлы.
+Подготовка файлов вручную:
 
-## Локальный запуск Docker (GitHub не нужен)
+```bash
+./scripts/ensure-env-files.sh .env.dev
+./scripts/ensure-env-files.sh .env.prod
+```
 
-Для локальной разработки доступ к GitHub не требуется.
+## Локальный запуск Docker
 
 ```bash
 ./scripts/run-local.sh
 ```
 
-Скрипт автоматически подготовит env-файлы и запустит:
-
-```bash
-docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-```
-
-Откройте: `http://localhost:8000`
+Скрипт подготовит `.env.dev`, соберёт образ и запустит development-стек. Приложение будет доступно по адресу `http://localhost:8000`.
 
 Для Windows:
 
@@ -40,76 +40,91 @@ docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.y
 scripts\start-docker.cmd
 ```
 
-## 1) Обязательные настройки репозитория (GitHub Actions)
+## 1. Настройки GitHub Actions
 
-Задаются в репозитории GitHub: `Settings` -> `Secrets and variables`.
+Откройте `Settings` → `Secrets and variables` → `Actions`.
 
-Эти настройки нужны для CI/CD и автодеплоя на сервер, но не для локального запуска Docker.
-
-### Секреты (`Actions secrets`)
+### Secrets
 
 Инфраструктура:
-- `SSH_HOST`
-- `SSH_USER`
-- `SSH_PASSWORD`
-- `SSH_PORT` (обычно `22`)
-- `GHCR_PULL_USER` (опционально, если пакет образа публичный)
-- `GHCR_PULL_TOKEN` (опционально, если пакет образа публичный)
+
+- `SSH_HOST`;
+- `SSH_USER`;
+- `SSH_PASSWORD`;
+- `SSH_PORT` — обычно `22`.
 
 Приложение и база данных:
-- `DJANGO_SECRET_KEY`
-- `DJANGO_ALLOWED_HOSTS` (пример: `example.com,www.example.com`)
-- `DJANGO_CSRF_TRUSTED_ORIGINS` (пример: `https://example.com,https://www.example.com`)
-- `POSTGRES_DB`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `DATA_TOOLS_PASSWORD`
+
+- `DJANGO_SECRET_KEY`;
+- `DJANGO_ALLOWED_HOSTS` — например `example.com,www.example.com`;
+- `DJANGO_CSRF_TRUSTED_ORIGINS` — например `https://example.com,https://www.example.com`;
+- `POSTGRES_DB`;
+- `POSTGRES_USER`;
+- `POSTGRES_PASSWORD`;
+- `DATA_TOOLS_PASSWORD` — может быть пустым, потому что опасные инструменты в production отключены.
 
 Суперпользователь:
-- `DJANGO_SUPERUSER_USERNAME`
-- `DJANGO_SUPERUSER_EMAIL`
-- `DJANGO_SUPERUSER_PASSWORD`
-- `DJANGO_SUPERUSER_ROTATE_PASSWORD` (`0` или `1`)
 
-GitHub Secrets с префиксом `DJANGO_` используются только в workflow. При деплое они записываются в `.env.prod` как `SECRET_KEY`, `ALLOWED_HOSTS` и `CSRF_TRUSTED_ORIGINS`, которые читает Django-приложение.
+- `DJANGO_SUPERUSER_USERNAME`;
+- `DJANGO_SUPERUSER_EMAIL`;
+- `DJANGO_SUPERUSER_PASSWORD`;
+- `DJANGO_SUPERUSER_ROTATE_PASSWORD` — `0` или `1`.
 
-### Переменные (`Actions variables`)
+### Variables
 
-- `REPO_CLONE_URL` (пример: `git@github.com:ORG/REPO.git`)
-- `APP_DIR` (пример: `/opt/cadet_journal`)
+- `REPO_CLONE_URL` — например `git@github.com:ORG/REPO.git`;
+- `APP_DIR` — например `/opt/cadet_journal`.
 
-## 2) Одноразовая подготовка сервера
+## 2. Требования к серверу
 
-```bash
-sudo systemctl enable docker
-sudo systemctl start docker
-```
+CD поддерживает Debian и Ubuntu с `apt-get`. Пользователь должен быть `root` либо иметь `sudo` без интерактивного ввода пароля. Workflow при необходимости устанавливает Docker Engine и Docker Compose plugin.
 
-## 3) Первый деплой / деплой на новый сервер
+Репозиторий должен быть доступен серверу по адресу из `REPO_CLONE_URL`. Для SSH-адреса добавьте серверный публичный ключ в deploy keys репозитория.
 
-1. Один раз добавьте все секреты и переменные в настройках GitHub-репозитория.
-2. Убедитесь, что на сервере есть SSH-доступ и установлен Docker.
-3. Запустите GitHub Action `CD` (вручную через `workflow_dispatch`) или выполните push в `main`.
+## 3. Первый деплой
 
-Во время деплоя workflow выполнит:
-- клонирование репозитория, если его ещё нет на сервере
-- генерацию `.env.prod` из секретов
-- сборку свежего Docker-образа на сервере
-- запуск `docker compose up -d`
-- применение миграций и проверку/создание суперпользователя при старте контейнера
+1. Добавьте secrets и variables.
+2. Проверьте SSH-доступ к серверу и доступ сервера к репозиторию.
+3. Запустите workflow `CD` вручную через `workflow_dispatch` либо выполните push в `main`.
 
-## 4) Ежедневный быстрый процесс деплоя
+Workflow:
 
-1. Сделать push коммита в `main`
-2. Дождаться прохождения CI
-3. CD автоматически соберёт образ и выполнит деплой
+1. проверит обязательные переменные;
+2. установит Docker при необходимости;
+3. клонирует или обновит репозиторий;
+4. сбросит серверную рабочую копию точно к `origin/main`;
+5. атомарно создаст `.env.prod`;
+6. соберёт и запустит production-стек;
+7. применит миграции, проверит суперпользователя и соберёт статику через entrypoint.
 
-## 5) Ручной запуск production из репозитория на сервере
+## 4. Обычный деплой
 
-Если запускаете production вручную из клонированного репозитория:
+1. Сделайте push в `main`.
+2. Убедитесь, что CI завершился успешно.
+3. CD автоматически развернёт этот коммит на сервере.
+
+## 5. Ручной production-запуск
+
+В уже клонированном репозитории:
 
 ```bash
 ./scripts/run-prod.sh
 ```
 
-Этот скрипт также автоматически создаёт `.env.prod` из `.env.prod.example`, если `.env.prod` отсутствует.
+Для обновления текущей ветки и запуска:
+
+```bash
+./scripts/deploy-server.sh
+```
+
+Для первичного клонирования на сервер:
+
+```bash
+./scripts/bootstrap-server.sh git@github.com:ORG/REPO.git /opt/cadet_journal
+```
+
+Перед ручным запуском обязательно замените placeholder-значения в `.env.prod`; с тестовым `SECRET_KEY` Django намеренно не стартует.
+
+## 6. Резервное копирование
+
+Production Compose запускает отдельный сервис `backup`, который сохраняет архивы PostgreSQL в volume `pg_backups`. Инструкция по проверке и восстановлению: `docs/backup-restore.md`.

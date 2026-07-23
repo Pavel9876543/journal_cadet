@@ -15,20 +15,29 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! docker compose version >/dev/null 2>&1; then
+  echo "Плагин Docker Compose недоступен."
+  exit 1
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=()
+elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  SUDO=(sudo -n)
+else
+  echo "Ошибка: для подготовки $TARGET_DIR нужны права root или sudo без запроса пароля."
+  exit 1
+fi
+
 if [[ ! -d "$TARGET_DIR/.git" ]]; then
-  sudo mkdir -p "$TARGET_DIR"
-  sudo chown -R "$USER":"$USER" "$TARGET_DIR"
+  "${SUDO[@]}" mkdir -p "$TARGET_DIR"
+  "${SUDO[@]}" chown -R "$USER":"$USER" "$TARGET_DIR"
   git clone "$REPO_URL" "$TARGET_DIR"
 else
   echo "Репозиторий уже существует в $TARGET_DIR, пропускаем клонирование."
 fi
 
 cd "$TARGET_DIR"
-
-./scripts/ensure-env-files.sh .env.prod
-
-docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-
-docker update --restart unless-stopped cadet-journal-web-1 cadet-journal-db-1 || true
+./scripts/run-prod.sh
 
 echo "Подготовка сервера завершена."

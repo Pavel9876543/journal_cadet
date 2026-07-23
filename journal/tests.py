@@ -4032,12 +4032,10 @@ class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
 
         try:
             call_command('export_temporary_credentials', stdout=output)
-        except Exception as exc:  # pragma: no cover
-            if exc.__class__.__name__ == 'CommandError':
-                self.skipTest(
-                    'Команда export_temporary_credentials не найдена в проекте.',
-                )
-            raise
+        except CommandError:  # pragma: no cover
+            self.skipTest(
+                'Команда export_temporary_credentials не найдена в проекте.',
+            )
 
         csv_output = output.getvalue()
 
@@ -4065,13 +4063,11 @@ class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
                     'export_student_credentials_with_phone',
                     output=str(output_path),
                 )
-            except Exception as exc:  # pragma: no cover
-                if exc.__class__.__name__ == 'CommandError':
-                    self.skipTest(
-                        'Команда export_student_credentials_with_phone '
-                        'не найдена в проекте.',
-                    )
-                raise
+            except CommandError:  # pragma: no cover
+                self.skipTest(
+                    'Команда export_student_credentials_with_phone '
+                    'не найдена в проекте.',
+                )
 
             csv_output = output_path.read_text(encoding='utf-8')
 
