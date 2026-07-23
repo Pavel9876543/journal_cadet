@@ -15,8 +15,9 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
+from django.views.decorators.http import require_GET
 
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -277,6 +278,7 @@ def clear_database_data() -> dict[str, int]:
 
 
 @superuser_required
+@require_GET
 async def admin_export_test_credentials_excel_view(request: HttpRequest) -> HttpResponse:
     return await _run_db_sync(_admin_export_test_credentials_excel_view_sync, request)
 
@@ -551,7 +553,7 @@ def safe_reverse(url_name: str) -> str | None:
     """
     try:
         return reverse(url_name)
-    except Exception:
+    except NoReverseMatch:
         return None
 
 
@@ -561,5 +563,5 @@ def get_admin_url(url_name: str, fallback: str = '/admin/') -> str:
     """
     try:
         return reverse(url_name)
-    except Exception:
+    except NoReverseMatch:
         return fallback

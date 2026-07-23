@@ -39,7 +39,6 @@ from .forms import (
     get_student_allowed_subjects,
     get_student_subject_teachers,
     get_students_for_group_subject,
-    get_teacher_groups,
     get_teacher_subjects,
 )
 from .grade_options import (
@@ -1837,6 +1836,7 @@ def _build_student_credentials_xlsx(rows):
 
 
 @user_passes_test(lambda user: user.is_active and user.is_superuser)
+@require_GET
 async def export_student_credentials_xlsx(request):
     return await _run_db_sync(_export_student_credentials_xlsx_sync, request)
 
@@ -1871,6 +1871,7 @@ def _export_student_credentials_xlsx_sync(request):
 
 
 @user_passes_test(lambda user: user.is_active and user.is_superuser)
+@require_GET
 async def export_all_data_excel(request):
     return await _run_db_sync(_export_all_data_excel_sync, request)
 

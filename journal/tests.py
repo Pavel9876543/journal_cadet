@@ -5,7 +5,6 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
-from zipfile import ZipFile
 
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
@@ -3302,6 +3301,13 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('Телефон ученика', rows[0])
         self.assertNotIn('Заявка', rows[0])
 
+    def test_admin_temporary_credentials_export_rejects_post(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(reverse('admin_export_test_credentials_excel'))
+
+        self.assertEqual(response.status_code, 405)
+
     def test_temporary_credentials_export_escapes_excel_formulas(self):
         TemporaryCredential.objects.create(
             login='=HYPERLINK("https://example.invalid")',
@@ -3317,6 +3323,13 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
             ("'=HYPERLINK(\"https://example.invalid\")", "'+1+1", None),
             rows,
         )
+
+    def test_temporary_credentials_export_rejects_post(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(reverse('export_student_credentials_xlsx'))
+
+        self.assertEqual(response.status_code, 405)
 
     def test_regular_user_cannot_download_temporary_credentials_xlsx(self):
         self.client.login(username='regular_xlsx', password='Pass12345!')
@@ -3486,6 +3499,13 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
             response['Content-Type'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
+
+    def test_full_export_rejects_post(self):
+        self.client.login(username='admin_xlsx', password='Pass12345!')
+
+        response = self.client.post(reverse('admin_export_all_data_excel'))
+
+        self.assertEqual(response.status_code, 405)
 
     def test_full_export_escapes_excel_formulas(self):
         Instrument.objects.create(name='=1+1')

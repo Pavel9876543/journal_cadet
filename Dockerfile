@@ -32,7 +32,9 @@ RUN pip install --no-index --find-links=/wheels /wheels/* && rm -rf /wheels
 
 COPY --chown=app:app . .
 COPY --chown=app:app docker/entrypoint.sh /entrypoint.sh
-RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+RUN mkdir -p /app/staticfiles \
+    && chown -R app:app /app \
+    && sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 USER app
 

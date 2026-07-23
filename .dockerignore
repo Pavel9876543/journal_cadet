@@ -21,3 +21,8 @@ secrets
 secrets.csv
 export.csv
 *_students.csv
+
+exports
+backups
+*.dump
+*.xlsx

@@ -10,7 +10,6 @@ from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.db.models.deletion import ProtectedError
 from django.urls import reverse
 from django.utils.html import format_html
-from django.utils.translation import gettext_lazy as _
 
 from .account_utils import (
     build_username_from_full_name,
