@@ -42,8 +42,7 @@ Django-приложение для ведения журнала кадет/уч
 - `pas_key_data` или `DATA_TOOLS_PASSWORD` - пароль подтверждения для опасных инструментов данных в админке.
 - `TRUST_X_FORWARDED_FOR=1` - доверять первому IP из `X-Forwarded-For`, только если reverse proxy очищает этот заголовок.
 - `WAIT_FOR_DB=1` - ждать доступности PostgreSQL при старте контейнера.
-- `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`, `DJANGO_SUPERUSER_PASSWORD` - данные суперпользователя.
-- `DJANGO_SUPERUSER_ROTATE_PASSWORD=1` - принудительно обновлять пароль существующего суперпользователя.
+- `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`, `DJANGO_SUPERUSER_PASSWORD` - данные суперпользователя. Пароль применяется только при первом создании аккаунта и не меняется при последующих запусках.
 
 ## Локальный запуск через Docker
 

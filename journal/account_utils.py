@@ -85,7 +85,6 @@ def ensure_temporary_credential_for_user(
     user: User,
     *,
     password: str | None = None,
-    reset_missing_password: bool = False,
 ):
     from .models import TemporaryCredential
 
@@ -102,13 +101,6 @@ def ensure_temporary_credential_for_user(
         .order_by('id')
         .first()
     )
-    password_is_missing = credential is None or not credential.temporary_password
-
-    if password is None and reset_missing_password and password_is_missing:
-        password = generate_temporary_password()
-        user.set_password(password)
-        user.save(update_fields=['password'])
-
     student_phone = user_student_phone(user)
 
     if credential is None:

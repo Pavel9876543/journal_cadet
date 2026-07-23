@@ -67,8 +67,7 @@ scripts\start-docker.cmd
 
 - `DJANGO_SUPERUSER_USERNAME`;
 - `DJANGO_SUPERUSER_EMAIL`;
-- `DJANGO_SUPERUSER_PASSWORD`;
-- `DJANGO_SUPERUSER_ROTATE_PASSWORD` — `0` или `1`.
+- `DJANGO_SUPERUSER_PASSWORD` — используется только при первом создании суперпользователя;
 
 ### Variables
 

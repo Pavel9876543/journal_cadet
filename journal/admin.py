@@ -230,6 +230,10 @@ class UserAdmin(JournalAdminDescriptionMixin, BaseUserAdmin):
                     obj,
                     password=temporary_password,
                 )
+        elif user_has_temporary_credential(obj):
+            # Keep login/profile metadata in sync without ever rotating the
+            # password or creating a new temporary credential on edit.
+            ensure_temporary_credential_for_user(obj)
 
     @admin.display(description='Профиль журнала')
     def journal_profile_display(self, obj):

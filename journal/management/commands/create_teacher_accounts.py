@@ -9,19 +9,11 @@ from journal.models import Teacher
 class Command(BaseCommand):
     help = 'Создает/обновляет учетные записи преподавателей и выводит логины/пароли.'
 
-    def add_arguments(self, parser):
-        parser.add_argument(
-            '--reset-existing',
-            action='store_true',
-            help='Сбросить логины и временные пароли уже связанным пользователям.',
-        )
-
     @transaction.atomic
     def handle(self, *args, **options):
         User = get_user_model()
         credentials = []
         used_usernames = set(User.objects.values_list('username', flat=True))
-        reset_existing = options['reset_existing']
 
         for teacher in Teacher.objects.select_related('user').order_by('id'):
             user_is_new = teacher.user is None
@@ -32,7 +24,7 @@ class Command(BaseCommand):
             first_name, last_name = account_utils.split_user_name(teacher.full_name)
             password = None
 
-            if user_is_new or reset_existing:
+            if user_is_new:
                 username = account_utils.build_username_from_full_name(
                     teacher.full_name,
                     existing_usernames=used_usernames,

@@ -67,8 +67,11 @@ class Command(DjangoCreateSuperUserCommand):
 
         admin_group, _created = Group.objects.get_or_create(name='Администратор')
         user.groups.add(admin_group)
+        if self._captured_superuser_password is None:
+            raise RuntimeError(
+                'Created superuser password was not captured; temporary credentials were not stored.'
+            )
         ensure_temporary_credential_for_user(
             user,
             password=self._captured_superuser_password,
-            reset_missing_password=self._captured_superuser_password is None,
         )

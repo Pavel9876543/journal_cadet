@@ -5,10 +5,7 @@ from django.contrib.auth.models import Group, Permission
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from journal.account_utils import (
-    ensure_temporary_credential_for_user,
-    user_has_temporary_credential,
-)
+from journal.account_utils import ensure_temporary_credential_for_user
 
 
 class Command(BaseCommand):
@@ -56,9 +53,6 @@ class Command(BaseCommand):
             if not user.is_active:
                 user.is_active = True
                 changed = True
-            if os.getenv("DJANGO_SUPERUSER_ROTATE_PASSWORD", "0") == "1":
-                user.set_password(password)
-                changed = True
 
         if changed:
             user.save()
@@ -66,17 +60,8 @@ class Command(BaseCommand):
         admin_group, _created = Group.objects.get_or_create(name="Администратор")
         user.groups.add(admin_group)
 
-        rotate_password = os.getenv("DJANGO_SUPERUSER_ROTATE_PASSWORD", "0") == "1"
-        credential_password = None
-        if created or rotate_password:
-            credential_password = password
-        elif not user_has_temporary_credential(user) and user.check_password(password):
-            # Recreate a deleted row only when the configured password is still
-            # the user's real password. Never store a password that cannot log in.
-            credential_password = password
-
-        if credential_password is not None:
-            ensure_temporary_credential_for_user(user, password=credential_password)
+        if created:
+            ensure_temporary_credential_for_user(user, password=password)
 
         # Defensive: explicitly grant every model permission in addition to is_superuser.
         all_perms = Permission.objects.all()

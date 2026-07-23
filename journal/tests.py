@@ -939,6 +939,30 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
         self.assertEqual(student.comments, 'Нужен вечерний поток')
         self.assertEqual(credential.student_phone, '+7 (999) 123-45-69')
 
+    def test_confirmed_application_update_preserves_password_and_temporary_password(self):
+        with patch(
+            'journal.account_utils.generate_temporary_password',
+            return_value='Temp12345!',
+        ):
+            application = CourseApplication.objects.create(
+                **self.application_payload(),
+            )
+
+        user = application.user
+        credential = TemporaryCredential.objects.get(course_application=application)
+        original_password_hash = user.password
+        original_temporary_password = credential.temporary_password
+
+        application.first_name = 'Пётр'
+        application.comments = 'Данные заявки изменены'
+        application.save()
+
+        user.refresh_from_db()
+        credential.refresh_from_db()
+        self.assertEqual(user.password, original_password_hash)
+        self.assertEqual(credential.temporary_password, original_temporary_password)
+        self.assertTrue(user.check_password(original_temporary_password))
+
     def test_confirmed_applications_add_suffix_for_duplicate_login(self):
         with patch(
             'journal.account_utils.generate_temporary_password',
@@ -2826,6 +2850,27 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertTrue(credential.temporary_password)
         self.assertTrue(teacher.user.check_password(credential.temporary_password))
 
+    def test_teacher_admin_update_preserves_password_and_temporary_password(self):
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Teacher]
+        teacher = Teacher(full_name='Новый Преподаватель')
+        model_admin.save_model(request, teacher, form=None, change=False)
+
+        user = teacher.user
+        credential = TemporaryCredential.objects.get(user=user)
+        original_password_hash = user.password
+        original_temporary_password = credential.temporary_password
+
+        teacher.full_name = 'Обновлённый Преподаватель'
+        teacher.phone = '+7 (999) 555-44-33'
+        model_admin.save_model(request, teacher, form=None, change=True)
+
+        user.refresh_from_db()
+        credential.refresh_from_db()
+        self.assertEqual(user.password, original_password_hash)
+        self.assertEqual(credential.temporary_password, original_temporary_password)
+        self.assertTrue(user.check_password(original_temporary_password))
+
     def test_teacher_admin_does_not_reset_password_of_selected_existing_user(self):
         request = type('Request', (), {'user': self.admin_user})()
         model_admin = django_admin.site._registry[Teacher]
@@ -2866,6 +2911,33 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credential.student_phone, '+7 (999) 111-22-33')
         self.assertTrue(credential.temporary_password)
         self.assertTrue(student.user.check_password(credential.temporary_password))
+
+    def test_student_admin_update_preserves_password_and_temporary_password(self):
+        request = type('Request', (), {'user': self.admin_user})()
+        model_admin = django_admin.site._registry[Student]
+        student = Student(
+            full_name='Новый Ученик',
+            group=self.create_group(),
+            instrument=self.create_instrument(),
+            student_phone='+7 (999) 111-22-33',
+        )
+        model_admin.save_model(request, student, form=None, change=False)
+
+        user = student.user
+        credential = TemporaryCredential.objects.get(user=user)
+        original_password_hash = user.password
+        original_temporary_password = credential.temporary_password
+
+        student.full_name = 'Обновлённый Ученик'
+        student.student_phone = '+7 (999) 111-22-44'
+        model_admin.save_model(request, student, form=None, change=True)
+
+        user.refresh_from_db()
+        credential.refresh_from_db()
+        self.assertEqual(user.password, original_password_hash)
+        self.assertEqual(credential.temporary_password, original_temporary_password)
+        self.assertEqual(credential.student_phone, '+7 (999) 111-22-44')
+        self.assertTrue(user.check_password(original_temporary_password))
 
     def test_student_admin_does_not_reset_password_of_selected_existing_user(self):
         request = type('Request', (), {'user': self.admin_user})()
@@ -3913,6 +3985,58 @@ class UserCreationCredentialTests(JournalTestDataMixin, TestCase):
         self.assertTrue(user.check_password(credential.temporary_password))
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_user_admin_update_preserves_password_and_syncs_existing_credential(self):
+        admin_user = User.objects.create_superuser(
+            username='admin editor',
+            password='Pass12345!',
+        )
+        request = type('Request', (), {'user': admin_user})()
+        model_admin = django_admin.site._registry[User]
+        user = User.objects.create_user(
+            username='before edit',
+            password='ExistingPass123!',
+        )
+        credential = TemporaryCredential.objects.create(
+            user=user,
+            login=user.username,
+            temporary_password='ExistingPass123!',
+        )
+        original_password_hash = user.password
+
+        user.username = 'after edit'
+        user.email = 'updated@example.com'
+        model_admin.save_model(request, user, form=None, change=True)
+
+        user.refresh_from_db()
+        credential.refresh_from_db()
+        self.assertEqual(user.password, original_password_hash)
+        self.assertEqual(credential.login, 'after edit')
+        self.assertEqual(credential.temporary_password, 'ExistingPass123!')
+        self.assertTrue(user.check_password('ExistingPass123!'))
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_user_admin_update_does_not_create_temporary_password(self):
+        admin_user = User.objects.create_superuser(
+            username='admin editor without credential',
+            password='Pass12345!',
+        )
+        request = type('Request', (), {'user': admin_user})()
+        model_admin = django_admin.site._registry[User]
+        user = User.objects.create_user(
+            username='regular account',
+            password='ExistingPass123!',
+        )
+        original_password_hash = user.password
+
+        user.email = 'regular-updated@example.com'
+        model_admin.save_model(request, user, form=None, change=True)
+
+        user.refresh_from_db()
+        self.assertEqual(user.password, original_password_hash)
+        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
+        self.assertTrue(user.check_password('ExistingPass123!'))
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
     def test_ensure_superuser_creation_stores_temporary_credentials(self):
         env = {
             'DJANGO_SUPERUSER_USERNAME': 'container admin',
@@ -3929,31 +4053,57 @@ class UserCreationCredentialTests(JournalTestDataMixin, TestCase):
         self.assertTrue(user.check_password(credential.temporary_password))
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
-    def test_ensure_superuser_restores_missing_credential_only_for_matching_password(self):
+    def test_ensure_superuser_update_preserves_password_without_rotation(self):
+        user = User.objects.create_superuser(
+            username='existing managed admin',
+            email='old@example.com',
+            password='ActualAdmin123!',
+        )
+        credential = TemporaryCredential.objects.create(
+            user=user,
+            login=user.username,
+            temporary_password='ActualAdmin123!',
+        )
+        original_password_hash = user.password
+        env = {
+            'DJANGO_SUPERUSER_USERNAME': user.username,
+            'DJANGO_SUPERUSER_EMAIL': 'new@example.com',
+            'DJANGO_SUPERUSER_PASSWORD': 'DifferentConfiguredPassword123!',
+        }
+
+        with patch.dict('os.environ', env, clear=False):
+            call_command('ensure_superuser', stdout=StringIO())
+
+        user.refresh_from_db()
+        credential.refresh_from_db()
+        self.assertEqual(user.email, 'new@example.com')
+        self.assertEqual(user.password, original_password_hash)
+        self.assertEqual(credential.temporary_password, 'ActualAdmin123!')
+        self.assertTrue(user.check_password('ActualAdmin123!'))
+        self.assertFalse(user.check_password('DifferentConfiguredPassword123!'))
+
+    @override_settings(AUTH_PASSWORD_VALIDATORS=[])
+    def test_ensure_superuser_does_not_create_credentials_for_existing_user(self):
         user = User.objects.create_superuser(
             username='existing container admin',
             password='ActualAdmin123!',
         )
-        matching_env = {
+        original_password_hash = user.password
+        env = {
             'DJANGO_SUPERUSER_USERNAME': user.username,
-            'DJANGO_SUPERUSER_PASSWORD': 'ActualAdmin123!',
-            'DJANGO_SUPERUSER_ROTATE_PASSWORD': '0',
+            'DJANGO_SUPERUSER_EMAIL': 'updated-admin@example.com',
+            'DJANGO_SUPERUSER_PASSWORD': 'DifferentConfiguredPassword123!',
         }
-        with patch.dict('os.environ', matching_env, clear=False):
-            call_command('ensure_superuser', stdout=StringIO())
-        self.assertTrue(TemporaryCredential.objects.filter(user=user).exists())
 
-        TemporaryCredential.objects.filter(user=user).delete()
-        wrong_env = {
-            'DJANGO_SUPERUSER_USERNAME': user.username,
-            'DJANGO_SUPERUSER_PASSWORD': 'WrongPassword123!',
-            'DJANGO_SUPERUSER_ROTATE_PASSWORD': '0',
-        }
-        with patch.dict('os.environ', wrong_env, clear=False):
+        with patch.dict('os.environ', env, clear=False):
             call_command('ensure_superuser', stdout=StringIO())
-        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
+
         user.refresh_from_db()
+        self.assertEqual(user.email, 'updated-admin@example.com')
+        self.assertEqual(user.password, original_password_hash)
+        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
         self.assertTrue(user.check_password('ActualAdmin123!'))
+
 
 
 class SeedDataCommandTests(TestCase):

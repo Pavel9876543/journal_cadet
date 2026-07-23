@@ -281,10 +281,7 @@ class Command(BaseCommand):
             existing_credential = TemporaryCredential.objects.filter(user=user).first()
             if user.pk in getattr(self, 'protected_user_ids', set()) and existing_credential is None:
                 continue
-            credential = ensure_temporary_credential_for_user(
-                user,
-                reset_missing_password=user.pk not in getattr(self, 'protected_user_ids', set()),
-            )
+            credential = ensure_temporary_credential_for_user(user)
             if credential is None:
                 continue
             if user.username in exported_logins:
