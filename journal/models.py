@@ -1928,7 +1928,12 @@ class CourseApplication(models.Model):
             if self.pk:
                 duplicate_qs = duplicate_qs.exclude(pk=self.pk)
             if duplicate_qs.exists():
-                raise ValidationError({'student_phone': 'Ученик с таким номером телефона уже зарегистрирован.'})
+                raise ValidationError({
+                    'student_phone': ValidationError(
+                        'Ученик с таким номером телефона уже зарегистрирован.',
+                        code='duplicate_phone_for_year',
+                    ),
+                })
 
         if self.parent_contacts:
             self.parent_contacts = normalize_parent_contacts(self.parent_contacts)

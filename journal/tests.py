@@ -56,7 +56,10 @@ from journal.grade_options import (
     get_grade_teachers,
 )
 from journal.registration_utils import minimum_birth_date_for_age, normalize_parent_contacts
-from journal.views import _build_journal_tables
+from journal.views import (
+    _build_journal_tables,
+    _is_duplicate_course_application_phone_error,
+)
 from journal.models import (
     AcademicYear,
     CourseApplication,
@@ -2123,6 +2126,33 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 password='NewPass12345!',
             ),
         )
+
+
+class CourseApplicationDuplicateErrorTests(TestCase):
+    def test_recognizes_late_model_validation_duplicate(self):
+        error = ValidationError({
+            'student_phone': ValidationError(
+                'duplicate',
+                code='duplicate_phone_for_year',
+            ),
+        })
+        self.assertTrue(_is_duplicate_course_application_phone_error(error))
+
+    def test_does_not_mask_unrelated_validation_error(self):
+        error = ValidationError({'birth_date': 'invalid'})
+        self.assertFalse(_is_duplicate_course_application_phone_error(error))
+
+    def test_recognizes_sqlite_unique_error_shape(self):
+        error = IntegrityError(
+            'UNIQUE constraint failed: '
+            'journal_courseapplication.academic_year_id, '
+            'journal_courseapplication.student_phone'
+        )
+        self.assertTrue(_is_duplicate_course_application_phone_error(error))
+
+    def test_does_not_mask_unrelated_integrity_error(self):
+        error = IntegrityError('NOT NULL constraint failed: other.field')
+        self.assertFalse(_is_duplicate_course_application_phone_error(error))
 
 
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL concurrency test')

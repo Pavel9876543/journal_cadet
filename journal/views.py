@@ -1633,6 +1633,46 @@ def _get_application_credential(application: CourseApplication):
     return TemporaryCredential.objects.filter(course_application=application).first()
 
 
+COURSE_APPLICATION_PHONE_CONSTRAINT = 'unique_course_app_phone_per_year'
+COURSE_APPLICATION_DUPLICATE_PHONE_MESSAGE = (
+    'Заявка с этим номером телефона уже зарегистрирована на текущий учебный год.'
+)
+
+
+def _is_duplicate_course_application_phone_error(exc: Exception) -> bool:
+    if isinstance(exc, ValidationError):
+        errors = getattr(exc, 'error_dict', {}).get('student_phone', [])
+        return any(
+            getattr(error, 'code', None) == 'duplicate_phone_for_year'
+            for error in errors
+        )
+
+    if isinstance(exc, IntegrityError):
+        cause = exc.__cause__
+        diagnostic = getattr(cause, 'diag', None)
+        constraint_name = getattr(diagnostic, 'constraint_name', None)
+        if constraint_name:
+            return constraint_name == COURSE_APPLICATION_PHONE_CONSTRAINT
+
+        # SQLite and some database adapters don't expose constraint_name.
+        message = str(exc).lower()
+        return (
+            COURSE_APPLICATION_PHONE_CONSTRAINT in message
+            or (
+                'courseapplication' in message
+                and 'academic_year' in message
+                and 'student_phone' in message
+                and ('unique' in message or 'duplicate' in message)
+            )
+        )
+
+    return False
+
+
+def _add_duplicate_phone_form_error(form) -> None:
+    form.add_error('student_phone', COURSE_APPLICATION_DUPLICATE_PHONE_MESSAGE)
+
+
 async def course_registration_view(request):
     return await _run_db_sync(_course_registration_view_sync, request)
 
@@ -1667,11 +1707,10 @@ def _course_registration_view_sync(request):
     if request.method == 'POST' and form.is_valid():
         try:
             application = form.save()
-        except IntegrityError:
-            form.add_error(
-                'student_phone',
-                'Заявка с этим номером телефона уже зарегистрирована на текущий учебный год.',
-            )
+        except (ValidationError, IntegrityError) as exc:
+            if not _is_duplicate_course_application_phone_error(exc):
+                raise
+            _add_duplicate_phone_form_error(form)
             return render(
                 request,
                 'journal/course_registration.html',
@@ -1733,14 +1772,13 @@ def _course_registration_api_sync(request):
     if form.is_valid():
         try:
             application = form.save()
-        except IntegrityError:
+        except (ValidationError, IntegrityError) as exc:
+            if not _is_duplicate_course_application_phone_error(exc):
+                raise
             return JsonResponse(
                 {
                     'success': False,
-                    'message': (
-                        'Заявка с этим номером телефона уже зарегистрирована '
-                        'на текущий учебный год.'
-                    ),
+                    'message': COURSE_APPLICATION_DUPLICATE_PHONE_MESSAGE,
                     'errors': {
                         'student_phone': [
                             'Этот номер телефона уже используется в заявке.',
