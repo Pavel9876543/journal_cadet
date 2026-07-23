@@ -77,6 +77,7 @@ def _admin_guide_view_sync(request: HttpRequest) -> HttpResponse:
         'results_url': reverse('admin:journal_subjectresult_changelist'),
         'applications_url': reverse('admin:journal_courseapplication_changelist'),
         'temporary_credentials_url': reverse('admin:journal_temporarycredential_changelist'),
+        'academic_years_url': reverse('admin:journal_academicyear_changelist'),
         'settings_url': reverse('admin:journal_courseregistrationsettings_changelist'),
         'password_contacts_url': reverse('admin:journal_passwordrecoverycontact_changelist'),
         'data_tools_url': reverse('admin_data_tools'),

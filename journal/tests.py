@@ -1947,6 +1947,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(admin_response.status_code, 200)
         self.assertContains(admin_response, 'Как работать с журналом')
+        self.assertContains(admin_response, reverse('admin:journal_academicyear_changelist'))
+        self.assertContains(admin_response, 'Архивный год можно открыть в фильтре журнала')
         self.assertContains(admin_response, reverse('admin:journal_student_changelist'))
         self.assertContains(admin_response, reverse('admin_data_tools'))
 
