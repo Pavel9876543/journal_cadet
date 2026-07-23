@@ -61,29 +61,31 @@ def get_admin_academic_year_context(request) -> dict:
 
 
 def academic_year_ids_for_user(user) -> Iterable[int]:
-    """Return only academic years the user is allowed to open in the journal."""
+    """Return only academic years the user participated in."""
     from .models import AcademicYear
 
     if not getattr(user, 'is_authenticated', False):
-        return AcademicYear.objects.none().values_list('pk', flat=True)
+        return ()
     if user.is_superuser:
         return AcademicYear.objects.values_list('pk', flat=True)
 
+    year_ids: set[int] = set()
     try:
         student = user.student_profile
     except ObjectDoesNotExist:
         student = None
     if student is not None:
-        return student.enrollments.values_list('academic_year_id', flat=True)
+        year_ids.update(student.enrollments.values_list('academic_year_id', flat=True))
 
     try:
         teacher = user.teacher_profile
     except ObjectDoesNotExist:
         teacher = None
     if teacher is not None:
-        return teacher.academic_year_memberships.filter(is_active=True).values_list(
-            'academic_year_id',
-            flat=True,
+        # An inactive membership still proves that the teacher participated in
+        # the year and therefore may inspect its archived journal.
+        year_ids.update(
+            teacher.academic_year_memberships.values_list('academic_year_id', flat=True),
         )
 
-    return AcademicYear.objects.none().values_list('pk', flat=True)
+    return year_ids

@@ -1241,7 +1241,12 @@ def _journal_for_teacher(
     groups = get_grade_groups(teacher=teacher, academic_year=selected_academic_year).select_related('academic_year')
     selected_group = _get_selected_object(groups, selected_group_id)
     groups_to_show = [selected_group] if selected_group else []
-    can_edit_journal = _can_edit_academic_year(selected_academic_year)
+    selected_membership = teacher.membership_for_year(selected_academic_year)
+    can_edit_journal = bool(
+        _can_edit_academic_year(selected_academic_year)
+        and selected_membership
+        and selected_membership.is_active
+    )
 
     subjects = get_teacher_subjects(
         teacher,
@@ -1317,6 +1322,17 @@ def _journal_for_teacher(
     )
     if archived_post_response is not None:
         return archived_post_response
+
+    if request.method == 'POST' and not can_edit_journal:
+        messages.error(
+            request,
+            'Ваше участие в выбранном учебном году доступно только для просмотра.',
+        )
+        return _redirect_journal(
+            group=selected_group,
+            subject=selected_subject,
+            academic_year=selected_academic_year,
+        )
 
     grade_form = None
     if can_edit_journal:

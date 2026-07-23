@@ -2408,6 +2408,60 @@ class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
         self.assertEqual(list(response.context['academic_years']), [old_year])
 
 
+    def test_inactive_teacher_membership_remains_viewable_but_not_editable(self):
+        year = self.create_academic_year()
+        teacher = self.create_teacher()
+        membership = TeacherEnrollment.objects.get(teacher=teacher, academic_year=year)
+        membership.is_active = False
+        membership.save()
+        teacher.refresh_from_db()
+        self.client.force_login(teacher.user)
+
+        response = self.client.get(reverse('journal'), {'academic_year': year.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['selected_academic_year'], year)
+        self.assertFalse(response.context['can_edit_journal'])
+
+
+    def test_inactive_teacher_cannot_bypass_read_only_mode_with_post(self):
+        data = self.create_base_journal()
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 15),
+            value='5',
+        )
+        membership = TeacherEnrollment.objects.get(
+            teacher=data['teacher'],
+            academic_year=data['year'],
+        )
+        membership.is_active = False
+        membership.save(update_fields=['is_active'])
+        self.client.force_login(data['teacher'].user)
+
+        response = self.client.post(
+            (
+                f'{reverse("journal")}?group={data["group"].pk}'
+                f'&subject={data["solfeggio"].pk}'
+                f'&academic_year={data["year"].pk}'
+            ),
+            data={
+                'action': 'inline_edit',
+                (
+                    f'grade__{data["solfeggio"].pk}__'
+                    f'{data["student"].pk}__2025-10-15'
+                ): '2',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '5')
+
+
 class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
     def setUp(self):
         self.superuser = User.objects.create_superuser(
@@ -2568,6 +2622,21 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
                 is_active=True,
             ).exists(),
         )
+
+    def test_every_non_global_admin_disables_add_and_delete_in_archive_mode(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        self.create_academic_year(name='2026/2027')
+        request = self.admin_request(old_year)
+        global_models = {CourseRegistrationSettings, PasswordRecoveryContact}
+
+        for model, model_admin in django_admin.site._registry.items():
+            if model in global_models:
+                continue
+            if model._meta.app_label not in {'journal', 'auth'}:
+                continue
+            with self.subTest(model=model._meta.label):
+                self.assertFalse(model_admin.has_add_permission(request))
+                self.assertFalse(model_admin.has_delete_permission(request))
 
     def test_global_registration_and_recovery_settings_remain_editable_in_archive_mode(self):
         old_year = self.create_academic_year(name='2025/2026')
