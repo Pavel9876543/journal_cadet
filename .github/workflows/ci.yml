@@ -104,3 +104,28 @@ jobs:
           docker run --rm --entrypoint sh cadet-journal:ci -c 'test -w /app && test -w /app/staticfiles'
           docker run --rm --entrypoint python cadet-journal:ci manage.py check
           docker run --rm --entrypoint python cadet-journal:ci manage.py collectstatic --noinput --clear
+
+      - name: Production-like HTTP healthcheck
+        run: |
+          container_id="$(docker run -d \
+            -e DJANGO_ENV=production \
+            -e DEBUG=0 \
+            -e SECRET_KEY=ci-only-container-secret-key-with-more-than-fifty-characters-2026 \
+            -e ALLOWED_HOSTS=example.com \
+            -e SECURE_SSL_REDIRECT=1 \
+            -e USE_X_FORWARDED_PROTO=1 \
+            -e DB_ENGINE=django.db.backends.sqlite3 \
+            -e DB_NAME=/tmp/journal-smoke.sqlite3 \
+            cadet-journal:ci)
+          trap 'docker logs "$container_id" || true; docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+
+          healthy=0
+          for _ in $(seq 1 30); do
+            if docker exec "$container_id" python /app/docker/healthcheck.py; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+
+          test "$healthy" -eq 1

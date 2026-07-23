@@ -46,6 +46,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ImproperlyConfigured(f'{name} must be a positive integer.') from exc
+    if value < 1:
+        raise ImproperlyConfigured(f'{name} must be a positive integer.')
+    return value
+
+
 DEBUG = _env_bool('DEBUG', not IS_PRODUCTION_ENV)
 SECRET_KEY = os.getenv('SECRET_KEY', '')
 if not SECRET_KEY:
@@ -278,3 +291,4 @@ if _env_bool('USE_X_FORWARDED_PROTO', False):
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 TRUST_X_FORWARDED_FOR = _env_bool('TRUST_X_FORWARDED_FOR', False)
+TRUSTED_PROXY_COUNT = _env_positive_int('TRUSTED_PROXY_COUNT', 1)

@@ -3207,6 +3207,31 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 429)
         self.assertFalse(response.json()['success'])
 
+    @override_settings(TRUST_X_FORWARDED_FOR=True, TRUSTED_PROXY_COUNT=1)
+    def test_registration_rate_limit_uses_ip_appended_by_trusted_proxy(self):
+        url = reverse('course_registration_api')
+
+        for attempt in range(10):
+            response = self.client.post(
+                url,
+                data='{}',
+                content_type='application/json',
+                REMOTE_ADDR='172.18.0.1',
+                HTTP_X_FORWARDED_FOR=f'198.51.100.{attempt}, 203.0.113.10',
+            )
+            self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            url,
+            data='{}',
+            content_type='application/json',
+            REMOTE_ADDR='172.18.0.1',
+            HTTP_X_FORWARDED_FOR='198.51.100.250, 203.0.113.10',
+        )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertFalse(response.json()['success'])
+
 
 class AsyncDatabaseViewTests(TestCase):
     def test_healthcheck_verifies_database_connection(self):

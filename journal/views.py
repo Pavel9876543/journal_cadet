@@ -1559,13 +1559,23 @@ def _load_registration_payload(request):
 
 
 def _get_client_ip(request) -> str:
+    remote_addr = request.META.get('REMOTE_ADDR', '') or 'unknown'
     if not getattr(settings, 'TRUST_X_FORWARDED_FOR', False):
-        return request.META.get('REMOTE_ADDR', '') or 'unknown'
+        return remote_addr
 
-    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
-    if forwarded_for:
-        return forwarded_for.split(',', 1)[0].strip()
-    return request.META.get('REMOTE_ADDR', '') or 'unknown'
+    forwarded_ips = [
+        item.strip()
+        for item in request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')
+        if item.strip()
+    ]
+    trusted_proxy_count = getattr(settings, 'TRUSTED_PROXY_COUNT', 1)
+    if len(forwarded_ips) < trusted_proxy_count:
+        return remote_addr
+
+    # Read from the trusted (right-hand) side of the chain. With one reverse
+    # proxy this returns the address appended by that proxy instead of a
+    # spoofable client-supplied first value.
+    return forwarded_ips[-trusted_proxy_count]
 
 
 def _registration_is_throttled(request) -> bool:
