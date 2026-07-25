@@ -565,6 +565,7 @@ class Command(BaseCommand):
             ('2 класс (средний уровень)', 'Ансамбль', 'Игорь Романов', 40, True),
             ('2 класс (средний уровень)', 'Гитара', 'Игорь Романов', 50, True),
             ('2 класс (средний уровень)', 'Импровизация', 'Сергей Аксёнов', 60, True),
+            ('2 класс (средний уровень)', 'Оркестр', 'Алексей Ветров', 70, True),
 
             ('3 класс (продвинутые)', 'Сольфеджио', 'Сергей Аксёнов', 10, True),
             ('3 класс (продвинутые)', 'Гармония', 'Дмитрий Ковалёв', 20, True),
@@ -881,79 +882,113 @@ class Command(BaseCommand):
         subject = subjects['Оркестр']
         group_specs = [
             {
+                'name': 'Младший оркестр',
+                'study_group_name': '2 класс (средний уровень)',
+                'teacher': teachers['Алексей Ветров'],
+                'sort_order': 10,
+                'items': [
+                    ('Ритмический этюд', True),
+                    ('Марш юных музыкантов', True),
+                    ('Короткая импровизация', False),
+                ],
+            },
+            {
                 'name': 'Продвинутый оркестр',
                 'study_group_name': '3 класс (продвинутые)',
                 'teacher': teachers['Наталья Лебедева'],
-                'sort_order': 10,
+                'sort_order': 20,
                 'items': [
-                    'Торжественная увертюра',
-                    'Пастораль',
-                    'Финальный марш',
+                    ('Торжественная увертюра', True),
+                    ('Пастораль', True),
+                    ('Финальный марш', True),
                 ],
             },
             {
                 'name': 'Старший оркестр',
                 'study_group_name': 'Старший ансамбль',
                 'teacher': teachers['Игорь Романов'],
-                'sort_order': 20,
+                'sort_order': 30,
                 'items': [
-                    'Симфоническая миниатюра',
-                    'Хорал',
-                    'Праздничная фантазия',
+                    ('Симфоническая миниатюра', True),
+                    ('Хорал', True),
+                    ('Праздничная фантазия', True),
                 ],
             },
         ]
 
-        for passed_count, grade in ((0, 'N'), (1, '3'), (2, '4'), (3, '5')):
+        # Общие правила покрывают и учеников, назначенных сразу в несколько
+        # групп произведений. Строковые значения специально разнообразны.
+        grade_by_passed_count = {
+            0: 'N',
+            1: '3',
+            2: '4',
+            3: '5',
+            4: '5+',
+            5: '5+',
+        }
+        for passed_count, grade in grade_by_passed_count.items():
             FinalGradeRule.objects.create(
                 subject=subject,
                 academic_year=academic_year,
                 rule_type=FinalGradeRule.RULE_COUNT,
                 passed_count=passed_count,
                 grade=grade,
-                priority=10 + passed_count,
+                priority=20 + passed_count,
             )
+        FinalGradeRule.objects.create(
+            subject=subject,
+            academic_year=academic_year,
+            rule_type=FinalGradeRule.RULE_DEFAULT,
+            grade='Не рассчитано',
+            priority=999,
+        )
 
         students_by_group: dict[str, list[Student]] = {}
         for student in students:
-            students_by_group.setdefault(student.group.name, []).append(student)
+            if student.group_id:
+                students_by_group.setdefault(student.group.name, []).append(student)
 
+        created_groups: dict[str, AssessmentGroup] = {}
         for group_spec in group_specs:
             assessment_group = AssessmentGroup.objects.create(
                 name=group_spec['name'],
                 description=(
-                    'Демонстрационная группа произведений. Она не связана с учебной '
-                    'группой по типу данных: ученики назначаются отдельно.'
+                    'Демонстрационная группа произведений. Она отделена от учебной '
+                    'группы: ученики назначаются в неё независимо и могут состоять '
+                    'сразу в нескольких группах произведений.'
                 ),
                 subject=subject,
                 academic_year=academic_year,
                 sort_order=group_spec['sort_order'],
             )
+            created_groups[group_spec['name']] = assessment_group
             items = [
                 AssessmentItem.objects.create(
                     title=title,
+                    description=(
+                        'Демонстрационное произведение для проверки кабинетов, '
+                        'административных вкладок и автоматического расчёта итогов.'
+                    ),
                     subject=subject,
                     academic_year=academic_year,
                     group=assessment_group,
                     responsible_teacher=group_spec['teacher'],
                     sort_order=index * 10,
-                    is_required=True,
+                    is_required=is_required,
                 )
-                for index, title in enumerate(group_spec['items'], start=1)
+                for index, (title, is_required) in enumerate(group_spec['items'], start=1)
             ]
 
-            for student_index, student in enumerate(
-                students_by_group.get(group_spec['study_group_name'], []),
-                start=1,
-            ):
+            assigned_students = students_by_group.get(group_spec['study_group_name'], [])
+            for student_index, student in enumerate(assigned_students, start=1):
                 assignment = StudentAssessmentGroup.objects.create(
                     student=student,
                     assessment_group=assessment_group,
                     academic_year=academic_year,
                 )
                 for item_index, item in enumerate(items, start=1):
-                    # Отсутствующая запись намеренно означает «Не оценено».
-                    if item_index == 3 and student_index % 3 == 0:
+                    # Часть строк намеренно отсутствует и отображается как «Не оценено».
+                    if (student_index + item_index) % 5 == 0:
                         continue
                     status = (
                         AssessmentResult.STATUS_PASSED
@@ -967,9 +1002,97 @@ class Command(BaseCommand):
                         assessed_by=group_spec['teacher'],
                         comment=(
                             'Демонстрационный результат: '
-                            + ('произведение принято.' if status == AssessmentResult.STATUS_PASSED else 'требуется повторная сдача.')
+                            + (
+                                'произведение принято.'
+                                if status == AssessmentResult.STATUS_PASSED
+                                else 'требуется повторная сдача.'
+                            )
                         ),
                     )
+
+        # Для младшего состава показываем отдельные правила «все обязательные
+        # произведения», чтобы в интерфейсе были представлены оба типа правил.
+        junior_group = created_groups['Младший оркестр']
+        FinalGradeRule.objects.create(
+            subject=subject,
+            academic_year=academic_year,
+            assessment_group=junior_group,
+            rule_type=FinalGradeRule.RULE_ALL_REQUIRED,
+            condition_value=True,
+            grade='Зачёт',
+            priority=1,
+        )
+        FinalGradeRule.objects.create(
+            subject=subject,
+            academic_year=academic_year,
+            assessment_group=junior_group,
+            rule_type=FinalGradeRule.RULE_ALL_REQUIRED,
+            condition_value=False,
+            grade='Незачёт',
+            priority=2,
+        )
+
+        # Сводный состав демонстрирует отношение «ученик — несколько групп».
+        combined_group = AssessmentGroup.objects.create(
+            name='Праздничный сводный состав',
+            description=(
+                'Дополнительная группа для учеников из разных учебных групп. '
+                'Используется для проверки объединения произведений в кабинетах.'
+            ),
+            subject=subject,
+            academic_year=academic_year,
+            sort_order=40,
+        )
+        combined_items = [
+            AssessmentItem.objects.create(
+                title='Общий праздничный номер',
+                description='Обязательное произведение сводного состава.',
+                subject=subject,
+                academic_year=academic_year,
+                group=combined_group,
+                responsible_teacher=teachers['Наталья Лебедева'],
+                sort_order=10,
+                is_required=True,
+            ),
+            AssessmentItem.objects.create(
+                title='Выход на бис',
+                description='Дополнительное произведение сводного состава.',
+                subject=subject,
+                academic_year=academic_year,
+                group=combined_group,
+                responsible_teacher=teachers['Игорь Романов'],
+                sort_order=20,
+                is_required=False,
+            ),
+        ]
+        combined_students = (
+            students_by_group.get('3 класс (продвинутые)', [])[:2]
+            + students_by_group.get('Старший ансамбль', [])[:2]
+        )
+        for student_index, student in enumerate(combined_students, start=1):
+            assignment = StudentAssessmentGroup.objects.create(
+                student=student,
+                assessment_group=combined_group,
+                academic_year=academic_year,
+            )
+            for item_index, item in enumerate(combined_items, start=1):
+                if student_index == 2 and item_index == 2:
+                    continue
+                status = (
+                    AssessmentResult.STATUS_FAILED
+                    if student_index == 3 and item_index == 1
+                    else AssessmentResult.STATUS_PASSED
+                )
+                AssessmentResult.objects.create(
+                    enrollment=assignment.enrollment,
+                    item=item,
+                    status=status,
+                    assessed_by=item.responsible_teacher,
+                    comment=(
+                        'Сводный состав: результат сохранён для демонстрации '
+                        'каскадной работы с данными.'
+                    ),
+                )
 
     def _validate_demo_data(self) -> None:
         errors: list[str] = []
@@ -1019,6 +1142,29 @@ class Command(BaseCommand):
 
         if not StudentAssessmentGroup.objects.exists() or not AssessmentResult.objects.exists():
             errors.append('Не созданы назначения групп произведений или результаты сдачи.')
+
+        if not AssessmentItem.objects.filter(is_required=False).exists():
+            errors.append('Не созданы дополнительные необязательные произведения.')
+
+        if not FinalGradeRule.objects.filter(
+            rule_type=FinalGradeRule.RULE_ALL_REQUIRED,
+        ).exists():
+            errors.append('Не созданы правила итогов по обязательным произведениям.')
+
+        if not Student.objects.annotate(
+            active_assessment_groups=Count(
+                'assessment_group_assignments',
+                filter=Q(assessment_group_assignments__is_active=True),
+                distinct=True,
+            ),
+        ).filter(active_assessment_groups__gte=2).exists():
+            errors.append('Нет ученика, назначенного в несколько групп произведений.')
+
+        if not AssessmentResult.objects.filter(status=AssessmentResult.STATUS_PASSED).exists():
+            errors.append('Не созданы результаты со статусом «Зачёт».')
+
+        if not AssessmentResult.objects.filter(status=AssessmentResult.STATUS_FAILED).exists():
+            errors.append('Не созданы результаты со статусом «Незачёт».')
 
         if SubjectResult.objects.filter(
             subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,

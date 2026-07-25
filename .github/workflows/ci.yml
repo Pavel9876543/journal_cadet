@@ -74,8 +74,16 @@ jobs:
       - name: Static assets check
         run: python manage.py collectstatic --noinput --clear
 
-      - name: Tests
-        run: python manage.py test -v 2
+      - name: Fast tests
+        env:
+          KEEP_TEST_DB: "0"
+          TEST_PROCESSES: "2"
+        run: ./scripts/test-fast.sh -v 2
+
+      - name: Slow tests
+        env:
+          KEEP_TEST_DB: "0"
+        run: ./scripts/test-slow.sh -v 2
 
   docker-build-check:
     runs-on: ubuntu-latest

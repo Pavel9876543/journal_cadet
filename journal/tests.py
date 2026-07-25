@@ -16,7 +16,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import Count, Q
-from django.test import Client, RequestFactory, TestCase, TransactionTestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, TransactionTestCase, override_settings, tag
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
@@ -2436,6 +2436,7 @@ class CourseApplicationDuplicateErrorTests(TestCase):
         self.assertFalse(_is_duplicate_course_application_phone_error(error))
 
 
+@tag('slow', 'concurrency')
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL concurrency test')
 class CourseApplicationConcurrencyTests(JournalTestDataMixin, TransactionTestCase):
     reset_sequences = True
@@ -4968,6 +4969,7 @@ class UserCreationCredentialTests(JournalTestDataMixin, TestCase):
 
 
 
+@tag('slow', 'seed')
 class SeedDataCommandTests(TestCase):
     @staticmethod
     def run_seed_data():
@@ -5006,6 +5008,23 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(Grade.objects.exists())
         self.assertTrue(SubjectResult.objects.exists())
         self.assertTrue(CourseApplication.objects.exists())
+        self.assertGreaterEqual(AssessmentGroup.objects.count(), 4)
+        self.assertGreaterEqual(AssessmentItem.objects.count(), 11)
+        self.assertTrue(AssessmentItem.objects.filter(is_required=False).exists())
+        self.assertTrue(
+            FinalGradeRule.objects.filter(
+                rule_type=FinalGradeRule.RULE_ALL_REQUIRED,
+            ).exists(),
+        )
+        self.assertTrue(
+            Student.objects.annotate(
+                assessment_group_count=Count(
+                    'assessment_group_assignments',
+                    filter=Q(assessment_group_assignments__is_active=True),
+                    distinct=True,
+                ),
+            ).filter(assessment_group_count__gte=2).exists(),
+        )
 
     def test_seed_data_assigns_user_roles(self):
         self.assertTrue(Group.objects.filter(name='Администратор').exists())
@@ -5162,7 +5181,7 @@ class SeedDataCommandTests(TestCase):
         self.assertGreaterEqual(StudyGroup.objects.count(), 7)
         self.assertGreaterEqual(Teacher.objects.count(), 9)
         self.assertGreaterEqual(Student.objects.count(), 35)
-        self.assertGreaterEqual(GroupSubject.objects.count(), 33)
+        self.assertGreaterEqual(GroupSubject.objects.count(), 34)
         self.assertGreaterEqual(StudentSubject.objects.count(), 70)
         self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 70)
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
@@ -5216,6 +5235,11 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(GroupSubject.objects.filter(is_active=False).exists())
         self.assertTrue(StudentSubject.objects.filter(is_active=False).exists())
         self.assertFalse(Grade.objects.filter(comment='').exists())
+        self.assertGreaterEqual(AssessmentGroup.objects.count(), 4)
+        self.assertGreaterEqual(AssessmentItem.objects.count(), 11)
+        self.assertTrue(AssessmentItem.objects.filter(is_required=False).exists())
+        self.assertTrue(AssessmentResult.objects.filter(status=AssessmentResult.STATUS_PASSED).exists())
+        self.assertTrue(AssessmentResult.objects.filter(status=AssessmentResult.STATUS_FAILED).exists())
 
         self.assertGreaterEqual(
             CourseApplication.objects.filter(
