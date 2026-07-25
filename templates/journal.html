@@ -1132,6 +1132,28 @@
         .assessment-subject-card {
             overflow: hidden;
         }
+        details.collapsible-card > summary {
+            list-style: none;
+            cursor: pointer;
+        }
+        details.collapsible-card > summary::-webkit-details-marker {
+            display: none;
+        }
+        details.collapsible-card > summary::after {
+            content: "Развернуть";
+            flex: 0 0 auto;
+            margin-left: auto;
+            color: var(--accent);
+            font-size: 0.82rem;
+            font-weight: 800;
+        }
+        details.collapsible-card[open] > summary::after {
+            content: "Свернуть";
+        }
+        details.collapsible-card > summary:focus-visible {
+            outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent);
+            outline-offset: -3px;
+        }
         .assessment-subject-overview {
             display: grid;
             grid-template-columns: minmax(0, 1fr) minmax(220px, 0.65fr);
@@ -1281,6 +1303,12 @@
                         </span>
                     </div>
                     <div class="topbar-actions">
+                        {% if role_mode == 'superuser' %}
+                            <a class="button button-secondary" href="{% url 'admin:index' %}">
+                                <svg class="icon" aria-hidden="true"><use href="#icon-table"></use></svg>
+                                <span>Перейти в админку</span>
+                            </a>
+                        {% endif %}
                         <a class="button button-secondary" href="{% url 'password_change' %}">
                             <svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
                             <span>Сменить пароль</span>
@@ -1559,18 +1587,18 @@
                         <div class="assessment-summary-card"><strong>{{ assessment_summary.not_evaluated_count }}</strong><span>не оценено</span></div>
                     </div>
                     {% for section in assessment_sections %}
-                        <section class="table-card">
-                            <div class="table-card-header">
+                        <details class="table-card collapsible-card" open>
+                            <summary class="table-card-header">
                                 <div>
-                                    <h3>{{ section.item.title }}</h3>
-                                    <p>{{ section.item.subject.name }} · {{ section.item.group.name }}</p>
+                                    <h3>{{ section.item.group.name }} — {{ section.item.subject.name }} — {{ section.item.academic_year.name }}</h3>
+                                    <p>Произведение / элемент: {{ section.item.title }}</p>
                                 </div>
                                 <div class="assessment-card-metrics" aria-label="Результаты по произведению">
                                     <span class="assessment-status assessment-status--passed">Зачёт: {{ section.passed_count }}</span>
                                     <span class="assessment-status assessment-status--failed">Незачёт: {{ section.failed_count }}</span>
                                     <span class="assessment-status">Не оценено: {{ section.not_evaluated_count }}</span>
                                 </div>
-                            </div>
+                            </summary>
                             <div class="table-scroll" tabindex="0" role="region" aria-label="{{ section.item.title }}">
                                 <table>
                                     <thead>
@@ -1625,7 +1653,7 @@
                                     </tbody>
                                 </table>
                             </div>
-                        </section>
+                        </details>
                     {% endfor %}
                 </section>
             {% endif %}
@@ -1637,10 +1665,13 @@
                         <p>Прогресс сгруппирован по предметам и сформирован из назначенных вам групп произведений.</p>
                     </div>
                     {% for section in assessment_subject_sections %}
-                        <section class="table-card assessment-subject-card">
-                            <div class="table-card-header">
+                        <details class="table-card assessment-subject-card collapsible-card" open>
+                            <summary class="table-card-header">
                                 <div>
-                                    <h3>{{ section.subject.name }}</h3>
+                                    <h3>
+                                        {% if selected_group %}{{ selected_group.name }}{% else %}Без группы{% endif %}
+                                        — {{ section.subject.name }} — {{ selected_academic_year.name }}
+                                    </h3>
                                     <p>
                                         {% for group in section.groups %}
                                             {{ group.name }}{% if not forloop.last %} · {% endif %}
@@ -1650,7 +1681,7 @@
                                 <span class="assessment-status">
                                     Итог: {% if section.final_result %}{{ section.final_result.final_grade|default:'Не рассчитано' }}{% else %}Не рассчитано{% endif %}
                                 </span>
-                            </div>
+                            </summary>
                             <div class="assessment-subject-overview">
                                 <div class="assessment-subject-meta">
                                     <span class="assessment-status assessment-status--passed">Зачёт: {{ section.passed_count }}</span>
@@ -1698,7 +1729,7 @@
                                     </tbody>
                                 </table>
                             </div>
-                        </section>
+                        </details>
                     {% endfor %}
                 </section>
             {% endif %}
@@ -1719,8 +1750,7 @@
                         {% for table in journal_tables %}
                             <a class="journal-tab" href="#journal-{{ table.group.id }}-{{ table.subject.id }}">
                                 <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
-                                <strong>{{ table.subject_name }}</strong>
-                                <span>{{ table.group.name }}</span>
+                                <strong>{{ table.group.name }} — {{ table.subject_name }} — {{ table.academic_year.name }}</strong>
                             </a>
                         {% endfor %}
                     </nav>
@@ -1730,8 +1760,8 @@
                         <section class="table-panel" id="journal-{{ table.group.id }}-{{ table.subject.id }}">
                             <div class="table-panel-head">
                                 <div class="table-title">
-                                    <h3>{{ table.subject_name }}</h3>
-                                    <p>{{ table.group.name }}</p>
+                                    <h3>{{ table.group.name }} — {{ table.subject_name }} — {{ table.academic_year.name }}</h3>
+                                    <p>Группа — предмет — учебный год</p>
                                 </div>
                                 <div class="table-meta">
                                     <span class="meta-chip">

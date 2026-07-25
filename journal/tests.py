@@ -2094,6 +2094,45 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Сольфеджио')
         self.assertNotContains(response, 'Регистрация на курсы')
 
+    def test_teacher_sees_all_assigned_tables_without_selecting_group(self):
+        self.client.login(username='teacher_ivanov', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['journal_tables'])
+        self.assertContains(
+            response,
+            (
+                f'{self.data["group"].name} — '
+                f'{self.data["solfeggio"].name} — '
+                f'{self.data["year"].name}'
+            ),
+        )
+
+    def test_admin_journal_has_admin_link_and_complete_table_title(self):
+        self.client.login(username='admin_test', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse('admin:index'))
+        self.assertContains(response, 'Перейти в админку')
+        self.assertContains(
+            response,
+            (
+                f'{self.data["group"].name} — '
+                f'{self.data["solfeggio"].name} — '
+                f'{self.data["year"].name}'
+            ),
+        )
+
     def test_student_without_group_can_open_journal(self):
         self.data['student'].group = None
         self.data['student'].save(update_fields=['group'])
@@ -5680,6 +5719,12 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.context['assessment_summary']['passed_count'], 1)
         self.assertContains(response, 'Сводка по сдаче произведений')
         self.assertContains(response, 'Не оценено: 0')
+        self.assertContains(
+            response,
+            '<details class="table-card collapsible-card" open>',
+            html=False,
+        )
+        self.assertContains(response, 'Произведение / элемент:')
 
     def test_student_journal_groups_assessment_progress_by_subject(self):
         set_assessment_result(
@@ -5714,6 +5759,14 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(sections[0]['progress_percent'], 50)
         self.assertContains(response, optional_item.title)
         self.assertContains(response, 'Обязательных сдано: 1 / 1')
+        self.assertContains(
+            response,
+            (
+                '<details class="table-card assessment-subject-card '
+                'collapsible-card" open>'
+            ),
+            html=False,
+        )
 
 
 class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):

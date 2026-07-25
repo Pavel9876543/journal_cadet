@@ -345,7 +345,7 @@ def _assessment_options_api_sync(request):
         items = items.filter(academic_year=academic_year)
     if subject is not None:
         groups = groups.filter(subject=subject)
-        teachers = teachers.filter(subjects__subject=subject)
+        teachers = teachers.filter(qualified_subjects=subject)
         items = items.filter(subject=subject)
     if group is not None:
         items = items.filter(group=group)
@@ -1333,7 +1333,7 @@ def _journal_for_admin(
     selected_group = _get_selected_object(groups, selected_group_id)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
 
-    groups_to_show = [selected_group] if selected_group else []
+    groups_to_show = [selected_group] if selected_group else list(groups)
 
     if selected_subject:
         subjects_to_show = [selected_subject]
@@ -1343,7 +1343,10 @@ def _journal_for_admin(
             academic_year=selected_academic_year,
         ))
     else:
-        subjects_to_show = []
+        subjects_to_show = list(_subjects_for_groups(
+            groups_to_show,
+            academic_year=selected_academic_year,
+        ))
 
     enrollments_qs = (
         StudentEnrollment.objects
@@ -1462,7 +1465,7 @@ def _journal_for_teacher(
 
     groups = get_grade_groups(teacher=teacher, academic_year=selected_academic_year).select_related('academic_year')
     selected_group = _get_selected_object(groups, selected_group_id)
-    groups_to_show = [selected_group] if selected_group else []
+    groups_to_show = [selected_group] if selected_group else list(groups)
     selected_membership = teacher.membership_for_year(selected_academic_year)
     can_edit_journal = bool(
         _can_edit_academic_year(selected_academic_year)
@@ -1479,7 +1482,7 @@ def _journal_for_teacher(
     subjects_to_show = (
         [selected_subject]
         if selected_subject
-        else (list(subjects) if selected_group else [])
+        else list(subjects)
     )
 
     eligible_students = get_grade_students(
