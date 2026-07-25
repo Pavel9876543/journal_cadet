@@ -1100,12 +1100,96 @@
             flex-wrap: wrap;
             padding: 14px 18px 18px;
         }
+        .assessment-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+            gap: 10px;
+        }
+        .assessment-summary-card {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+            padding: 14px 16px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: var(--surface);
+            box-shadow: var(--shadow-sm);
+        }
+        .assessment-summary-card strong {
+            font-size: 1.35rem;
+            line-height: 1.1;
+        }
+        .assessment-summary-card span {
+            color: var(--muted);
+            font-size: 0.86rem;
+        }
+        .assessment-card-metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: flex-end;
+        }
+        .assessment-subject-card {
+            overflow: hidden;
+        }
+        .assessment-subject-overview {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(220px, 0.65fr);
+            gap: 16px;
+            padding: 0 18px 16px;
+            align-items: end;
+        }
+        .assessment-subject-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-top: 8px;
+        }
+        .assessment-progress {
+            display: grid;
+            gap: 7px;
+        }
+        .assessment-progress-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            color: var(--muted);
+            font-size: 0.86rem;
+        }
+        .assessment-progress progress {
+            width: 100%;
+            height: 12px;
+            border: 0;
+            border-radius: 999px;
+            overflow: hidden;
+            background: var(--surface-muted);
+        }
+        .assessment-progress progress::-webkit-progress-bar {
+            background: var(--surface-muted);
+            border-radius: 999px;
+        }
+        .assessment-progress progress::-webkit-progress-value {
+            background: var(--accent);
+            border-radius: 999px;
+        }
+        .assessment-progress progress::-moz-progress-bar {
+            background: var(--accent);
+            border-radius: 999px;
+        }
         @media (max-width: 720px) {
             .assessment-actions {
                 grid-template-columns: 1fr;
                 min-width: 230px;
             }
             .assessment-actions button { width: 100%; }
+            .assessment-card-metrics {
+                justify-content: flex-start;
+            }
+            .assessment-subject-overview {
+                grid-template-columns: 1fr;
+                padding-inline: 14px;
+            }
         }
 </style>
 </head>
@@ -1466,6 +1550,13 @@
                         <h2>Сдача произведений</h2>
                         <p>Вы видите только произведения, где назначены ответственным дирижёром.</p>
                     </div>
+                    <div class="assessment-summary-grid" aria-label="Сводка по сдаче произведений">
+                        <div class="assessment-summary-card"><strong>{{ assessment_summary.item_count }}</strong><span>произведений</span></div>
+                        <div class="assessment-summary-card"><strong>{{ assessment_summary.student_count }}</strong><span>учеников</span></div>
+                        <div class="assessment-summary-card"><strong>{{ assessment_summary.passed_count }}</strong><span>зачтено</span></div>
+                        <div class="assessment-summary-card"><strong>{{ assessment_summary.failed_count }}</strong><span>незачётов</span></div>
+                        <div class="assessment-summary-card"><strong>{{ assessment_summary.not_evaluated_count }}</strong><span>не оценено</span></div>
+                    </div>
                     {% for section in assessment_sections %}
                         <section class="table-card">
                             <div class="table-card-header">
@@ -1473,9 +1564,11 @@
                                     <h3>{{ section.item.title }}</h3>
                                     <p>{{ section.item.subject.name }} · {{ section.item.group.name }}</p>
                                 </div>
-                                {% if not section.item.responsible_teacher %}
-                                    <span class="assessment-status">Дирижёр не назначен</span>
-                                {% endif %}
+                                <div class="assessment-card-metrics" aria-label="Результаты по произведению">
+                                    <span class="assessment-status assessment-status--passed">Зачёт: {{ section.passed_count }}</span>
+                                    <span class="assessment-status assessment-status--failed">Незачёт: {{ section.failed_count }}</span>
+                                    <span class="assessment-status">Не оценено: {{ section.not_evaluated_count }}</span>
+                                </div>
                             </div>
                             <div class="table-scroll" tabindex="0" role="region" aria-label="{{ section.item.title }}">
                                 <table>
@@ -1536,51 +1629,76 @@
                 </section>
             {% endif %}
 
-            {% if assessment_rows %}
+            {% if assessment_subject_sections %}
                 <section class="assessment-stack" aria-label="Мои произведения">
                     <div class="workspace-title">
                         <h2>Мои произведения</h2>
-                        <p>Список сформирован из всех назначенных вам групп произведений.</p>
+                        <p>Прогресс сгруппирован по предметам и сформирован из назначенных вам групп произведений.</p>
                     </div>
-                    <section class="table-card">
-                        <div class="table-scroll" tabindex="0" role="region" aria-label="Результаты сдачи произведений">
-                            <table>
-                                <thead>
-                                <tr>
-                                    <th class="sticky-col" scope="col">Произведение</th>
-                                    <th scope="col">Группа произведений</th>
-                                    <th scope="col">Предмет</th>
-                                    <th scope="col">Дирижёр</th>
-                                    <th scope="col">Результат</th>
-                                    <th scope="col">Дата</th>
-                                    <th scope="col">Комментарий</th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                {% for row in assessment_rows %}
+                    {% for section in assessment_subject_sections %}
+                        <section class="table-card assessment-subject-card">
+                            <div class="table-card-header">
+                                <div>
+                                    <h3>{{ section.subject.name }}</h3>
+                                    <p>
+                                        {% for group in section.groups %}
+                                            {{ group.name }}{% if not forloop.last %} · {% endif %}
+                                        {% endfor %}
+                                    </p>
+                                </div>
+                                <span class="assessment-status">
+                                    Итог: {% if section.final_result %}{{ section.final_result.final_grade|default:'Не рассчитано' }}{% else %}Не рассчитано{% endif %}
+                                </span>
+                            </div>
+                            <div class="assessment-subject-overview">
+                                <div class="assessment-subject-meta">
+                                    <span class="assessment-status assessment-status--passed">Зачёт: {{ section.passed_count }}</span>
+                                    <span class="assessment-status assessment-status--failed">Незачёт: {{ section.failed_count }}</span>
+                                    <span class="assessment-status">Не оценено: {{ section.not_evaluated_count }}</span>
+                                    <span class="meta-chip">Обязательных сдано: {{ section.required_passed_count }} / {{ section.required_count }}</span>
+                                </div>
+                                <div class="assessment-progress">
+                                    <div class="assessment-progress-label">
+                                        <span>Общий прогресс</span>
+                                        <strong>{{ section.passed_count }} из {{ section.item_count }}</strong>
+                                    </div>
+                                    <progress value="{{ section.progress_percent }}" max="100">{{ section.progress_percent }}%</progress>
+                                </div>
+                            </div>
+                            <div class="table-scroll" tabindex="0" role="region" aria-label="{{ section.subject.name }}: результаты сдачи произведений">
+                                <table>
+                                    <thead>
                                     <tr>
-                                        <th class="sticky-col" scope="row">{{ row.item.title }}</th>
-                                        <td>{{ row.item.group.name }}</td>
-                                        <td>{{ row.item.subject.name }}</td>
-                                        <td>{% if row.item.responsible_teacher %}{{ row.item.responsible_teacher.full_name }}{% else %}Не назначен{% endif %}</td>
-                                        <td>
-                                            <span class="assessment-status{% if row.result and row.result.status == 'passed' %} assessment-status--passed{% elif row.result %} assessment-status--failed{% endif %}">
-                                                {{ row.status_display }}
-                                            </span>
-                                        </td>
-                                        <td>{% if row.result %}{{ row.result.assessed_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td>
-                                        <td>{% if row.result and row.result.comment %}{{ row.result.comment }}{% else %}—{% endif %}</td>
+                                        <th class="sticky-col" scope="col">Произведение</th>
+                                        <th scope="col">Группа произведений</th>
+                                        <th scope="col">Обязательное</th>
+                                        <th scope="col">Дирижёр</th>
+                                        <th scope="col">Результат</th>
+                                        <th scope="col">Дата</th>
+                                        <th scope="col">Комментарий</th>
                                     </tr>
-                                {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                        <div class="assessment-final-grid">
-                            {% for subject_id, result in assessment_final_results.items %}
-                                <span class="meta-chip"><strong>{{ result.subject.name }}:</strong>&nbsp;{{ result.final_grade|default:'Не рассчитано' }}</span>
-                            {% endfor %}
-                        </div>
-                    </section>
+                                    </thead>
+                                    <tbody>
+                                    {% for row in section.rows %}
+                                        <tr>
+                                            <th class="sticky-col" scope="row">{{ row.item.title }}</th>
+                                            <td>{{ row.item.group.name }}</td>
+                                            <td>{% if row.item.is_required %}Да{% else %}Нет{% endif %}</td>
+                                            <td>{% if row.item.responsible_teacher %}{{ row.item.responsible_teacher.full_name }}{% else %}Не назначен{% endif %}</td>
+                                            <td>
+                                                <span class="assessment-status{% if row.result and row.result.status == 'passed' %} assessment-status--passed{% elif row.result %} assessment-status--failed{% endif %}">
+                                                    {{ row.status_display }}
+                                                </span>
+                                            </td>
+                                            <td>{% if row.result %}{{ row.result.assessed_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td>
+                                            <td>{% if row.result and row.result.comment %}{{ row.result.comment }}{% else %}—{% endif %}</td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    {% endfor %}
                 </section>
             {% endif %}
 

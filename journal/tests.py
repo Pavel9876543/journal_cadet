@@ -5484,6 +5484,62 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(payload['defaults']['assessed_by_id'], self.teacher.pk)
 
 
+    def test_teacher_journal_shows_compact_assessment_summary(self):
+        set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_PASSED,
+        )
+        self.client.force_login(self.teacher.user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk, 'group': self.group.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['assessment_summary']['item_count'], 1)
+        self.assertEqual(response.context['assessment_summary']['student_count'], 1)
+        self.assertEqual(response.context['assessment_summary']['passed_count'], 1)
+        self.assertContains(response, 'Сводка по сдаче произведений')
+        self.assertContains(response, 'Не оценено: 0')
+
+    def test_student_journal_groups_assessment_progress_by_subject(self):
+        set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_PASSED,
+        )
+        optional_item = AssessmentItem.objects.create(
+            title='Дополнительное произведение',
+            subject=self.subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+            is_required=False,
+            sort_order=20,
+        )
+        self.client.force_login(self.student.user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sections = response.context['assessment_subject_sections']
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0]['subject'], self.subject)
+        self.assertEqual(sections[0]['item_count'], 2)
+        self.assertEqual(sections[0]['passed_count'], 1)
+        self.assertEqual(sections[0]['not_evaluated_count'], 1)
+        self.assertEqual(sections[0]['progress_percent'], 50)
+        self.assertContains(response, optional_item.title)
+        self.assertContains(response, 'Обязательных сдано: 1 / 1')
+
+
 class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
     def test_export_uses_requested_archive_year_and_exact_results_columns(self):
         old_year = self.create_academic_year(name='2025/2026')

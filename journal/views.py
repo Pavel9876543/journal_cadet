@@ -27,6 +27,8 @@ from .services.excel_export import build_full_export_workbook
 from .assessment_services import (
     assessment_rows_for_student,
     assessment_sections_for_teacher,
+    assessment_subject_sections_for_student,
+    assessment_summary_for_teacher,
     clear_assessment_result,
     enrollments_for_assessment_item,
     set_assessment_result,
@@ -1641,6 +1643,7 @@ def _journal_for_teacher(
         can_edit_journal=can_edit_journal,
     )
     context['assessment_sections'] = assessment_sections
+    context['assessment_summary'] = assessment_summary_for_teacher(assessment_sections)
     return render(request, 'journal.html', context)
 
 
@@ -1728,6 +1731,10 @@ def _journal_for_student(
     )
     context['assessment_rows'] = assessment_rows
     context['assessment_final_results'] = assessment_final_results
+    context['assessment_subject_sections'] = assessment_subject_sections_for_student(
+        assessment_rows,
+        assessment_final_results,
+    )
     return render(request, 'journal.html', context)
 
 

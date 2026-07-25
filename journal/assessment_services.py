@@ -539,17 +539,102 @@ def assessment_sections_for_teacher(teacher: Teacher, academic_year: AcademicYea
             )
         ]
         item_enrollments.sort(key=lambda enrollment: (enrollment.full_name, enrollment.pk))
+        rows = [
+            {
+                'enrollment': enrollment,
+                'student': enrollment.student,
+                'result': result_by_pair.get((item.pk, enrollment.pk)),
+                'final_result': final_by_pair.get((enrollment.student_id, item.subject_id)),
+            }
+            for enrollment in item_enrollments
+        ]
+        passed_count = sum(
+            1 for row in rows
+            if row['result'] and row['result'].status == AssessmentResult.STATUS_PASSED
+        )
+        failed_count = sum(
+            1 for row in rows
+            if row['result'] and row['result'].status == AssessmentResult.STATUS_FAILED
+        )
         sections.append({
             'item': item,
-            'rows': [
-                {
-                    'enrollment': enrollment,
-                    'student': enrollment.student,
-                    'result': result_by_pair.get((item.pk, enrollment.pk)),
-                    'final_result': final_by_pair.get((enrollment.student_id, item.subject_id)),
-                }
-                for enrollment in item_enrollments
-            ],
+            'rows': rows,
+            'student_count': len(rows),
+            'passed_count': passed_count,
+            'failed_count': failed_count,
+            'not_evaluated_count': len(rows) - passed_count - failed_count,
         })
+    return sections
+
+
+def assessment_summary_for_teacher(sections: list[dict]) -> dict[str, int]:
+    """Build a dashboard summary from already loaded teacher sections."""
+    student_ids = {
+        row['student'].pk
+        for section in sections
+        for row in section['rows']
+    }
+    return {
+        'item_count': len(sections),
+        'student_count': len(student_ids),
+        'result_count': sum(section['student_count'] for section in sections),
+        'passed_count': sum(section['passed_count'] for section in sections),
+        'failed_count': sum(section['failed_count'] for section in sections),
+        'not_evaluated_count': sum(
+            section['not_evaluated_count'] for section in sections
+        ),
+    }
+
+
+def assessment_subject_sections_for_student(
+    rows: list[dict],
+    final_results: dict[int, SubjectResult],
+) -> list[dict]:
+    """Group student rows by subject without issuing extra database queries."""
+    sections_by_subject: dict[int, dict] = {}
+    for row in rows:
+        item = row['item']
+        section = sections_by_subject.setdefault(
+            item.subject_id,
+            {
+                'subject': item.subject,
+                'rows': [],
+                'groups': [],
+                'group_ids': set(),
+                'passed_count': 0,
+                'failed_count': 0,
+                'not_evaluated_count': 0,
+                'required_count': 0,
+                'required_passed_count': 0,
+                'final_result': final_results.get(item.subject_id),
+            },
+        )
+        section['rows'].append(row)
+        if item.group_id not in section['group_ids']:
+            section['group_ids'].add(item.group_id)
+            section['groups'].append(item.group)
+        if item.is_required:
+            section['required_count'] += 1
+
+        result = row['result']
+        if result is None:
+            section['not_evaluated_count'] += 1
+        elif result.status == AssessmentResult.STATUS_PASSED:
+            section['passed_count'] += 1
+            if item.is_required:
+                section['required_passed_count'] += 1
+        else:
+            section['failed_count'] += 1
+
+    sections = []
+    for section in sections_by_subject.values():
+        section.pop('group_ids', None)
+        section['item_count'] = len(section['rows'])
+        section['progress_percent'] = (
+            round(section['passed_count'] * 100 / section['item_count'])
+            if section['item_count']
+            else 0
+        )
+        sections.append(section)
     return sections
 
