@@ -27,6 +27,17 @@ def minimum_birth_date_for_age(age: int, *, today: date | None = None) -> date:
         return date(today.year - age, 2, 28)
 
 
+
+
+def reaches_age_in_calendar_year(birth_date: date, age: int, *, year: int) -> bool:
+    """Return True when the person turns ``age`` at any point in ``year``."""
+    return birth_date.year <= year - age
+
+
+def latest_birth_date_for_age_in_year(age: int, *, year: int) -> date:
+    """Latest birth date accepted when age is checked by calendar year."""
+    return date(year - age, 12, 31)
+
 def normalize_phone_number(value: str) -> str:
     digits = re.sub(r'\D+', '', str(value or ''))
     if len(digits) == 10:

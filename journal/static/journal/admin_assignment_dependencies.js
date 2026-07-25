@@ -50,7 +50,7 @@
         }
 
         var fields = {};
-        SELECT_FIELDS.concat(['academic_year', 'is_specialty', 'sort_order']).forEach(function (name) {
+        SELECT_FIELDS.concat(['academic_year', 'sort_order']).forEach(function (name) {
             fields[name] = scope.querySelector(fieldSelector(name));
         });
 
@@ -137,9 +137,6 @@
             if (item.academic_year_id) {
                 option.dataset.academicYearId = String(item.academic_year_id);
             }
-            if (typeof item.default_is_specialty === 'boolean') {
-                option.dataset.defaultIsSpecialty = item.default_is_specialty ? '1' : '0';
-            }
             if (typeof item.is_individual === 'boolean') {
                 option.dataset.isIndividual = item.is_individual ? '1' : '0';
             }
@@ -157,7 +154,6 @@
             var previousDataset = previousOption ? {
                 groupId: previousOption.dataset.groupId || '',
                 academicYearId: previousOption.dataset.academicYearId || '',
-                defaultIsSpecialty: previousOption.dataset.defaultIsSpecialty || '',
                 isIndividual: previousOption.dataset.isIndividual || '',
             } : {};
             var fragment = document.createDocumentFragment();
@@ -200,20 +196,6 @@
             return valueChanged;
         }
 
-        function selectedSubjectDefault() {
-            var option = selectedOption(fields.subject);
-            if (!option || !option.value) {
-                return null;
-            }
-            if (option.dataset.defaultIsSpecialty === '1') {
-                return true;
-            }
-            if (option.dataset.defaultIsSpecialty === '0') {
-                return false;
-            }
-            return null;
-        }
-
         function setFieldValue(field, value, force) {
             if (!field || value === null || typeof value === 'undefined') {
                 return false;
@@ -247,12 +229,6 @@
                     changed = setFieldValue(fields.academic_year, groupOption.dataset.academicYearId, true) || changed;
                 }
             }
-            if (changedField === 'subject' && fields.is_specialty) {
-                var defaultSpecialty = selectedSubjectDefault();
-                if (defaultSpecialty !== null) {
-                    fields.is_specialty.checked = defaultSpecialty;
-                }
-            }
             return changed;
         }
 
@@ -275,9 +251,6 @@
                     defaults.academic_year_id,
                     changedField === 'group' || changedField === 'student'
                 ) || changed;
-            }
-            if (typeof defaults.is_specialty === 'boolean' && fields.is_specialty) {
-                fields.is_specialty.checked = defaults.is_specialty;
             }
             if (defaults.sort_order && fields.sort_order && !fields.sort_order.value) {
                 fields.sort_order.value = defaults.sort_order;

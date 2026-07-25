@@ -22,13 +22,18 @@ from journal.account_utils import (
 )
 from journal.models import (
     AcademicYear,
+    AssessmentGroup,
+    AssessmentItem,
+    AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
+    FinalGradeRule,
     Grade,
     GroupSubject,
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
     StudyGroup,
@@ -123,6 +128,7 @@ class Command(BaseCommand):
             .order_by('id')
         )
         self._create_grades_and_results(students, academic_year)
+        self._create_assessment_demo_data(students, academic_year, subjects, teachers)
         self._validate_demo_data()
 
         credentials_path = self._write_credentials(options['credentials_output'])
@@ -140,6 +146,9 @@ class Command(BaseCommand):
             f'индивидуальных предметов: {StudentSubject.objects.count()}, '
             f'оценок: {Grade.objects.count()}, '
             f'итогов: {SubjectResult.objects.count()}, '
+            f'групп произведений: {AssessmentGroup.objects.count()}, '
+            f'произведений: {AssessmentItem.objects.count()}, '
+            f'результатов сдачи: {AssessmentResult.objects.count()}, '
             f'заявок: {CourseApplication.objects.count()}, '
             f'временных учетных данных: {TemporaryCredential.objects.count()}'
         )
@@ -183,8 +192,13 @@ class Command(BaseCommand):
         TemporaryCredential.objects.exclude(user_id__in=protected_user_ids).delete()
         PasswordRecoveryContact.objects.all().delete()
         CourseApplication.objects.all().delete()
+        AssessmentResult.objects.all().delete()
         SubjectResult.objects.all().delete()
         Grade.objects.all().delete()
+        StudentAssessmentGroup.objects.all().delete()
+        FinalGradeRule.objects.all().delete()
+        AssessmentItem.objects.all().delete()
+        AssessmentGroup.objects.all().delete()
         StudentSubject.objects.all().delete()
         GroupSubject.objects.all().delete()
         TeacherSubject.objects.all().delete()
@@ -337,27 +351,27 @@ class Command(BaseCommand):
 
     def _create_subjects(self) -> dict[str, Subject]:
         subject_specs = [
-            ('Сольфеджио', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Музыкальная литература', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Слушание музыки', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False),
-            ('Ритмика', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False),
-            ('Хор', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False),
-            ('Ансамбль', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False),
-            ('Оркестр', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False),
-            ('Фортепиано', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Гитара', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Вокал', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Гармония', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Дирижирование', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Импровизация', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('История церковной музыки', Subject.FINAL_GRADE_TYPE_NUMERIC, False),
-            ('Специальность', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
-            ('Индивидуальная импровизация', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
-            ('Индивидуальное дирижирование', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
-            ('Индивидуальный оркестр', Subject.FINAL_GRADE_TYPE_PASS_FAIL, True),
-            ('Индивидуальная история церковной музыки', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
-            ('Индивидуальный ансамбль', Subject.FINAL_GRADE_TYPE_PASS_FAIL, True),
-            ('Индивидуальная гитара', Subject.FINAL_GRADE_TYPE_NUMERIC, True),
+            ('Сольфеджио', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Музыкальная литература', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Слушание музыки', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Ритмика', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Хор', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Ансамбль', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Оркестр', Subject.FINAL_GRADE_TYPE_PASS_FAIL, False, Subject.ASSESSMENT_MODE_ELEMENTS),
+            ('Фортепиано', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Гитара', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Вокал', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Гармония', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Дирижирование', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Импровизация', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('История церковной музыки', Subject.FINAL_GRADE_TYPE_NUMERIC, False, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Специальность', Subject.FINAL_GRADE_TYPE_NUMERIC, True, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Индивидуальная импровизация', Subject.FINAL_GRADE_TYPE_NUMERIC, True, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Индивидуальное дирижирование', Subject.FINAL_GRADE_TYPE_NUMERIC, True, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Индивидуальный оркестр', Subject.FINAL_GRADE_TYPE_PASS_FAIL, True, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Индивидуальная история церковной музыки', Subject.FINAL_GRADE_TYPE_NUMERIC, True, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Индивидуальный ансамбль', Subject.FINAL_GRADE_TYPE_PASS_FAIL, True, Subject.ASSESSMENT_MODE_STANDARD),
+            ('Индивидуальная гитара', Subject.FINAL_GRADE_TYPE_NUMERIC, True, Subject.ASSESSMENT_MODE_STANDARD),
         ]
 
         return {
@@ -365,9 +379,10 @@ class Command(BaseCommand):
                 name=name,
                 final_grade_type=final_grade_type,
                 is_specialty=is_specialty,
+                assessment_mode=assessment_mode,
                 is_active=True,
             )
-            for name, final_grade_type, is_specialty in subject_specs
+            for name, final_grade_type, is_specialty, assessment_mode in subject_specs
         }
 
     def _create_groups(self, academic_year: AcademicYear) -> dict[str, StudyGroup]:
@@ -629,7 +644,6 @@ class Command(BaseCommand):
         students: list[Student] = []
         specialty_subject = subjects['Специальность']
         education_values = [
-            Student.MUSIC_EDUCATION_NONE,
             Student.MUSIC_EDUCATION_SELF,
             Student.MUSIC_EDUCATION_BASIC,
             Student.MUSIC_EDUCATION_SECONDARY,
@@ -685,7 +699,6 @@ class Command(BaseCommand):
                 student=student,
                 subject=specialty_subject,
                 teacher=teachers[specialty_teacher_name],
-                is_specialty=True,
                 is_active=True,
             )
 
@@ -696,7 +709,6 @@ class Command(BaseCommand):
                 student=student,
                 subject=subjects[extra_subject_name],
                 teacher=teachers[extra_teacher_name],
-                is_specialty=False,
                 is_active=True,
             )
 
@@ -705,8 +717,7 @@ class Command(BaseCommand):
                     student=student,
                     subject=subjects['Индивидуальная гитара'],
                     teacher=teachers['Игорь Романов'],
-                    is_specialty=False,
-                    is_active=False,
+                        is_active=False,
                 )
 
             TemporaryCredential.objects.create(
@@ -768,7 +779,6 @@ class Command(BaseCommand):
                 student=student,
                 subject=subjects['Специальность'],
                 teacher=teachers[specialty_teachers[(index - 1) % len(specialty_teachers)]],
-                is_specialty=True,
                 is_active=True,
             )
             extra_subject_name, extra_teacher_name = extra_subjects[(index - 1) % len(extra_subjects)]
@@ -776,7 +786,6 @@ class Command(BaseCommand):
                 student=student,
                 subject=subjects[extra_subject_name],
                 teacher=teachers[extra_teacher_name],
-                is_specialty=False,
                 is_active=True,
             )
 
@@ -819,6 +828,8 @@ class Command(BaseCommand):
             )
 
             for subject_index, (subject, teacher) in enumerate(assignment_items, start=1):
+                if subject.uses_element_assessment:
+                    continue
                 grade_offset = (student.pk + subject_index) % len(grade_values_source)
                 grade_values = grade_values_source[grade_offset:] + grade_values_source[:grade_offset]
                 for index, grade_value in enumerate(grade_values):
@@ -860,6 +871,106 @@ class Command(BaseCommand):
         Grade.objects.bulk_create(grades_to_create, batch_size=500)
         SubjectResult.objects.bulk_create(results_to_create, batch_size=500)
 
+    def _create_assessment_demo_data(
+        self,
+        students: list[Student],
+        academic_year: AcademicYear,
+        subjects: dict[str, Subject],
+        teachers: dict[str, Teacher],
+    ) -> None:
+        subject = subjects['Оркестр']
+        group_specs = [
+            {
+                'name': 'Продвинутый оркестр',
+                'study_group_name': '3 класс (продвинутые)',
+                'teacher': teachers['Наталья Лебедева'],
+                'sort_order': 10,
+                'items': [
+                    'Торжественная увертюра',
+                    'Пастораль',
+                    'Финальный марш',
+                ],
+            },
+            {
+                'name': 'Старший оркестр',
+                'study_group_name': 'Старший ансамбль',
+                'teacher': teachers['Игорь Романов'],
+                'sort_order': 20,
+                'items': [
+                    'Симфоническая миниатюра',
+                    'Хорал',
+                    'Праздничная фантазия',
+                ],
+            },
+        ]
+
+        for passed_count, grade in ((0, 'N'), (1, '3'), (2, '4'), (3, '5')):
+            FinalGradeRule.objects.create(
+                subject=subject,
+                academic_year=academic_year,
+                rule_type=FinalGradeRule.RULE_COUNT,
+                passed_count=passed_count,
+                grade=grade,
+                priority=10 + passed_count,
+            )
+
+        students_by_group: dict[str, list[Student]] = {}
+        for student in students:
+            students_by_group.setdefault(student.group.name, []).append(student)
+
+        for group_spec in group_specs:
+            assessment_group = AssessmentGroup.objects.create(
+                name=group_spec['name'],
+                description=(
+                    'Демонстрационная группа произведений. Она не связана с учебной '
+                    'группой по типу данных: ученики назначаются отдельно.'
+                ),
+                subject=subject,
+                academic_year=academic_year,
+                sort_order=group_spec['sort_order'],
+            )
+            items = [
+                AssessmentItem.objects.create(
+                    title=title,
+                    subject=subject,
+                    academic_year=academic_year,
+                    group=assessment_group,
+                    responsible_teacher=group_spec['teacher'],
+                    sort_order=index * 10,
+                    is_required=True,
+                )
+                for index, title in enumerate(group_spec['items'], start=1)
+            ]
+
+            for student_index, student in enumerate(
+                students_by_group.get(group_spec['study_group_name'], []),
+                start=1,
+            ):
+                assignment = StudentAssessmentGroup.objects.create(
+                    student=student,
+                    assessment_group=assessment_group,
+                    academic_year=academic_year,
+                )
+                for item_index, item in enumerate(items, start=1):
+                    # Отсутствующая запись намеренно означает «Не оценено».
+                    if item_index == 3 and student_index % 3 == 0:
+                        continue
+                    status = (
+                        AssessmentResult.STATUS_PASSED
+                        if (student_index + item_index) % 4 != 0
+                        else AssessmentResult.STATUS_FAILED
+                    )
+                    AssessmentResult.objects.create(
+                        enrollment=assignment.enrollment,
+                        item=item,
+                        status=status,
+                        assessed_by=group_spec['teacher'],
+                        comment=(
+                            'Демонстрационный результат: '
+                            + ('произведение принято.' if status == AssessmentResult.STATUS_PASSED else 'требуется повторная сдача.')
+                        ),
+                    )
+
     def _validate_demo_data(self) -> None:
         errors: list[str] = []
         active_year = AcademicYear.objects.filter(is_active=True).first()
@@ -891,34 +1002,52 @@ class Command(BaseCommand):
             if SubjectResult.objects.exclude(academic_year=active_year).exists():
                 errors.append('В тестовых данных есть итоги вне активного учебного года.')
 
+            if AssessmentGroup.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть группы произведений вне активного учебного года.')
+
+            if AssessmentItem.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть произведения вне активного учебного года.')
+
+            if StudentAssessmentGroup.objects.exclude(academic_year=active_year).exists():
+                errors.append('В тестовых данных есть назначения произведений вне активного учебного года.')
+
+        if Grade.objects.filter(subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS).exists():
+            errors.append('Для предмета со сдачей произведений созданы обычные оценки.')
+
+        if not AssessmentGroup.objects.exists() or not AssessmentItem.objects.exists():
+            errors.append('Не созданы демонстрационные группы произведений и произведения.')
+
+        if not StudentAssessmentGroup.objects.exists() or not AssessmentResult.objects.exists():
+            errors.append('Не созданы назначения групп произведений или результаты сдачи.')
+
+        if SubjectResult.objects.filter(
+            subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            is_auto_calculated=False,
+        ).exists():
+            errors.append('Итоги специального режима должны рассчитываться автоматически.')
+
         if GroupSubject.objects.filter(subject__is_specialty=True).exists():
             errors.append('Индивидуальные предметы назначены группам.')
 
         if StudentSubject.objects.filter(subject__is_specialty=False).exists():
             errors.append('Групповые предметы назначены индивидуальным ученикам.')
 
-        if StudentSubject.objects.filter(is_specialty=True).exclude(subject__name='Специальность').exists():
-            errors.append('Флаг Специальность стоит не только у предмета Специальность.')
-
-        if StudentSubject.objects.filter(is_specialty=False, subject__name='Специальность').exists():
-            errors.append('Предмет Специальность создан как дополнительный индивидуальный предмет.')
-
-        students_with_wrong_specialty_count = (
+        students_without_individual_subjects = (
             Student.objects
             .filter(is_active=True)
             .annotate(
-                active_specialties=Count(
+                active_individual_subjects=Count(
                     'individual_subjects',
-                    filter=Q(individual_subjects__is_active=True, individual_subjects__is_specialty=True),
+                    filter=Q(
+                        individual_subjects__is_active=True,
+                        individual_subjects__subject__is_specialty=True,
+                    ),
                 ),
             )
-            .exclude(active_specialties=1)
+            .filter(active_individual_subjects=0)
         )
-        if students_with_wrong_specialty_count.exists():
-            errors.append('Не у каждого активного ученика ровно одна активная специальность.')
-
-        if Grade.objects.exclude(value__in=Grade.ALLOWED_VALUES).exists():
-            errors.append('Есть оценки с недопустимыми значениями.')
+        if students_without_individual_subjects.exists():
+            errors.append('У некоторых активных учеников нет индивидуального предмета.')
 
         group_grade_keys = set(
             GroupSubject.objects
@@ -954,10 +1083,6 @@ class Command(BaseCommand):
             .filter(is_active=True)
             .values_list('student_id', 'subject_id')
         )
-        allowed_values_by_subject = {
-            subject.pk: subject.get_final_grade_allowed_values()
-            for subject in Subject.objects.all()
-        }
         for result_id, student_id, group_id, subject_id, exam_grade, final_grade in SubjectResult.objects.values_list(
             'pk',
             'student_id',
@@ -970,11 +1095,6 @@ class Command(BaseCommand):
                 errors.append(f'Итог без назначения: #{result_id}.')
                 break
 
-            allowed_values = allowed_values_by_subject.get(subject_id, set())
-            for value in (exam_grade, final_grade):
-                if value and value not in allowed_values:
-                    errors.append(f'Итог с недопустимым значением: #{result_id}.')
-                    break
 
         if errors:
             raise CommandError('Тестовые данные созданы с противоречиями: ' + ' '.join(errors))
@@ -1124,6 +1244,11 @@ class Command(BaseCommand):
         ]
 
         for application_data in application_specs:
+            application_data = dict(application_data)
+            instrument_name = application_data.pop('instrument').strip()
+            instrument_reference = Instrument.objects.filter(name=instrument_name).first()
+            application_data['instrument_reference'] = instrument_reference
+            application_data['custom_instrument'] = '' if instrument_reference else instrument_name
             application = CourseApplication.objects.create(**application_data)
             application.refresh_from_db()
 

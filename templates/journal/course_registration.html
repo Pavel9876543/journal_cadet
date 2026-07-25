@@ -333,6 +333,90 @@
             .actions { flex-direction: column; }
             .submit, .secondary-link, .telegram-link { width: 100%; }
         }
+
+
+        /* Полная адаптивность формы регистрации для основных размеров экранов. */
+        html,
+        body {
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+        .wrap,
+        .panel,
+        .panel__hero,
+        .content,
+        .grid,
+        .field,
+        .credential-box,
+        .credential-row {
+            min-width: 0;
+            max-width: 100%;
+        }
+        .brand,
+        .brand p,
+        .credential-value,
+        .help,
+        .hint,
+        .error {
+            overflow-wrap: anywhere;
+        }
+        @media (hover: none) and (pointer: coarse) {
+            .nav a,
+            .copy-button,
+            .submit,
+            .secondary-link,
+            .telegram-link,
+            .field input,
+            .field select {
+                min-height: 44px;
+            }
+        }
+        @media (max-width: 480px) {
+            .wrap {
+                width: 100%;
+                padding: 0;
+            }
+            .topbar {
+                padding: 12px;
+                margin-bottom: 0;
+            }
+            .nav,
+            .nav a {
+                width: 100%;
+            }
+            .nav a {
+                text-align: center;
+            }
+            .panel {
+                border-right: 0;
+                border-left: 0;
+                border-radius: 0;
+                box-shadow: none;
+            }
+            .panel__hero,
+            .content,
+            .success-card {
+                padding: 16px 12px;
+            }
+            .field input,
+            .field select,
+            .field textarea {
+                font-size: 16px;
+            }
+            .copy-button {
+                width: 100%;
+            }
+        }
+        @media (max-height: 560px) and (orientation: landscape) {
+            .wrap {
+                padding-top: 8px;
+            }
+            .panel__hero,
+            .content {
+                padding-top: 14px;
+                padding-bottom: 14px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -436,7 +520,7 @@
                     {% csrf_token %}
                     <div class="grid">
                         {% for field in form.visible_fields %}
-                            <div class="field{% if field.name == 'parent_contacts' or field.name == 'comments' or field.name == 'instrument' or field.name == 'city_church' or field.name == 'gender' %} field--full{% endif %}">
+                            <div class="field{% if field.name == 'parent_contacts' or field.name == 'comments' or field.name == 'instrument_reference' or field.name == 'custom_instrument' or field.name == 'city_church' or field.name == 'gender' %} field--full{% endif %}">
                                 {% if field.name == 'gender' %}
                                     <div class="field-label">
                                         {{ field.label }}{% if field.field.required %}<span class="required">*</span>{% endif %}
@@ -491,9 +575,14 @@
 
         var birthInput = form.querySelector('[name="birth_date"]');
         var phoneInput = form.querySelector('[name="student_phone"]');
+        var instrumentReference = form.querySelector('[data-instrument-reference="1"]');
+        var customInstrument = form.querySelector('[data-custom-instrument="1"]');
         var submitButton = document.getElementById('submit-button');
         var ageNote = document.getElementById('age-note');
         var ageLimit = birthInput ? parseInt(birthInput.dataset.ageLimit || '0', 10) : 0;
+        var ageReferenceYear = birthInput
+            ? parseInt(birthInput.dataset.ageReferenceYear || String(new Date().getFullYear()), 10)
+            : new Date().getFullYear();
         var ageErrorMessage = birthInput && birthInput.dataset.ageErrorMessage
             ? birthInput.dataset.ageErrorMessage
             : 'Регистрация на курсы доступна только с ' + ageLimit + ' лет.';
@@ -547,22 +636,33 @@
             return parsedDate;
         }
 
-        function calcAge(value) {
+        function ageReachedInCourseYear(value) {
             var birth = parseIsoDate(value);
-            if (!birth) {
+            if (!birth || Number.isNaN(birth.getTime())) {
                 return null;
             }
-            var referenceDate = parseIsoDate(birthInput.dataset.ageReferenceDate) || new Date();
-            if (Number.isNaN(birth.getTime())) {
-                return null;
-            }
+            return ageReferenceYear - birth.getUTCFullYear();
+        }
 
-            var age = referenceDate.getUTCFullYear() - birth.getUTCFullYear();
-            var monthDiff = referenceDate.getUTCMonth() - birth.getUTCMonth();
-            if (monthDiff < 0 || (monthDiff === 0 && referenceDate.getUTCDate() < birth.getUTCDate())) {
-                age -= 1;
+        function updateCustomInstrumentState() {
+            if (!instrumentReference || !customInstrument) {
+                return true;
             }
-            return age;
+            var customWrap = customInstrument.closest('.field');
+            var useCustom = !instrumentReference.value;
+            if (customWrap) {
+                customWrap.hidden = !useCustom;
+            }
+            customInstrument.disabled = !useCustom;
+            customInstrument.required = useCustom;
+            if (!useCustom) {
+                customInstrument.value = '';
+                customInstrument.setCustomValidity('');
+                return true;
+            }
+            var valid = Boolean((customInstrument.value || '').trim());
+            customInstrument.setCustomValidity(valid ? '' : 'Укажите название другого инструмента.');
+            return valid;
         }
 
         function validatePhone() {
@@ -590,7 +690,7 @@
             if (!birthInput || !ageNote || !submitButton) {
                 return;
             }
-            var age = calcAge(birthInput.value);
+            var age = ageReachedInCourseYear(birthInput.value);
             var valid = age === null || !ageLimit || age >= ageLimit;
             if (age === null) {
                 ageNote.textContent = 'Возраст будет рассчитан после выбора даты рождения.';
@@ -599,11 +699,18 @@
                 ageNote.textContent = ageErrorMessage;
                 ageNote.classList.add('invalid');
             } else {
-                ageNote.textContent = 'Возраст на дату начала курсов: ' + age + ' лет.';
+                ageNote.textContent = 'В ' + ageReferenceYear + ' году исполнится ' + age + ' лет.';
                 ageNote.classList.remove('invalid');
             }
             birthInput.setCustomValidity(valid ? '' : ageErrorMessage);
             submitButton.disabled = !valid;
+        }
+
+        if (instrumentReference) {
+            instrumentReference.addEventListener('change', updateCustomInstrumentState);
+        }
+        if (customInstrument) {
+            customInstrument.addEventListener('input', updateCustomInstrumentState);
         }
 
         if (phoneInput) {
@@ -624,6 +731,7 @@
 
         form.addEventListener('submit', function (event) {
             validatePhone();
+            updateCustomInstrumentState();
             updateAgeState();
             if (!form.checkValidity()) {
                 event.preventDefault();
@@ -632,6 +740,7 @@
             }
         });
 
+        updateCustomInstrumentState();
         updateAgeState();
         scrollToFirstServerError();
     });

@@ -109,6 +109,7 @@ JAZZMIN_SETTINGS = {
     'copyright': 'Электронный журнал музыкальной школы',
     'search_model': ['journal.Student', 'journal.Teacher', 'journal.CourseApplication'],
     'custom_css': 'journal/admin_dashboard.css',
+    'custom_js': 'journal/admin_responsive.js',
     'navigation_expanded': True,
     'show_ui_builder': False,
     'related_modal_active': True,

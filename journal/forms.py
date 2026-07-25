@@ -26,8 +26,8 @@ from .models import (
     Teacher,
 )
 from .registration_utils import (
-    calculate_age,
-    minimum_birth_date_for_age,
+    latest_birth_date_for_age_in_year,
+    reaches_age_in_calendar_year,
     normalize_parent_contacts,
     normalize_phone_number,
 )
@@ -247,7 +247,7 @@ class GradeCreateForm(forms.ModelForm):
         widgets = {
             'date': html_date_input(),
             'comment': forms.TextInput(attrs={'placeholder': 'Комментарий, если нужен'}),
-            'value': forms.Select(choices=Grade.GRADE_CHOICES),
+            'value': forms.TextInput(attrs={'maxlength': 64, 'placeholder': '5, 5+, Зачёт, N…'}),
         }
 
     def __init__(
@@ -587,17 +587,13 @@ class SubjectResultForm(forms.ModelForm):
                     'Нельзя выставить итог по предмету, который не назначен ученику.'
                 )
 
-            allowed_values = subject.get_final_grade_allowed_values()
+            if subject.uses_element_assessment:
+                self.add_error(
+                    'final_grade',
+                    'Итог специального режима рассчитывается автоматически и вручную не изменяется.',
+                )
             for field_name in ('exam_grade', 'final_grade'):
-                value = Subject.normalize_final_grade(cleaned_data.get(field_name))
-                if value is None:
-                    cleaned_data[field_name] = None
-                    continue
-                if value not in allowed_values:
-                    raise forms.ValidationError({
-                        field_name: 'Недопустимое значение для типа итоговой аттестации выбранного предмета.'
-                    })
-                cleaned_data[field_name] = value
+                cleaned_data[field_name] = Subject.normalize_final_grade(cleaned_data.get(field_name))
 
         return cleaned_data
 
@@ -662,20 +658,25 @@ class BaseCourseApplicationForm(forms.ModelForm):
             self.fields['gender'].widget = forms.RadioSelect(choices=CourseApplication.GENDER_CHOICES)
         if 'birth_date' in self.fields:
             self.fields['birth_date'].widget = html_date_input()
-        if 'instrument' in self.fields:
-            self.fields['instrument'].help_text = (
-                'Укажите музыкальный инструмент или партию в оркестре. '
-                'Если ранее не играли, укажите инструмент, на котором планируете обучаться.'
+        if 'instrument_reference' in self.fields:
+            self.fields['instrument_reference'].queryset = Instrument.objects.order_by('name')
+            self.fields['instrument_reference'].empty_label = 'Другой инструмент'
+            self.fields['instrument_reference'].help_text = (
+                'Выберите значение из справочника. Если подходящего нет, оставьте '
+                '«Другой инструмент» и заполните поле ниже.'
             )
-            instrument_choices = self._instrument_choices()
-            if instrument_choices:
-                self.fields['instrument'].widget = forms.Select(
-                    choices=[('', 'Выберите инструмент')] + instrument_choices,
-                )
-            else:
-                self.fields['instrument'].widget.attrs.update({
-                    'placeholder': 'Например: Баян, Домра малая II, Фортепиано',
-                })
+            self.fields['instrument_reference'].widget.attrs.update({
+                'data-instrument-reference': '1',
+            })
+        if 'custom_instrument' in self.fields:
+            self.fields['custom_instrument'].required = False
+            self.fields['custom_instrument'].help_text = (
+                'Значение сохраняется только в заявке и карточке ученика и не добавляется в справочник.'
+            )
+            self.fields['custom_instrument'].widget.attrs.update({
+                'placeholder': 'Например: Домра малая II или партия тенора',
+                'data-custom-instrument': '1',
+            })
         if 'music_education' in self.fields:
             self.fields['music_education'].widget = forms.Select(
                 choices=CourseApplication.MUSIC_EDUCATION_CHOICES,
@@ -704,42 +705,26 @@ class BaseCourseApplicationForm(forms.ModelForm):
             self.fields['comments'].required = False
 
         if self.age_limit and 'birth_date' in self.fields:
-            minimum_birth_date = minimum_birth_date_for_age(
+            course_start_year = self.age_reference_date.year
+            latest_birth_date = latest_birth_date_for_age_in_year(
                 self.minimum_registration_age,
-                today=self.age_reference_date,
+                year=course_start_year,
             )
             age_error_message = (
-                f'Регистрация на курсы доступна только с {self.minimum_registration_age} лет.'
+                f'Регистрация доступна ученикам, которым в {course_start_year} году '
+                f'исполнится не менее {self.minimum_registration_age} лет.'
             )
             self.fields['birth_date'].widget.attrs.update({
-                'max': minimum_birth_date.isoformat(),
+                'max': latest_birth_date.isoformat(),
                 'data-age-limit': str(self.minimum_registration_age),
-                'data-age-reference-date': self.age_reference_date.isoformat(),
+                'data-age-reference-year': str(course_start_year),
                 'data-age-error-message': age_error_message,
             })
             self.fields['birth_date'].help_text = (
-                f'Регистрация на курсы доступна с {self.minimum_registration_age} лет. '
-                f'Возраст считается на {self.age_reference_date:%d.%m.%Y}.'
+                f'Можно зарегистрироваться, если в {course_start_year} году исполнится '
+                f'{self.minimum_registration_age} лет или больше.'
             )
 
-    def _instrument_choices(self):
-        names = list(Instrument.objects.order_by('name').values_list('name', flat=True))
-        extra_values = []
-
-        if self.is_bound:
-            raw_value = self.data.get(self.add_prefix('instrument')) or self.data.get('instrument')
-            if raw_value:
-                extra_values.append(str(raw_value).strip())
-        elif self.instance and self.instance.pk and self.instance.instrument:
-            extra_values.append(self.instance.instrument.strip())
-        elif self.initial.get('instrument'):
-            extra_values.append(str(self.initial['instrument']).strip())
-
-        for value in extra_values:
-            if value and value not in names:
-                names.append(value)
-
-        return [(name, name) for name in names]
 
     class Meta:
         model = CourseApplication
@@ -750,7 +735,8 @@ class BaseCourseApplicationForm(forms.ModelForm):
             'gender',
             'birth_date',
             'city_church',
-            'instrument',
+            'instrument_reference',
+            'custom_instrument',
             'music_education',
             'student_phone',
             'parent_contacts',
@@ -773,17 +759,24 @@ class BaseCourseApplicationForm(forms.ModelForm):
     def clean_city_church(self):
         return self.cleaned_data['city_church'].strip()
 
-    def clean_instrument(self):
-        value = self.cleaned_data['instrument'].strip()
-        available_names = set(Instrument.objects.values_list('name', flat=True))
-        current_value = ''
-        if self.instance and self.instance.pk:
-            current_value = self.instance.instrument.strip()
-
-        if available_names and value not in available_names and value != current_value:
-            raise forms.ValidationError('Выберите инструмент из списка.')
-
-        return value
+    def clean(self):
+        cleaned_data = super().clean()
+        reference = cleaned_data.get('instrument_reference')
+        custom = (cleaned_data.get('custom_instrument') or '').strip()
+        cleaned_data['custom_instrument'] = custom
+        if reference and custom:
+            self.add_error(
+                'custom_instrument',
+                'Нельзя одновременно выбрать инструмент из справочника и указать собственный.',
+            )
+        elif not reference and not custom:
+            self.add_error(
+                'custom_instrument',
+                'Выберите инструмент или укажите собственное название.',
+            )
+        if reference:
+            cleaned_data['custom_instrument'] = ''
+        return cleaned_data
 
     def clean_student_phone(self):
         return normalize_phone_number(self.cleaned_data['student_phone'])
@@ -797,10 +790,15 @@ class BaseCourseApplicationForm(forms.ModelForm):
             raise forms.ValidationError('Дата рождения не может быть в будущем.')
         if (
             self.age_limit
-            and calculate_age(birth_date, today=self.age_reference_date) < self.minimum_registration_age
+            and not reaches_age_in_calendar_year(
+                birth_date,
+                self.minimum_registration_age,
+                year=self.age_reference_date.year,
+            )
         ):
             raise forms.ValidationError(
-                f'Регистрация на курсы доступна только с {self.minimum_registration_age} лет.'
+                f'Регистрация доступна ученикам, которым в {self.age_reference_date.year} году '
+                f'исполнится не менее {self.minimum_registration_age} лет.'
             )
         return birth_date
 

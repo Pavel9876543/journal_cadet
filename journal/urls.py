@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    assessment_options_api,
     assignment_options_api,
     course_registration_api,
     course_registration_view,
@@ -16,4 +17,5 @@ urlpatterns = [
     path('api/course-registration/', course_registration_api, name='course_registration_api'),
     path('api/grade-options/', grade_options_api, name='grade_options_api'),
     path('api/assignment-options/', assignment_options_api, name='assignment_options_api'),
+    path('api/assessment-options/', assessment_options_api, name='assessment_options_api'),
 ]

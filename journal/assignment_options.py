@@ -5,13 +5,6 @@ from django.db.models import Exists, OuterRef, Q, QuerySet
 from .models import AcademicYear, Student, StudyGroup, Subject, Teacher, TeacherEnrollment
 
 
-def is_default_specialty_assignment(subject: Subject | None) -> bool:
-    if subject is None:
-        return False
-    normalized_name = (subject.name or '').strip().lower().replace('ё', 'е')
-    return normalized_name == 'специальность' or normalized_name.startswith('специальность ')
-
-
 def group_subject_queryset() -> QuerySet[Subject]:
     return Subject.objects.filter(is_active=True, is_specialty=False).order_by('name')
 

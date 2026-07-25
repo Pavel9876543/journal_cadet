@@ -944,7 +944,170 @@
                 transition-duration: 0.01ms !important;
             }
         }
-    </style>
+
+
+        /* Общая адаптивность личного кабинета: телефон, планшет, ноутбук и ПК. */
+        html,
+        body {
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+
+        .topbar-inner,
+        .main,
+        .toolbar,
+        .quick-entry,
+        .table-panel,
+        .table-panel-head,
+        .section-head,
+        .filter-form,
+        .grade-form,
+        .field,
+        .table-title,
+        .section-title,
+        .user-panel,
+        .user-meta {
+            min-width: 0;
+            max-width: 100%;
+        }
+
+        .table-scroll {
+            max-height: min(64vh, calc(100dvh - 180px));
+            overscroll-behavior: contain;
+            touch-action: pan-x pan-y;
+        }
+
+        .table-scroll table {
+            margin: 0;
+        }
+
+        .table-panel-head,
+        .section-head,
+        .workspace-heading,
+        .topbar-inner {
+            overflow-wrap: anywhere;
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            button,
+            .button,
+            select,
+            input {
+                min-height: 44px;
+            }
+
+            .journal-tab {
+                min-height: 44px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .topbar-inner,
+            .main {
+                padding-right: 10px;
+                padding-left: 10px;
+            }
+
+            .topbar-inner {
+                padding-top: 10px;
+                padding-bottom: 10px;
+            }
+
+            .brand-mark {
+                width: 36px;
+                height: 36px;
+            }
+
+            .brand-copy p,
+            .role-chip {
+                font-size: 0.78rem;
+            }
+
+            .workspace-title h2 {
+                font-size: 1.3rem;
+            }
+
+            .summary-item {
+                padding: 11px 12px;
+            }
+
+            .table-note {
+                align-items: flex-start;
+                margin-right: 10px;
+                margin-left: 10px;
+            }
+
+            .meta-chip {
+                white-space: normal;
+            }
+
+            .empty-state {
+                align-items: flex-start;
+            }
+        }
+
+        @media (max-height: 600px) and (orientation: landscape) {
+            .topbar,
+            .journal-tabs {
+                position: static;
+            }
+
+            .table-scroll {
+                max-height: 72dvh;
+            }
+        }
+
+
+        .assessment-stack {
+            display: grid;
+            gap: 18px;
+            margin-bottom: 22px;
+        }
+        .assessment-actions {
+            display: grid;
+            grid-template-columns: minmax(130px, 0.8fr) minmax(180px, 1.6fr) auto;
+            gap: 8px;
+            align-items: center;
+            min-width: 360px;
+        }
+        .assessment-actions select,
+        .assessment-actions input {
+            width: 100%;
+            min-height: 40px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font: inherit;
+        }
+        .assessment-actions button {
+            min-height: 40px;
+            white-space: nowrap;
+        }
+        .assessment-status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 30px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: var(--surface-muted);
+            font-weight: 700;
+        }
+        .assessment-status--passed { color: #166534; background: #dcfce7; }
+        .assessment-status--failed { color: #991b1b; background: #fee2e2; }
+        .assessment-final-grid {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 14px 18px 18px;
+        }
+        @media (max-width: 720px) {
+            .assessment-actions {
+                grid-template-columns: 1fr;
+                min-width: 230px;
+            }
+            .assessment-actions button { width: 100%; }
+        }
+</style>
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true">
@@ -1296,6 +1459,131 @@
                 </section>
             {% endif %}
 
+
+            {% if assessment_sections %}
+                <section class="assessment-stack" aria-label="Сдача произведений">
+                    <div class="workspace-title">
+                        <h2>Сдача произведений</h2>
+                        <p>Вы видите только произведения, где назначены ответственным дирижёром.</p>
+                    </div>
+                    {% for section in assessment_sections %}
+                        <section class="table-card">
+                            <div class="table-card-header">
+                                <div>
+                                    <h3>{{ section.item.title }}</h3>
+                                    <p>{{ section.item.subject.name }} · {{ section.item.group.name }}</p>
+                                </div>
+                                {% if not section.item.responsible_teacher %}
+                                    <span class="assessment-status">Дирижёр не назначен</span>
+                                {% endif %}
+                            </div>
+                            <div class="table-scroll" tabindex="0" role="region" aria-label="{{ section.item.title }}">
+                                <table>
+                                    <thead>
+                                    <tr>
+                                        <th class="sticky-col" scope="col">Ученик</th>
+                                        <th scope="col">Группа</th>
+                                        <th scope="col">Текущий результат</th>
+                                        <th scope="col">Итог предмета</th>
+                                        <th scope="col">Изменить результат</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    {% for row in section.rows %}
+                                        <tr>
+                                            <th class="sticky-col" scope="row">{{ row.enrollment.full_name }}</th>
+                                            <td>{% if row.enrollment.group %}{{ row.enrollment.group.name }}{% else %}—{% endif %}</td>
+                                            <td>
+                                                {% if row.result %}
+                                                    <span class="assessment-status{% if row.result.status == 'passed' %} assessment-status--passed{% else %} assessment-status--failed{% endif %}">
+                                                        {{ row.result.get_status_display }}
+                                                    </span>
+                                                    {% if row.result.comment %}<div class="muted">{{ row.result.comment }}</div>{% endif %}
+                                                {% else %}
+                                                    <span class="assessment-status">Не оценено</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>{% if row.final_result %}{{ row.final_result.final_grade|default:'Не рассчитано' }}{% else %}Не рассчитано{% endif %}</td>
+                                            <td>
+                                                {% if can_edit_journal %}
+                                                    <form method="post" class="assessment-actions">
+                                                        {% csrf_token %}
+                                                        <input type="hidden" name="action" value="assessment_result">
+                                                        <input type="hidden" name="item_id" value="{{ section.item.id }}">
+                                                        <input type="hidden" name="student_id" value="{{ row.student.id }}">
+                                                        <select name="status" aria-label="Результат для {{ row.enrollment.full_name }}" required>
+                                                            <option value="">Выберите</option>
+                                                            <option value="passed" {% if row.result and row.result.status == 'passed' %}selected{% endif %}>Зачёт</option>
+                                                            <option value="failed" {% if row.result and row.result.status == 'failed' %}selected{% endif %}>Незачёт</option>
+                                                            {% if row.result %}<option value="clear">Очистить результат</option>{% endif %}
+                                                        </select>
+                                                        <input type="text" name="comment" maxlength="1000" value="{% if row.result %}{{ row.result.comment }}{% endif %}" placeholder="Комментарий">
+                                                        <button type="submit">Сохранить</button>
+                                                    </form>
+                                                {% else %}
+                                                    <span class="muted">Только просмотр</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr><td colspan="5">Эта группа произведений пока не назначена ученикам.</td></tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    {% endfor %}
+                </section>
+            {% endif %}
+
+            {% if assessment_rows %}
+                <section class="assessment-stack" aria-label="Мои произведения">
+                    <div class="workspace-title">
+                        <h2>Мои произведения</h2>
+                        <p>Список сформирован из всех назначенных вам групп произведений.</p>
+                    </div>
+                    <section class="table-card">
+                        <div class="table-scroll" tabindex="0" role="region" aria-label="Результаты сдачи произведений">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="sticky-col" scope="col">Произведение</th>
+                                    <th scope="col">Группа произведений</th>
+                                    <th scope="col">Предмет</th>
+                                    <th scope="col">Дирижёр</th>
+                                    <th scope="col">Результат</th>
+                                    <th scope="col">Дата</th>
+                                    <th scope="col">Комментарий</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {% for row in assessment_rows %}
+                                    <tr>
+                                        <th class="sticky-col" scope="row">{{ row.item.title }}</th>
+                                        <td>{{ row.item.group.name }}</td>
+                                        <td>{{ row.item.subject.name }}</td>
+                                        <td>{% if row.item.responsible_teacher %}{{ row.item.responsible_teacher.full_name }}{% else %}Не назначен{% endif %}</td>
+                                        <td>
+                                            <span class="assessment-status{% if row.result and row.result.status == 'passed' %} assessment-status--passed{% elif row.result %} assessment-status--failed{% endif %}">
+                                                {{ row.status_display }}
+                                            </span>
+                                        </td>
+                                        <td>{% if row.result %}{{ row.result.assessed_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td>
+                                        <td>{% if row.result and row.result.comment %}{{ row.result.comment }}{% else %}—{% endif %}</td>
+                                    </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="assessment-final-grid">
+                            {% for subject_id, result in assessment_final_results.items %}
+                                <span class="meta-chip"><strong>{{ result.subject.name }}:</strong>&nbsp;{{ result.final_grade|default:'Не рассчитано' }}</span>
+                            {% endfor %}
+                        </div>
+                    </section>
+                </section>
+            {% endif %}
+
             {% if not journal_tables %}
                 <section class="empty-state">
                     <span class="section-icon">
@@ -1387,8 +1675,7 @@
                                                                 {% if cell %}
                                                                     <input
                                                                         type="text"
-                                                                        maxlength="1"
-                                                                        pattern="[1-5Нн]"
+                                                                        maxlength="64"
                                                                         name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
                                                                         value="{{ cell }}"
                                                                         aria-label="{{ row.student_name }}: {{ lesson_date|date:'d.m.Y' }}"
@@ -1415,12 +1702,7 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <select name="exam__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student_name }}: экзамен">
-                                                            <option value="">-</option>
-                                                            {% for option in table.final_grade_options %}
-                                                                <option value="{{ option }}" {% if row.exam_grade == option %}selected{% endif %}>{{ option }}</option>
-                                                            {% endfor %}
-                                                        </select>
+                                                        <input type="text" maxlength="64" name="exam__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.exam_grade }}" aria-label="{{ row.student_name }}: экзамен" placeholder="—">
                                                     {% else %}
                                                         {% if row.exam_grade %}
                                                             {{ row.exam_grade }}
@@ -1431,12 +1713,7 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <select name="final__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student_name }}: итоговая оценка">
-                                                            <option value="">-</option>
-                                                            {% for option in table.final_grade_options %}
-                                                                <option value="{{ option }}" {% if row.final_grade == option %}selected{% endif %}>{{ option }}</option>
-                                                            {% endfor %}
-                                                        </select>
+                                                        <input type="text" maxlength="64" name="final__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.final_grade }}" aria-label="{{ row.student_name }}: итоговая оценка" placeholder="—">
                                                     {% else %}
                                                         {% if row.final_grade %}
                                                             {{ row.final_grade }}

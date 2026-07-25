@@ -12,7 +12,7 @@ from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import Count, Q
@@ -22,6 +22,12 @@ from django.urls import reverse
 from openpyxl import load_workbook
 
 from journal.academic_year_context import filter_temporary_credentials_for_year
+from journal.assessment_services import (
+    available_assessment_items_for_student,
+    calculate_final_grade,
+    set_assessment_result,
+)
+from journal.services.excel_export import build_full_export_workbook
 from journal.assignment_options import assignment_teacher_queryset
 from journal.account_utils import (
     build_course_application_login,
@@ -39,6 +45,7 @@ from journal.admin import (
     GroupSubjectAdminForm,
     StudentAdmin,
     StudentAdminForm,
+    StudentAssessmentGroupInline,
     StudentInline,
     StudentSubjectAdminForm,
     StudyGroupAdmin,
@@ -66,7 +73,12 @@ from journal.grade_options import (
     get_grade_subjects,
     get_grade_teachers,
 )
-from journal.registration_utils import minimum_birth_date_for_age, normalize_parent_contacts
+from journal.registration_utils import (
+    latest_birth_date_for_age_in_year,
+    minimum_birth_date_for_age,
+    normalize_parent_contacts,
+    reaches_age_in_calendar_year,
+)
 from journal.templatetags.admin_dashboard import journal_admin_dashboard
 from journal.views import (
     _build_journal_tables,
@@ -74,13 +86,18 @@ from journal.views import (
 )
 from journal.models import (
     AcademicYear,
+    AssessmentGroup,
+    AssessmentItem,
+    AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
     Grade,
     GroupSubject,
+    FinalGradeRule,
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
     StudyGroup,
@@ -171,7 +188,6 @@ class JournalTestDataMixin:
         student=None,
         subject=None,
         teacher=None,
-        is_specialty=True,
     ):
         student = student or self.create_student()
         subject = subject or self.create_subject(
@@ -183,7 +199,6 @@ class JournalTestDataMixin:
             student=student,
             subject=subject,
             teacher=teacher,
-            is_specialty=is_specialty,
         )
 
     def create_base_journal(self):
@@ -223,7 +238,6 @@ class JournalTestDataMixin:
             student=student,
             subject=specialty,
             teacher=other_teacher,
-            is_specialty=True,
         )
 
         return {
@@ -239,6 +253,14 @@ class JournalTestDataMixin:
         }
 
     def application_payload(self, **overrides):
+        instrument_name = overrides.pop('instrument', 'Баян I')
+        custom_instrument = overrides.pop('custom_instrument', '')
+        instrument_reference = overrides.pop('instrument_reference', None)
+        if instrument_reference is None and not custom_instrument:
+            instrument_reference, _created = Instrument.objects.get_or_create(
+                name=instrument_name,
+            )
+
         payload = {
             'last_name': 'Иванов',
             'first_name': 'Иван',
@@ -246,7 +268,9 @@ class JournalTestDataMixin:
             'gender': CourseApplication.GENDER_MALE,
             'birth_date': date(2000, 1, 1),
             'city_church': 'Тамбов',
-            'instrument': 'Баян I',
+            'instrument': instrument_name,
+            'instrument_reference': instrument_reference,
+            'custom_instrument': custom_instrument,
             'music_education': CourseApplication.MUSIC_EDUCATION_NONE,
             'student_phone': '+7 (999) 123-45-67',
             'parent_contacts': '',
@@ -261,6 +285,9 @@ class JournalTestDataMixin:
 
         if hasattr(birth_date, 'isoformat'):
             payload['birth_date'] = birth_date.isoformat()
+        reference = payload.get('instrument_reference')
+        payload['instrument_reference'] = reference.pk if reference is not None else ''
+        payload.pop('instrument', None)
 
         return payload
 
@@ -672,7 +699,6 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
                 student=data['student'],
                 subject=data['solfeggio'],
                 teacher=data['teacher'],
-                is_specialty=False,
             )
 
     def test_subject_cannot_be_switched_to_individual_with_group_assignments(self):
@@ -691,21 +717,25 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         with self.assertRaises(ValidationError):
             subject.save()
 
-    def test_student_can_have_only_one_active_specialty(self):
+    def test_student_can_have_multiple_individual_subjects(self):
         data = self.create_base_journal()
-        another_specialty = self.create_subject(
-            name='Специальность 2',
+        another_subject = self.create_subject(
+            name='Индивидуальная импровизация',
             is_specialty=True,
         )
 
-        with self.assertRaises(ValidationError):
-            StudentSubject.objects.create(
-                student=data['student'],
-                subject=another_specialty,
-                teacher=data['teacher'],
-                is_specialty=True,
-                is_active=True,
-            )
+        assignment = StudentSubject.objects.create(
+            student=data['student'],
+            subject=another_subject,
+            teacher=data['teacher'],
+            is_active=True,
+        )
+
+        self.assertEqual(assignment.subject, another_subject)
+        self.assertEqual(
+            StudentSubject.objects.filter(student=data['student'], is_active=True).count(),
+            2,
+        )
 
     def test_teacher_subject_stores_qualification_not_assignment(self):
         subject = self.create_subject()
@@ -995,7 +1025,8 @@ class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):
 
         application.birth_date = date(1999, 5, 4)
         application.city_church = 'Воронеж / Отрожка'
-        application.instrument = 'Фортепиано'
+        application.instrument_reference = self.create_instrument(name='Фортепиано')
+        application.custom_instrument = ''
         application.music_education = CourseApplication.MUSIC_EDUCATION_HIGHER
         application.student_phone = '+7 (999) 123-45-69'
         application.parent_contacts = 'Отец - +7 (999) 111-22-33'
@@ -1350,25 +1381,34 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIn('value="Иванов"', str(form['last_name']))
         self.assertIn('value="2000-01-02"', str(form['birth_date']))
         self.assertIn('Воронеж, Отрожка', str(form['city_church']))
-        self.assertIn('Фортепиано', str(form['instrument']))
+        self.assertIn('Фортепиано', str(form['instrument_reference']))
         self.assertIn('value="basic" selected', str(form['music_education']))
         self.assertIn('Нужен вечерний поток', str(form['comments']))
 
-    def test_course_application_form_uses_instrument_directory_when_available(self):
-        self.create_instrument(name='Баян')
-        self.create_instrument(name='Фортепиано')
+    def test_course_application_form_supports_directory_and_custom_instruments(self):
+        bayan = self.create_instrument(name='Баян')
 
-        valid_form = CourseApplicationPublicForm(
-            data=self.application_form_payload(instrument='Баян'),
+        directory_form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                instrument='Баян',
+                instrument_reference=bayan,
+            ),
         )
-        invalid_form = CourseApplicationPublicForm(
-            data=self.application_form_payload(instrument='Случайный инструмент'),
+        custom_form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                instrument='Домра малая II',
+                instrument_reference=None,
+                custom_instrument='Домра малая II',
+            ),
         )
 
-        self.assertIn('<select', str(valid_form['instrument']))
-        self.assertTrue(valid_form.is_valid(), valid_form.errors)
-        self.assertFalse(invalid_form.is_valid())
-        self.assertIn('instrument', invalid_form.errors)
+        self.assertIn('<select', str(directory_form['instrument_reference']))
+        self.assertTrue(directory_form.is_valid(), directory_form.errors)
+        self.assertTrue(custom_form.is_valid(), custom_form.errors)
+        application = custom_form.save()
+        self.assertEqual(application.custom_instrument, 'Домра малая II')
+        self.assertIsNone(application.instrument_reference)
+        self.assertFalse(Instrument.objects.filter(name='Домра малая II').exists())
 
     def test_parent_contacts_accepts_dash_from_form_placeholder(self):
         normalized_contacts = normalize_parent_contacts(
@@ -1400,7 +1440,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn('birth_date', form.errors)
 
-    def test_public_course_application_form_uses_registration_settings_age_and_course_start(self):
+    def test_public_course_application_form_uses_age_reached_in_course_start_year(self):
         self.create_academic_year(name='2025/2026')
         registration_settings = CourseRegistrationSettings.objects.create(
             pk=1,
@@ -1408,33 +1448,56 @@ class FormTests(JournalTestDataMixin, TestCase):
             minimum_registration_age=15,
         )
 
-        too_young_form = CourseApplicationPublicForm(
+        allowed_form = CourseApplicationPublicForm(
             data=self.application_form_payload(
-                birth_date=date(2010, 9, 2),
+                birth_date=date(2010, 12, 31),
             ),
             registration_settings=registration_settings,
         )
-        allowed_form = CourseApplicationPublicForm(
+        too_young_form = CourseApplicationPublicForm(
             data=self.application_form_payload(
-                birth_date=date(2010, 9, 1),
+                birth_date=date(2011, 1, 1),
             ),
             registration_settings=registration_settings,
         )
 
+        self.assertTrue(allowed_form.is_valid(), allowed_form.errors)
         self.assertFalse(too_young_form.is_valid())
         self.assertIn('birth_date', too_young_form.errors)
-        self.assertTrue(allowed_form.is_valid(), allowed_form.errors)
         self.assertEqual(
             allowed_form.fields['birth_date'].widget.attrs['max'],
-            '2010-09-01',
+            '2010-12-31',
         )
         self.assertEqual(
             allowed_form.fields['birth_date'].widget.attrs['data-age-limit'],
             '15',
         )
         self.assertEqual(
-            allowed_form.fields['birth_date'].widget.attrs['data-age-reference-date'],
-            '2025-09-01',
+            allowed_form.fields['birth_date'].widget.attrs['data-age-reference-year'],
+            '2025',
+        )
+
+    def test_calendar_year_age_helpers_accept_any_birthday_in_qualifying_year(self):
+        self.assertEqual(
+            latest_birth_date_for_age_in_year(14, year=2026),
+            date(2012, 12, 31),
+        )
+        self.assertTrue(
+            reaches_age_in_calendar_year(date(2012, 12, 31), 14, year=2026),
+        )
+        self.assertFalse(
+            reaches_age_in_calendar_year(date(2013, 1, 1), 14, year=2026),
+        )
+
+    def test_music_education_choices_use_clear_education_levels(self):
+        self.assertEqual(
+            list(CourseApplication.MUSIC_EDUCATION_CHOICES),
+            [
+                ('self_taught', 'Самоучка'),
+                ('basic', 'Музыкальная школа'),
+                ('secondary', 'Колледж'),
+                ('higher', 'Институт'),
+            ],
         )
 
     def test_course_registration_settings_form_stores_age_and_uses_active_year_dates(self):
@@ -1944,7 +2007,7 @@ class AssignmentOptionsApiTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertFalse(payload['defaults']['is_specialty'])
+        self.assertTrue(payload['defaults']['subject_is_individual'])
         self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
         self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
         self.assertIn(extra_subject.pk, [item['id'] for item in payload['subjects']])
@@ -2685,6 +2748,40 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, application.full_name)
 
+    def test_student_change_page_renders_assessment_group_inline_without_key_error(self):
+        year = self.create_academic_year()
+        study_group = self.create_group(academic_year=year)
+        student = self.create_student(group=study_group)
+        teacher = self.create_teacher(username='assessment_teacher')
+        subject = Subject.objects.create(
+            name='Оркестр',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        GroupSubject.objects.create(
+            group=study_group,
+            subject=subject,
+            teacher=teacher,
+        )
+        assessment_group = AssessmentGroup.objects.create(
+            name='Старший оркестр',
+            subject=subject,
+            academic_year=year,
+        )
+        self.client.force_login(self.superuser)
+
+        response = self.client.get(
+            reverse('admin:journal_student_change', args=[student.pk]),
+            {'academic_year': year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, assessment_group.name)
+
+        inline = StudentAssessmentGroupInline(Student, django_admin.site)
+        formset = inline.get_formset(self.admin_request(year), student)(instance=student)
+        self.assertIn('assessment_group', formset.forms[0].fields)
+
     def test_group_student_inline_exposes_related_student_controls_and_card_link(self):
         year = self.create_academic_year()
         group = self.create_group(academic_year=year)
@@ -2798,10 +2895,11 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertEqual(inline_form.fields['city_church'].widget.attrs.get('size'), '80')
 
         css = Path('journal/static/journal/admin_dashboard.css').read_text(encoding='utf-8')
-        javascript = Path('journal/static/journal/group_student_inline.js').read_text(encoding='utf-8')
-        self.assertIn('min-width: min(680px, 74vw)', css)
-        self.assertIn('max-width: min(1440px, 96vw)', css)
-        self.assertIn("window.django.jQuery(document).on('shown.bs.modal'", javascript)
+        javascript = Path('journal/static/journal/admin_responsive.js').read_text(encoding='utf-8')
+        self.assertIn('@media (max-width: 767.98px)', css)
+        self.assertIn('responsive-admin-modal', css)
+        self.assertIn('window.open', javascript)
+        self.assertIn('matchMedia', javascript)
 
     def test_archived_admin_lists_use_assignment_snapshots(self):
         old_year = self.create_academic_year(name='2025/2026')
@@ -2822,7 +2920,6 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             subject=specialty_subject,
             teacher=teacher,
             academic_year=old_year,
-            is_specialty=True,
         )
         self.create_academic_year(name='2026/2027')
 
@@ -3327,7 +3424,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertIn(data['specialty'], student_form.fields['subject'].queryset)
         self.assertNotIn(data['solfeggio'], student_form.fields['subject'].queryset)
 
-    def test_student_subject_admin_form_autofills_specialty_flag_from_subject(self):
+    def test_student_subject_admin_form_uses_subject_classification_without_duplicate_flag(self):
         data = self.create_base_journal()
         extra_subject = self.create_subject(
             name='Индивидуальная импровизация',
@@ -3345,7 +3442,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'student': student.pk,
                 'subject': extra_subject.pk,
                 'teacher': data['teacher'].pk,
-                'is_specialty': 'on',
                 'is_active': 'on',
             },
         )
@@ -3359,9 +3455,9 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertTrue(extra_form.is_valid(), extra_form.errors)
-        self.assertFalse(extra_form.cleaned_data['is_specialty'])
         self.assertTrue(specialty_form.is_valid(), specialty_form.errors)
-        self.assertTrue(specialty_form.cleaned_data['is_specialty'])
+        self.assertNotIn('is_specialty', extra_form.fields)
+        self.assertNotIn('is_specialty', specialty_form.fields)
 
     def test_subject_result_admin_form_limits_subjects_by_student_assignments(self):
         data = self.create_base_journal()
@@ -3466,7 +3562,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'individual_subjects-0-student': student.pk,
                 'individual_subjects-0-subject': data['specialty'].pk,
                 'individual_subjects-0-teacher': data['other_teacher'].pk,
-                'individual_subjects-0-is_specialty': 'on',
                 'individual_subjects-0-is_active': 'on',
                 'individual_subjects-1-id': '',
                 'individual_subjects-1-student': student.pk,
@@ -3704,7 +3799,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'individual_subjects-0-teacher': teacher.pk,
                 'individual_subjects-0-student': student.pk,
                 'individual_subjects-0-subject': individual_subject.pk,
-                'individual_subjects-0-is_specialty': 'on',
                 'individual_subjects-0-is_active': 'on',
                 '_save': 'Save',
             },
@@ -3723,7 +3817,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 student=student,
                 subject=individual_subject,
                 teacher=teacher,
-                is_specialty=True,
             ).exists(),
         )
 
@@ -3779,7 +3872,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'student': data['student'].pk,
                 'subject': data['specialty'].pk,
                 'teacher': data['teacher'].pk,
-                'is_specialty': 'on',
                 'is_active': 'on',
                 '_save': 'Save',
             },
@@ -3833,7 +3925,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'individual_subjects-0-student': data['student'].pk,
                 'individual_subjects-0-subject': data['specialty'].pk,
                 'individual_subjects-0-teacher': data['other_teacher'].pk,
-                'individual_subjects-0-is_specialty': 'on',
                 'individual_subjects-0-is_active': 'on',
                 'subject_results-TOTAL_FORMS': '1',
                 'subject_results-INITIAL_FORMS': '1',
@@ -4992,26 +5083,18 @@ class SeedDataCommandTests(TestCase):
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
         self.assertFalse(
-            StudentSubject.objects
-            .filter(is_specialty=True)
-            .exclude(subject__name='Специальность')
-            .exists(),
-        )
-        self.assertFalse(
-            StudentSubject.objects
-            .filter(is_specialty=False, subject__name='Специальность')
-            .exists(),
-        )
-        self.assertFalse(
             Student.objects
             .filter(is_active=True)
             .annotate(
-                active_specialties=Count(
+                active_individual_subjects=Count(
                     'individual_subjects',
-                    filter=Q(individual_subjects__is_active=True, individual_subjects__is_specialty=True),
+                    filter=Q(
+                        individual_subjects__is_active=True,
+                        individual_subjects__subject__is_specialty=True,
+                    ),
                 ),
             )
-            .exclude(active_specialties=1)
+            .filter(active_individual_subjects=0)
             .exists(),
         )
 
@@ -5081,7 +5164,7 @@ class SeedDataCommandTests(TestCase):
         self.assertGreaterEqual(Student.objects.count(), 35)
         self.assertGreaterEqual(GroupSubject.objects.count(), 33)
         self.assertGreaterEqual(StudentSubject.objects.count(), 70)
-        self.assertGreaterEqual(StudentSubject.objects.filter(is_specialty=False).count(), 35)
+        self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 70)
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
         self.assertEqual(Grade.objects.count(), 1542)
@@ -5156,6 +5239,216 @@ class SeedDataCommandTests(TestCase):
             self.assertEqual(credential.user, student.user)
             self.assertEqual(credential.student_phone, student.student_phone)
 
+
+class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.year = self.create_academic_year()
+        self.group = self.create_group(academic_year=self.year)
+        self.subject = Subject.objects.create(
+            name='Сдача оркестровых произведений',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        self.teacher = self.create_teacher(
+            full_name='Дирижёр Первый',
+            username='assessment_teacher',
+        )
+        self.student = self.create_student(
+            full_name='Ученик Оркестра',
+            group=self.group,
+            username='assessment_student',
+        )
+        GroupSubject.objects.create(
+            group=self.group,
+            subject=self.subject,
+            teacher=self.teacher,
+        )
+        self.assessment_group = AssessmentGroup.objects.create(
+            name='Старший состав',
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        self.item = AssessmentItem.objects.create(
+            title='Произведение №1',
+            subject=self.subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+        )
+        self.assignment = StudentAssessmentGroup.objects.create(
+            student=self.student,
+            assessment_group=self.assessment_group,
+            academic_year=self.year,
+        )
+        FinalGradeRule.objects.create(
+            subject=self.subject,
+            academic_year=self.year,
+            rule_type=FinalGradeRule.RULE_COUNT,
+            passed_count=0,
+            grade='N',
+            priority=10,
+        )
+        FinalGradeRule.objects.create(
+            subject=self.subject,
+            academic_year=self.year,
+            rule_type=FinalGradeRule.RULE_COUNT,
+            passed_count=1,
+            grade='Зачёт',
+            priority=10,
+        )
+
+    def test_student_sees_only_items_from_assigned_assessment_groups(self):
+        other_group = AssessmentGroup.objects.create(
+            name='Другой состав',
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        AssessmentItem.objects.create(
+            title='Чужое произведение',
+            subject=self.subject,
+            academic_year=self.year,
+            group=other_group,
+            responsible_teacher=self.teacher,
+        )
+
+        items = list(available_assessment_items_for_student(self.student, self.year))
+
+        self.assertEqual(items, [self.item])
+
+    def test_teacher_result_updates_automatic_string_final(self):
+        result = set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_PASSED,
+            comment='Сдано уверенно',
+        )
+
+        final = SubjectResult.objects.get(
+            student=self.student,
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        self.assertEqual(result.comment, 'Сдано уверенно')
+        self.assertEqual(final.final_grade, 'Зачёт')
+        self.assertTrue(final.is_auto_calculated)
+        self.assertEqual(final.calculation_details['passed_count'], 1)
+
+    def test_old_teacher_loses_edit_access_but_result_author_is_preserved(self):
+        result = set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_PASSED,
+        )
+        new_teacher = self.create_teacher(
+            full_name='Дирижёр Второй',
+            username='assessment_teacher_2',
+        )
+        TeacherEnrollment.objects.create(
+            teacher=new_teacher,
+            academic_year=self.year,
+        )
+        TeacherSubject.objects.create(teacher=new_teacher, subject=self.subject)
+        self.item.responsible_teacher = new_teacher
+        self.item.save()
+
+        with self.assertRaises(PermissionDenied):
+            set_assessment_result(
+                item=self.item,
+                student=self.student,
+                acting_teacher=self.teacher,
+                status=AssessmentResult.STATUS_FAILED,
+            )
+
+        result.refresh_from_db()
+        self.assertEqual(result.assessed_by, self.teacher)
+
+    def test_removing_group_keeps_result_and_recalculates_current_final(self):
+        result = set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_PASSED,
+        )
+
+        self.assignment.delete()
+
+        self.assertTrue(AssessmentResult.objects.filter(pk=result.pk).exists())
+        final = SubjectResult.objects.get(
+            student=self.student,
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        self.assertEqual(final.final_grade, 'N')
+        self.assertEqual(final.calculation_details['total_count'], 0)
+
+    def test_manual_final_for_element_mode_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            SubjectResult.objects.create(
+                student=self.student,
+                subject=self.subject,
+                academic_year=self.year,
+                final_grade='5',
+            )
+
+    def test_arbitrary_grade_string_is_preserved_for_standard_subject(self):
+        standard_subject = self.create_subject(name='Теория музыки')
+        GroupSubject.objects.create(
+            group=self.group,
+            subject=standard_subject,
+            teacher=self.teacher,
+        )
+
+        grade = Grade.objects.create(
+            student=self.student,
+            subject=standard_subject,
+            teacher=self.teacher,
+            academic_year=self.year,
+            date=date(2025, 10, 10),
+            value='5+',
+        )
+
+        self.assertEqual(grade.value, '5+')
+
+
+class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
+    def test_export_uses_requested_archive_year_and_exact_results_columns(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        group = self.create_group(name='Архивная группа', academic_year=old_year)
+        student = self.create_student(
+            full_name='Архивный Ученик',
+            group=group,
+            username='archive_export_student',
+        )
+        subject = self.create_subject(name='Архивный предмет')
+        teacher = self.create_teacher(
+            full_name='Архивный Преподаватель',
+            username='archive_export_teacher',
+        )
+        GroupSubject.objects.create(group=group, subject=subject, teacher=teacher)
+        SubjectResult.objects.create(
+            student=student,
+            subject=subject,
+            academic_year=old_year,
+            exam_grade='4+',
+            final_grade='5-',
+        )
+        self.create_academic_year(name='2026/2027')
+
+        workbook = build_full_export_workbook(old_year)
+        results_sheet = workbook['Итоги']
+
+        self.assertEqual(
+            [cell.value for cell in results_sheet[1]],
+            ['Ученик', 'Предмет', 'Экзамен', 'Итоговая оценка', 'Группа', 'Учебный год'],
+        )
+        self.assertEqual(results_sheet['A2'].value, 'Архивный Ученик')
+        self.assertEqual(results_sheet['C2'].value, '4+')
+        self.assertEqual(results_sheet['D2'].value, '5-')
+        self.assertEqual(results_sheet['F2'].value, '2025/2026')
+        self.assertEqual(results_sheet['C2'].number_format, '@')
+        self.assertEqual(results_sheet['D2'].number_format, '@')
 
 class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
     """

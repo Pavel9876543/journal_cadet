@@ -347,3 +347,74 @@ ul.errorlist {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* Адаптивность страниц входа и восстановления доступа. */
+html,
+body {
+    max-width: 100%;
+    overflow-x: hidden;
+}
+
+.auth-shell,
+.auth-panel,
+.auth-header,
+.auth-body,
+.brand,
+.contact-row,
+.recovery-note {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.brand-name,
+.brand-context,
+.lead,
+.recovery-note,
+.contact-name,
+.messengers,
+.phone-link {
+    overflow-wrap: anywhere;
+}
+
+@media (hover: none) and (pointer: coarse) {
+    input,
+    button,
+    .button,
+    .phone-link {
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 420px) {
+    .auth-shell {
+        padding: 0;
+    }
+
+    .auth-panel,
+    .auth-panel-wide {
+        min-height: 100dvh;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .auth-header,
+    .auth-body {
+        padding-right: 14px;
+        padding-left: 14px;
+    }
+
+    .brand {
+        margin-bottom: 18px;
+    }
+
+    h1 {
+        font-size: 1.35rem;
+    }
+
+    .field-heading {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+    }
+}

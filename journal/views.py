@@ -13,7 +13,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.db.models import Max, Prefetch, Q, QuerySet
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
@@ -23,6 +23,13 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
+
+from .assessment_services import (
+    assessment_rows_for_student,
+    assessment_sections_for_teacher,
+    clear_assessment_result,
+    set_assessment_result,
+)
 
 from .academic_year_context import (
     academic_year_ids_for_user,
@@ -35,7 +42,6 @@ from .assignment_options import (
     active_student_queryset,
     assignment_teacher_queryset,
     group_subject_queryset,
-    is_default_specialty_assignment,
     student_subject_queryset,
 )
 from .forms import (
@@ -54,18 +60,23 @@ from .grade_options import (
 )
 from .models import (
     AcademicYear,
+    AssessmentGroup,
+    AssessmentItem,
+    AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
     Grade,
     GroupSubject,
     PasswordRecoveryContact,
     Student,
+    StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
     StudyGroup,
     Subject,
     SubjectResult,
     Teacher,
+    TeacherEnrollment,
     TemporaryCredential,
     CourseRegistrationRateLimit,
 )
@@ -254,6 +265,133 @@ def _grade_options_api_sync(request):
 @login_required
 @user_passes_test(lambda user: user.is_active and user.is_staff)
 @require_GET
+async def assessment_options_api(request):
+    return await _run_db_sync(_assessment_options_api_sync, request)
+
+
+def _assessment_options_api_sync(request):
+    assessment_type = request.GET.get('type')
+    if assessment_type not in {'item', 'student_group', 'rule'}:
+        return JsonResponse({'error': 'Не удалось определить тип связанных полей.'}, status=400)
+
+    selected_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
+    academic_year = _get_selected_object(
+        AcademicYear.objects.all(), request.GET.get('academic_year')
+    ) or selected_year
+    subject = _get_selected_object(
+        Subject.objects.filter(
+            is_active=True,
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+        ),
+        request.GET.get('subject'),
+    )
+    group = _get_selected_object(
+        AssessmentGroup.objects.select_related('subject', 'academic_year'),
+        request.GET.get('group') or request.GET.get('assessment_group'),
+    )
+    student = _get_selected_object(
+        Student.objects.filter(is_active=True), request.GET.get('student')
+    )
+
+    if group is not None:
+        subject = group.subject
+        academic_year = group.academic_year
+
+    years = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
+    if academic_year is not None:
+        years = _include_selected_option(years, AcademicYear, academic_year).order_by('-starts_on')
+    subjects = Subject.objects.filter(
+        is_active=True,
+        assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+    ).order_by('name')
+    groups = AssessmentGroup.objects.filter(is_active=True).select_related('subject', 'academic_year')
+    teachers = Teacher.objects.filter(is_active=True)
+    students = active_student_queryset()
+
+    if academic_year is not None:
+        groups = groups.filter(academic_year=academic_year)
+        teacher_ids = TeacherEnrollment.objects.filter(
+            academic_year=academic_year,
+            is_active=True,
+        ).values('teacher_id')
+        teachers = teachers.filter(pk__in=teacher_ids)
+        students = students.filter(enrollments__academic_year=academic_year, enrollments__is_active=True)
+    if subject is not None:
+        groups = groups.filter(subject=subject)
+        teachers = teachers.filter(subjects__subject=subject)
+    if assessment_type == 'student_group' and student is not None and academic_year is not None:
+        enrollment = student.enrollment_for_year(academic_year)
+        subject_ids = set(
+            StudentSubject.objects.filter(
+                student=student,
+                academic_year=academic_year,
+                is_active=True,
+            ).values_list('subject_id', flat=True)
+        )
+        if enrollment is not None and enrollment.group_id:
+            subject_ids.update(
+                GroupSubject.objects.filter(
+                    group_id=enrollment.group_id,
+                    is_active=True,
+                ).values_list('subject_id', flat=True)
+            )
+        groups = groups.filter(subject_id__in=subject_ids)
+
+    groups = _include_selected_option(groups, AssessmentGroup, group).distinct().order_by(
+        'subject__name', 'sort_order', 'name'
+    )
+    subjects = _include_selected_option(subjects, Subject, subject).distinct().order_by('name')
+    students = _include_selected_option(students, Student, student).distinct().order_by('full_name')
+    teachers = teachers.distinct().order_by('full_name')
+
+    defaults = {}
+    if academic_year is not None:
+        defaults['academic_year_id'] = academic_year.pk
+    if subject is not None:
+        defaults['subject_id'] = subject.pk
+    if group is not None:
+        defaults.update({
+            'academic_year_id': group.academic_year_id,
+            'subject_id': group.subject_id,
+        })
+        if group.items.filter(responsible_teacher__isnull=False).values('responsible_teacher_id').distinct().count() == 1:
+            defaults['responsible_teacher_id'] = group.items.filter(
+                responsible_teacher__isnull=False
+            ).values_list('responsible_teacher_id', flat=True).first()
+
+    return JsonResponse({
+        'academic_years': [
+            {'id': item.pk, 'label': item.name}
+            for item in years
+        ],
+        'subjects': [
+            {'id': item.pk, 'label': item.name}
+            for item in subjects
+        ],
+        'groups': [
+            {
+                'id': item.pk,
+                'label': item.name,
+                'subject_id': item.subject_id,
+                'academic_year_id': item.academic_year_id,
+            }
+            for item in groups
+        ],
+        'teachers': [
+            {'id': item.pk, 'label': item.full_name}
+            for item in teachers
+        ],
+        'students': [
+            {'id': item.pk, 'label': item.full_name}
+            for item in students
+        ],
+        'defaults': defaults,
+    })
+
+
+@login_required
+@user_passes_test(lambda user: user.is_active and user.is_staff)
+@require_GET
 async def assignment_options_api(request):
     return await _run_db_sync(_assignment_options_api_sync, request)
 
@@ -327,7 +465,6 @@ def _assignment_options_api_sync(request):
                 'id': item.pk,
                 'label': item.name,
                 'is_individual': item.is_specialty,
-                'default_is_specialty': is_default_specialty_assignment(item),
                 'final_grade_type': item.final_grade_type,
             }
             for item in subjects
@@ -363,7 +500,6 @@ def _student_subject_defaults(student: Student | None, subject: Subject | None) 
         defaults['group_id'] = student.group_id
         defaults['academic_year_id'] = student.group.academic_year_id
     if subject is not None:
-        defaults['is_specialty'] = is_default_specialty_assignment(subject)
         defaults['subject_is_individual'] = subject.is_specialty
         defaults['final_grade_type'] = subject.final_grade_type
     return defaults
@@ -390,16 +526,21 @@ def _form_error_messages(form) -> list[str]:
 
 
 def _normalize_grade_value(value: str) -> str:
-    return str(value or '').strip().upper()
+    normalized = str(value or '').strip()
+    folded = normalized.casefold().replace('ё', 'е')
+    if folded in {'н', 'n'}:
+        return 'Н'
+    if folded == 'зачет':
+        return 'Зачет'
+    if folded == 'незачет':
+        return 'Незачет'
+    return normalized
 
 
 def _normalize_final_grade_value(subject: Subject, value: str):
-    normalized = Subject.normalize_final_grade(value)
-    if normalized is None:
-        return None
-    if normalized not in subject.get_final_grade_allowed_values():
-        raise ValidationError('Недопустимое значение для итоговой оценки по выбранному предмету.')
-    return normalized
+    if subject.uses_element_assessment:
+        raise ValidationError('Итог специального режима рассчитывается автоматически.')
+    return Subject.normalize_final_grade(value)
 
 
 def _get_selected_object(queryset, raw_pk):
@@ -934,11 +1075,6 @@ def _save_inline_grades(
                 continue
 
             normalized_grade_value = _normalize_grade_value(value)
-            if normalized_grade_value and normalized_grade_value not in Grade.ALLOWED_VALUES:
-                messages.error(request, 'Оценка должна быть 1-5 или Н.')
-                transaction.set_rollback(True)
-                return False
-
             parts = field_name.split('__')
             if len(parts) != 4:
                 continue
@@ -1318,6 +1454,49 @@ def _journal_for_teacher(
         teacher=teacher,
     )
 
+    assessment_sections = assessment_sections_for_teacher(
+        teacher,
+        selected_academic_year,
+    ) if selected_academic_year is not None else []
+
+    if request.method == 'POST' and request.POST.get('action') == 'assessment_result':
+        if not can_edit_journal:
+            messages.error(request, 'Результаты архивного учебного года доступны только для просмотра.')
+            return _redirect_journal(academic_year=selected_academic_year)
+        item = _get_selected_object(
+            AssessmentItem.objects.select_related('group', 'subject', 'academic_year', 'responsible_teacher'),
+            request.POST.get('item_id'),
+        )
+        student = _get_selected_object(
+            Student.objects.filter(is_active=True),
+            request.POST.get('student_id'),
+        )
+        status = (request.POST.get('status') or '').strip()
+        comment = (request.POST.get('comment') or '').strip()
+        try:
+            if item is None or student is None:
+                raise ValidationError('Не удалось определить произведение или ученика.')
+            if status == 'clear':
+                clear_assessment_result(item=item, student=student, acting_teacher=teacher)
+                messages.success(request, 'Результат очищен. Итоговая оценка пересчитана.')
+            else:
+                set_assessment_result(
+                    item=item,
+                    student=student,
+                    acting_teacher=teacher,
+                    status=status,
+                    comment=comment,
+                )
+                messages.success(request, 'Результат сохранён. Итоговая оценка пересчитана.')
+        except (PermissionDenied, ValidationError) as exc:
+            error_messages = getattr(exc, 'messages', None) or [str(exc)]
+            messages.error(request, '; '.join(error_messages))
+        return _redirect_journal(
+            group=selected_group,
+            subject=selected_subject,
+            academic_year=selected_academic_year,
+        )
+
     archived_post_response = _reject_archived_academic_year_post(
         request,
         selected_academic_year,
@@ -1369,24 +1548,22 @@ def _journal_for_teacher(
     if isinstance(grade_form, HttpResponse):
         return grade_form
 
-    return render(
-        request,
-        'journal.html',
-        _journal_context(
-            role_mode=role_mode,
-            groups=groups,
-            subjects=subjects,
-            students=students,
-            journal_tables=journal_tables,
-            selected_group=selected_group,
-            selected_group_id=selected_group_id,
-            selected_subject_id=selected_subject_id,
-            academic_years=academic_years,
-            selected_academic_year=selected_academic_year,
-            grade_form=grade_form,
-            can_edit_journal=can_edit_journal,
-        ),
+    context = _journal_context(
+        role_mode=role_mode,
+        groups=groups,
+        subjects=subjects,
+        students=students,
+        journal_tables=journal_tables,
+        selected_group=selected_group,
+        selected_group_id=selected_group_id,
+        selected_subject_id=selected_subject_id,
+        academic_years=academic_years,
+        selected_academic_year=selected_academic_year,
+        grade_form=grade_form,
+        can_edit_journal=can_edit_journal,
     )
+    context['assessment_sections'] = assessment_sections
+    return render(request, 'journal.html', context)
 
 
 def _journal_for_student(
@@ -1442,24 +1619,38 @@ def _journal_for_student(
         selected_academic_year=selected_academic_year,
     )
 
-    return render(
-        request,
-        'journal.html',
-        _journal_context(
-            role_mode=role_mode,
-            groups=groups,
-            subjects=subjects,
-            students=students,
-            journal_tables=journal_tables,
-            selected_group=selected_group,
-            selected_group_id=str(selected_group.pk) if selected_group is not None else '',
-            selected_subject_id=selected_subject_id,
-            academic_years=academic_years,
-            selected_academic_year=selected_academic_year,
-            grade_form=None,
-            can_edit_journal=False,
-        ),
+    assessment_rows = (
+        assessment_rows_for_student(student, selected_academic_year)
+        if selected_academic_year is not None
+        else []
     )
+    assessment_subject_ids = {row['item'].subject_id for row in assessment_rows}
+    assessment_final_results = {
+        result.subject_id: result
+        for result in SubjectResult.objects.filter(
+            student=student,
+            academic_year=selected_academic_year,
+            subject_id__in=assessment_subject_ids,
+        ).select_related('subject')
+    } if selected_academic_year is not None else {}
+
+    context = _journal_context(
+        role_mode=role_mode,
+        groups=groups,
+        subjects=subjects,
+        students=students,
+        journal_tables=journal_tables,
+        selected_group=selected_group,
+        selected_group_id=str(selected_group.pk) if selected_group is not None else '',
+        selected_subject_id=selected_subject_id,
+        academic_years=academic_years,
+        selected_academic_year=selected_academic_year,
+        grade_form=None,
+        can_edit_journal=False,
+    )
+    context['assessment_rows'] = assessment_rows
+    context['assessment_final_results'] = assessment_final_results
+    return render(request, 'journal.html', context)
 
 
 def _result_year_ids(groups, selected_academic_year: AcademicYear | None) -> list[int]:
@@ -1963,7 +2154,7 @@ async def export_all_data_excel(request):
 
 
 def _export_all_data_excel_sync(request):
-    workbook = build_full_export_workbook()
+    workbook = build_full_export_workbook(get_selected_admin_academic_year(request))
 
     now = timezone.localtime()
     filename = f'journal_export_{now:%Y-%m-%d_%H-%M}.xlsx'

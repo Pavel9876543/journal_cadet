@@ -67,6 +67,10 @@ def academic_year_for_object(obj):
         return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, (Grade, SubjectResult, CourseApplication)):
         return obj.academic_year if obj.academic_year_id else None
+    if isinstance(obj, (AssessmentGroup, AssessmentItem, StudentAssessmentGroup, FinalGradeRule)):
+        return obj.academic_year if obj.academic_year_id else None
+    if isinstance(obj, AssessmentResult):
+        return obj.item.academic_year if obj.item_id else None
     return None
 
 
@@ -262,6 +266,13 @@ class Instrument(models.Model):
 
 
 class Subject(models.Model):
+    ASSESSMENT_MODE_STANDARD = 'standard'
+    ASSESSMENT_MODE_ELEMENTS = 'elements'
+    ASSESSMENT_MODE_CHOICES = (
+        (ASSESSMENT_MODE_STANDARD, 'Обычный журнал'),
+        (ASSESSMENT_MODE_ELEMENTS, 'Сдача произведений / элементов'),
+    )
+
     FINAL_GRADE_TYPE_NUMERIC = 'numeric'
     FINAL_GRADE_TYPE_PASS_FAIL = 'pass_fail'
     FINAL_GRADE_TYPE_CHOICES = (
@@ -270,11 +281,19 @@ class Subject(models.Model):
     )
 
     name = models.CharField('Название предмета', max_length=100, unique=True)
+    assessment_mode = models.CharField(
+        'Режим аттестации',
+        max_length=20,
+        choices=ASSESSMENT_MODE_CHOICES,
+        default=ASSESSMENT_MODE_STANDARD,
+        help_text='Специальный режим включается явно и не зависит от названия предмета.',
+    )
     final_grade_type = models.CharField(
         'Тип итоговой оценки',
         max_length=20,
         choices=FINAL_GRADE_TYPE_CHOICES,
         default=FINAL_GRADE_TYPE_NUMERIC,
+        help_text='Используется для подсказок; сами оценки хранятся строками.',
     )
     is_specialty = models.BooleanField('Индивидуальный предмет', default=False)
     is_active = models.BooleanField('Активен', default=True)
@@ -286,6 +305,7 @@ class Subject(models.Model):
         indexes = [
             models.Index(fields=['is_active', 'name'], name='subject_active_name_idx'),
             models.Index(fields=['is_specialty'], name='subject_specialty_idx'),
+            models.Index(fields=['assessment_mode'], name='subject_assessment_mode_idx'),
         ]
         constraints = [
             models.UniqueConstraint(fields=['name'], name='unique_subject_name'),
@@ -306,38 +326,20 @@ class Subject(models.Model):
             raise ValidationError({
                 'is_specialty': 'Нельзя сделать предмет групповым, пока он назначен индивидуальным ученикам.'
             })
-        if self.pk:
-            previous = Subject.objects.filter(pk=self.pk).values('final_grade_type').first()
-            if previous and previous['final_grade_type'] != self.final_grade_type:
-                allowed_values = self.get_final_grade_allowed_values()
-                incompatible_results = SubjectResult.objects.filter(subject=self).filter(
-                    (
-                        Q(exam_grade__isnull=False)
-                        & ~Q(exam_grade='')
-                        & ~Q(exam_grade__in=allowed_values)
-                    )
-                    | (
-                        Q(final_grade__isnull=False)
-                        & ~Q(final_grade='')
-                        & ~Q(final_grade__in=allowed_values)
-                    )
-                )
-                if incompatible_results.exists():
-                    raise ValidationError({
-                        'final_grade_type': (
-                            'Нельзя изменить тип итоговой оценки: у предмета уже есть '
-                            'итоги с несовместимыми значениями.'
-                        )
-                    })
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
 
+    @property
+    def uses_element_assessment(self) -> bool:
+        return self.assessment_mode == self.ASSESSMENT_MODE_ELEMENTS
+
     def get_final_grade_allowed_values(self) -> set[str]:
+        # The set is used only as UI suggestions. Storage accepts arbitrary strings.
         if self.final_grade_type == self.FINAL_GRADE_TYPE_PASS_FAIL:
-            return {'Зачет', 'Незачет'}
-        return {'1', '2', '3', '4', '5', 'Н'}
+            return {'Зачет', 'Незачет', 'Не аттестован'}
+        return {'1', '2', '3', '4', '4+', '4-', '5', '5+', '5-', 'Н', 'N'}
 
     @staticmethod
     def normalize_final_grade(value):
@@ -630,17 +632,18 @@ class Student(models.Model):
         (GENDER_FEMALE, 'Женский'),
     )
 
-    MUSIC_EDUCATION_NONE = 'none'
     MUSIC_EDUCATION_SELF = 'self_taught'
     MUSIC_EDUCATION_BASIC = 'basic'
     MUSIC_EDUCATION_SECONDARY = 'secondary'
     MUSIC_EDUCATION_HIGHER = 'higher'
+    # Compatibility alias for old code and fixtures. Existing database value
+    # ``none`` is converted to ``self_taught`` by migration 0020.
+    MUSIC_EDUCATION_NONE = MUSIC_EDUCATION_SELF
     MUSIC_EDUCATION_CHOICES = (
-        (MUSIC_EDUCATION_NONE, 'Нет'),
         (MUSIC_EDUCATION_SELF, 'Самоучка'),
-        (MUSIC_EDUCATION_BASIC, 'Начальное'),
-        (MUSIC_EDUCATION_SECONDARY, 'Среднее'),
-        (MUSIC_EDUCATION_HIGHER, 'Высшее'),
+        (MUSIC_EDUCATION_BASIC, 'Музыкальная школа'),
+        (MUSIC_EDUCATION_SECONDARY, 'Колледж'),
+        (MUSIC_EDUCATION_HIGHER, 'Институт'),
     )
 
     full_name = models.CharField('ФИО ученика', max_length=150)
@@ -676,7 +679,15 @@ class Student(models.Model):
         Instrument,
         on_delete=models.PROTECT,
         related_name='students',
-        verbose_name='Инструмент',
+        verbose_name='Инструмент из справочника',
+        null=True,
+        blank=True,
+    )
+    custom_instrument = models.CharField(
+        'Собственный инструмент',
+        max_length=255,
+        blank=True,
+        help_text='Заполняется только когда подходящего инструмента нет в справочнике.',
     )
     is_active = models.BooleanField('Активен', default=True)
 
@@ -690,6 +701,15 @@ class Student(models.Model):
             models.Index(fields=['is_active'], name='student_active_idx'),
             models.Index(fields=['student_phone'], name='student_phone_idx'),
             models.Index(fields=['birth_date'], name='student_birth_date_idx'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(instrument__isnull=False, custom_instrument='')
+                    | (Q(instrument__isnull=True) & ~Q(custom_instrument=''))
+                ),
+                name='student_exactly_one_instrument_source',
+            ),
         ]
 
     def __str__(self) -> str:
@@ -707,6 +727,12 @@ class Student(models.Model):
             self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
         if self.comments:
             self.comments = self.comments.strip()
+        self.custom_instrument = (self.custom_instrument or '').strip()
+        if bool(self.instrument_id) == bool(self.custom_instrument):
+            raise ValidationError({
+                'instrument': 'Выберите инструмент из справочника или укажите собственный, но не оба варианта.',
+                'custom_instrument': 'Укажите собственный инструмент только при пустом справочном значении.',
+            })
         if self.full_name and self.birth_date:
             identity_name = normalize_student_identity_name(self.full_name)
             candidates = Student.objects.filter(birth_date=self.birth_date)
@@ -809,12 +835,18 @@ class Student(models.Model):
             self.individual_subjects
             .select_related('subject', 'teacher')
             .filter(
-                is_specialty=True,
+                subject__is_specialty=True,
                 is_active=True,
                 academic_year__is_active=True,
             )
             .first()
         )
+
+    @property
+    def instrument_display(self) -> str:
+        if self.instrument_id:
+            return self.instrument.name
+        return self.custom_instrument or 'Не указан'
 
     @property
     def specialty_teacher(self):
@@ -916,7 +948,7 @@ class StudentEnrollment(models.Model):
             'gender': student.gender,
             'birth_date': student.birth_date,
             'city_church': student.city_church,
-            'instrument_name': student.instrument.name if student.instrument_id else '',
+            'instrument_name': student.instrument_display,
             'music_education': student.music_education,
             'student_phone': student.student_phone,
             'parent_contacts': student.parent_contacts,
@@ -1109,7 +1141,6 @@ class StudentSubject(models.Model):
         verbose_name='Учебный год',
         editable=False,
     )
-    is_specialty = models.BooleanField('Специальность', default=True)
     is_active = models.BooleanField('Активно', default=True)
     subject_name_snapshot = models.CharField(
         'Название предмета в учебном году',
@@ -1144,11 +1175,6 @@ class StudentSubject(models.Model):
             models.UniqueConstraint(
                 fields=['student', 'subject', 'academic_year'],
                 name='unique_student_ind_subject',
-            ),
-            models.UniqueConstraint(
-                fields=['student', 'academic_year'],
-                condition=Q(is_specialty=True, is_active=True),
-                name='unique_active_specialty',
             ),
         ]
 
@@ -1341,7 +1367,11 @@ class Grade(models.Model):
         editable=False,
     )
     date = models.DateField('Дата оценки')
-    value = models.CharField('Оценка', max_length=10, choices=GRADE_CHOICES)
+    value = models.CharField(
+        'Оценка',
+        max_length=64,
+        help_text='Произвольное строковое значение, например 5+, 4-, N или Зачет.',
+    )
     comment = models.CharField('Комментарий', max_length=255, blank=True)
     student_name_snapshot = models.CharField(
         'ФИО ученика в учебном году',
@@ -1419,8 +1449,16 @@ class Grade(models.Model):
         ).exists()
 
     def normalize_value(self):
-        if self.value:
-            self.value = str(self.value).strip().upper()
+        if self.value is None:
+            return
+        normalized = str(self.value).strip()
+        if normalized.casefold() in {'н', 'n'}:
+            normalized = normalized.upper()
+        elif normalized.casefold().replace('ё', 'е') == 'зачет':
+            normalized = 'Зачет'
+        elif normalized.casefold().replace('ё', 'е') == 'незачет':
+            normalized = 'Незачет'
+        self.value = normalized
 
     def full_clean(self, exclude=None, validate_unique=True, validate_constraints=True):
         self.normalize_value()
@@ -1436,10 +1474,8 @@ class Grade(models.Model):
         super().clean()
         student = None
 
-        if self.value:
-            self.value = str(self.value).strip().upper()
-        if self.value not in self.ALLOWED_VALUES:
-            raise ValidationError({'value': 'Оценка должна быть 1-5 или Н.'})
+        if not self.value:
+            raise ValidationError({'value': 'Укажите оценку.'})
 
         if self.date and not self.academic_year_id:
             self.academic_year = AcademicYear.get_for_date(self.date) or AcademicYear.get_active()
@@ -1470,6 +1506,11 @@ class Grade(models.Model):
                 })
             if enrollment.student_id != student.pk:
                 raise ValidationError({'student': 'Зачисление относится к другому ученику.'})
+
+        if self.subject_id and self.subject.uses_element_assessment:
+            raise ValidationError({
+                'subject': 'Для этого предмета результаты выставляются отдельно по произведениям.'
+            })
 
         if self.student_id and self.subject_id and self.date:
             duplicate_qs = Grade.objects.filter(
@@ -1560,8 +1601,11 @@ class SubjectResult(models.Model):
         blank=True,
         editable=False,
     )
-    exam_grade = models.CharField('Экзамен', max_length=10, null=True, blank=True)
-    final_grade = models.CharField('Итоговая оценка', max_length=10, null=True, blank=True)
+    exam_grade = models.CharField('Экзамен', max_length=64, null=True, blank=True)
+    final_grade = models.CharField('Итоговая оценка', max_length=64, null=True, blank=True)
+    is_auto_calculated = models.BooleanField('Рассчитано автоматически', default=False)
+    calculation_details = models.JSONField('Детали расчёта', default=dict, blank=True)
+    calculated_at = models.DateTimeField('Дата автоматического расчёта', null=True, blank=True)
     student_name_snapshot = models.CharField(
         'ФИО ученика в учебном году',
         max_length=150,
@@ -1648,23 +1692,20 @@ class SubjectResult(models.Model):
                 )
 
         if self.subject_id:
-            allowed_values = self.subject.get_final_grade_allowed_values()
             for field_name in ('exam_grade', 'final_grade'):
                 value = getattr(self, field_name)
                 normalized = Subject.normalize_final_grade(value)
-
-                if normalized is None:
-                    setattr(self, field_name, None)
-                    continue
-
-                if normalized not in allowed_values:
-                    raise ValidationError({
-                        field_name: 'Недопустимое значение итоговой оценки для выбранного предмета.'
-                    })
-
                 setattr(self, field_name, normalized)
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, allow_auto_update: bool = False, **kwargs):
+        if self.subject_id and self.subject.uses_element_assessment and not allow_auto_update:
+            previous_final = None
+            if self.pk:
+                previous_final = type(self).objects.filter(pk=self.pk).values_list('final_grade', flat=True).first()
+            if self.final_grade and self.final_grade != previous_final:
+                raise ValidationError({
+                    'final_grade': 'Итог по этому предмету рассчитывается автоматически.'
+                })
         self.full_clean()
         if self.enrollment_id:
             self.student_name_snapshot = self.enrollment.full_name
@@ -1687,6 +1728,560 @@ class SubjectResult(models.Model):
         return super().delete(*args, **kwargs)
 
 
+class AssessmentGroup(models.Model):
+    name = models.CharField('Название группы произведений', max_length=150)
+    description = models.TextField('Описание', blank=True)
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name='assessment_groups',
+        verbose_name='Предмет',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='assessment_groups',
+        verbose_name='Учебный год',
+    )
+    sort_order = models.PositiveIntegerField('Порядок отображения', default=100)
+    is_active = models.BooleanField('Активна', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Группа произведений'
+        verbose_name_plural = 'Группы произведений'
+        ordering = ['academic_year__starts_on', 'subject__name', 'sort_order', 'name', 'pk']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subject', 'academic_year', 'name'],
+                name='unique_assessment_group_subject_year_name',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['academic_year', 'subject'], name='assess_group_year_subject_idx'),
+            models.Index(fields=['is_active', 'sort_order'], name='assess_group_active_order_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.name} — {self.subject} — {self.academic_year}'
+
+    def clean(self) -> None:
+        super().clean()
+        self.name = (self.name or '').strip()
+        if not self.name:
+            raise ValidationError({'name': 'Введите название группы произведений.'})
+        if self.subject_id and not self.subject.uses_element_assessment:
+            raise ValidationError({
+                'subject': 'Группы произведений доступны только для предмета со специальным режимом.'
+            })
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).values(
+                'subject_id', 'academic_year_id'
+            ).first()
+            if previous and (
+                previous['subject_id'] != self.subject_id
+                or previous['academic_year_id'] != self.academic_year_id
+            ) and (
+                self.items.exists()
+                or self.student_assignments.exists()
+                or self.final_grade_rules.exists()
+            ):
+                raise ValidationError(
+                    'Нельзя менять предмет или учебный год используемой группы. '
+                    'Создайте новую группу, чтобы сохранить исторические данные.'
+                )
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+
+    def save(self, *args, **kwargs):
+        previous_is_active = None
+        if self.pk:
+            previous_is_active = type(self).objects.filter(pk=self.pk).values_list(
+                'is_active', flat=True
+            ).first()
+        self.full_clean()
+        result = super().save(*args, **kwargs)
+        if previous_is_active is not None and previous_is_active != self.is_active:
+            from .assessment_services import recalculate_group_finals
+            recalculate_group_finals(self)
+        return result
+
+
+class AssessmentItem(models.Model):
+    title = models.CharField('Произведение / элемент', max_length=255)
+    description = models.TextField('Описание', blank=True)
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name='assessment_items',
+        verbose_name='Предмет',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='assessment_items',
+        verbose_name='Учебный год',
+    )
+    group = models.ForeignKey(
+        AssessmentGroup,
+        on_delete=models.PROTECT,
+        related_name='items',
+        verbose_name='Группа произведений',
+    )
+    responsible_teacher = models.ForeignKey(
+        Teacher,
+        on_delete=models.PROTECT,
+        related_name='responsible_assessment_items',
+        verbose_name='Ответственный преподаватель-дирижёр',
+        blank=True,
+        null=True,
+    )
+    sort_order = models.PositiveIntegerField('Порядок отображения', default=100)
+    is_required = models.BooleanField('Обязательное произведение', default=True)
+    is_active = models.BooleanField('Активно', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Произведение / элемент аттестации'
+        verbose_name_plural = 'Произведения / элементы аттестации'
+        ordering = ['group__sort_order', 'sort_order', 'title', 'pk']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['group', 'title'],
+                name='unique_assessment_item_group_title',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['academic_year', 'subject', 'group'], name='assess_item_year_subj_idx'),
+            models.Index(fields=['responsible_teacher', 'is_active'], name='assess_item_teacher_active_idx'),
+            models.Index(fields=['group', 'sort_order'], name='assess_item_group_order_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.title} — {self.group.name}'
+
+    def clean(self) -> None:
+        super().clean()
+        self.title = (self.title or '').strip()
+        if not self.title:
+            raise ValidationError({'title': 'Введите название произведения или элемента.'})
+        if self.group_id:
+            if self.subject_id and self.group.subject_id != self.subject_id:
+                raise ValidationError({'group': 'Группа относится к другому предмету.'})
+            if self.academic_year_id and self.group.academic_year_id != self.academic_year_id:
+                raise ValidationError({'group': 'Группа относится к другому учебному году.'})
+            if not self.subject_id:
+                self.subject = self.group.subject
+            if not self.academic_year_id:
+                self.academic_year = self.group.academic_year
+        if self.subject_id and not self.subject.uses_element_assessment:
+            raise ValidationError({'subject': 'Произведения доступны только в специальном режиме предмета.'})
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+        if self.responsible_teacher_id and self.subject_id and self.academic_year_id:
+            if not TeacherEnrollment.objects.filter(
+                teacher=self.responsible_teacher,
+                academic_year=self.academic_year,
+                is_active=True,
+            ).exists():
+                raise ValidationError({
+                    'responsible_teacher': 'Преподаватель не зачислен в выбранный учебный год.'
+                })
+            if not TeacherSubject.objects.filter(
+                teacher=self.responsible_teacher,
+                subject=self.subject,
+            ).exists():
+                raise ValidationError({
+                    'responsible_teacher': 'Преподаватель не связан с выбранным предметом.'
+                })
+
+    def save(self, *args, **kwargs):
+        previous_group_id = None
+        previous_subject_id = None
+        previous_year_id = None
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).values(
+                'group_id', 'subject_id', 'academic_year_id'
+            ).first()
+            if previous:
+                previous_group_id = previous['group_id']
+                previous_subject_id = previous['subject_id']
+                previous_year_id = previous['academic_year_id']
+        self.full_clean()
+        result = super().save(*args, **kwargs)
+        from .assessment_services import recalculate_group_finals, recalculate_subject_finals
+        recalculate_group_finals(self.group)
+        if previous_group_id and previous_group_id != self.group_id:
+            old_group = AssessmentGroup.objects.filter(pk=previous_group_id).first()
+            if old_group:
+                recalculate_group_finals(old_group)
+        elif previous_subject_id and (
+            previous_subject_id != self.subject_id or previous_year_id != self.academic_year_id
+        ):
+            old_subject = Subject.objects.filter(pk=previous_subject_id).first()
+            old_year = AcademicYear.objects.filter(pk=previous_year_id).first()
+            if old_subject and old_year:
+                recalculate_subject_finals(old_subject, old_year)
+        return result
+
+    def delete(self, *args, **kwargs):
+        group = self.group
+        result = super().delete(*args, **kwargs)
+        from .assessment_services import recalculate_group_finals
+        recalculate_group_finals(group)
+        return result
+
+
+class StudentAssessmentGroup(models.Model):
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name='assessment_group_assignments',
+        verbose_name='Ученик',
+    )
+    assessment_group = models.ForeignKey(
+        AssessmentGroup,
+        on_delete=models.PROTECT,
+        related_name='student_assignments',
+        verbose_name='Группа произведений',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='student_assessment_group_assignments',
+        verbose_name='Учебный год',
+    )
+    enrollment = models.ForeignKey(
+        StudentEnrollment,
+        on_delete=models.PROTECT,
+        related_name='assessment_group_assignments',
+        verbose_name='Зачисление ученика',
+        editable=False,
+        blank=True,
+        null=True,
+    )
+    is_active = models.BooleanField('Назначение активно', default=True)
+    created_at = models.DateTimeField('Назначено', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Назначение группы произведений ученику'
+        verbose_name_plural = 'Назначения групп произведений ученикам'
+        ordering = ['student__full_name', 'assessment_group__subject__name', 'assessment_group__sort_order']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student', 'assessment_group', 'academic_year'],
+                name='unique_student_assessment_group_year',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['student', 'academic_year', 'is_active'], name='stud_assess_group_act_idx'),
+            models.Index(fields=['assessment_group', 'is_active'], name='assess_group_stud_act_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.student} — {self.assessment_group.name}'
+
+    def clean(self) -> None:
+        super().clean()
+        if self.assessment_group_id:
+            if self.academic_year_id and self.assessment_group.academic_year_id != self.academic_year_id:
+                raise ValidationError({'assessment_group': 'Группа относится к другому учебному году.'})
+            if not self.academic_year_id:
+                self.academic_year = self.assessment_group.academic_year
+            if self.is_active and not self.assessment_group.is_active:
+                raise ValidationError({'assessment_group': 'Нельзя назначить неактивную группу.'})
+        if self.student_id and self.academic_year_id:
+            enrollment = self.student.enrollment_for_year(self.academic_year)
+            if enrollment is None:
+                raise ValidationError({'student': 'Ученик не зачислен в выбранный учебный год.'})
+            self.enrollment = enrollment
+            subject_id = self.assessment_group.subject_id if self.assessment_group_id else None
+            has_subject = False
+            if subject_id:
+                has_subject = bool(
+                    (enrollment.group_id and GroupSubject.objects.filter(
+                        group_id=enrollment.group_id,
+                        subject_id=subject_id,
+                        is_active=True,
+                    ).exists())
+                    or StudentSubject.objects.filter(
+                        student=self.student,
+                        subject_id=subject_id,
+                        academic_year=self.academic_year,
+                        is_active=True,
+                    ).exists()
+                )
+            if subject_id and not has_subject:
+                raise ValidationError({
+                    'assessment_group': 'Нельзя назначить группу предмета, которого нет у ученика.'
+                })
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+
+    def save(self, *args, **kwargs):
+        previous = None
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).values(
+                'student_id', 'assessment_group_id', 'academic_year_id', 'is_active'
+            ).first()
+        self.full_clean()
+        result = super().save(*args, **kwargs)
+        from .assessment_services import (
+            recalculate_group_finals,
+            recalculate_student_subject_final,
+        )
+        recalculate_group_finals(self.assessment_group)
+        recalculate_student_subject_final(
+            self.student,
+            self.assessment_group.subject,
+            self.academic_year,
+        )
+        if previous and (
+            previous['student_id'] != self.student_id
+            or previous['assessment_group_id'] != self.assessment_group_id
+            or previous['academic_year_id'] != self.academic_year_id
+            or previous['is_active'] != self.is_active
+        ):
+            previous_group = AssessmentGroup.objects.filter(
+                pk=previous['assessment_group_id']
+            ).select_related('subject', 'academic_year').first()
+            previous_student = Student.objects.filter(pk=previous['student_id']).first()
+            if previous_group and previous_student:
+                recalculate_student_subject_final(
+                    previous_student,
+                    previous_group.subject,
+                    previous_group.academic_year,
+                )
+        return result
+
+    def delete(self, *args, **kwargs):
+        group = self.assessment_group
+        student = self.student
+        academic_year = self.academic_year
+        subject = group.subject
+        result = super().delete(*args, **kwargs)
+        from .assessment_services import recalculate_student_subject_final
+        recalculate_student_subject_final(student, subject, academic_year)
+        return result
+
+
+class AssessmentResult(models.Model):
+    STATUS_PASSED = 'passed'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = (
+        (STATUS_PASSED, 'Зачёт'),
+        (STATUS_FAILED, 'Незачёт'),
+    )
+
+    enrollment = models.ForeignKey(
+        StudentEnrollment,
+        on_delete=models.PROTECT,
+        related_name='assessment_results',
+        verbose_name='Зачисление ученика',
+    )
+    item = models.ForeignKey(
+        AssessmentItem,
+        on_delete=models.PROTECT,
+        related_name='results',
+        verbose_name='Произведение / элемент',
+    )
+    status = models.CharField('Результат', max_length=16, choices=STATUS_CHOICES)
+    assessed_by = models.ForeignKey(
+        Teacher,
+        on_delete=models.PROTECT,
+        related_name='assessment_results_given',
+        verbose_name='Преподаватель, выставивший результат',
+    )
+    comment = models.TextField('Комментарий', blank=True)
+    assessed_at = models.DateTimeField('Дата результата', default=timezone.now)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Результат сдачи произведения'
+        verbose_name_plural = 'Результаты сдачи произведений'
+        ordering = ['item__sort_order', 'enrollment__full_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['enrollment', 'item'],
+                name='unique_assessment_result_enrollment_item',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['item', 'status'], name='assess_result_item_status_idx'),
+            models.Index(fields=['enrollment', 'status'], name='assess_res_enroll_stat_idx'),
+            models.Index(fields=['assessed_by', '-assessed_at'], name='assess_result_teacher_date_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.enrollment.full_name} — {self.item.title}: {self.get_status_display()}'
+
+    def clean(self) -> None:
+        super().clean()
+        if self.enrollment_id and self.item_id:
+            if self.enrollment.academic_year_id != self.item.academic_year_id:
+                raise ValidationError({'item': 'Результат и зачисление относятся к разным учебным годам.'})
+            if not StudentAssessmentGroup.objects.filter(
+                student_id=self.enrollment.student_id,
+                assessment_group_id=self.item.group_id,
+                academic_year_id=self.item.academic_year_id,
+                is_active=True,
+            ).exists():
+                raise ValidationError({'item': 'Произведение не назначено этому ученику.'})
+        if self.assessed_by_id and self.item_id:
+            previous_assessed_by_id = None
+            if self.pk:
+                previous_assessed_by_id = type(self).objects.filter(pk=self.pk).values_list(
+                    'assessed_by_id', flat=True
+                ).first()
+            author_is_being_set = not self.pk or previous_assessed_by_id != self.assessed_by_id
+            if author_is_being_set and self.item.responsible_teacher_id != self.assessed_by_id:
+                raise ValidationError({
+                    'assessed_by': 'Результат может выставить только текущий ответственный преподаватель.'
+                })
+            if not TeacherSubject.objects.filter(
+                teacher_id=self.assessed_by_id,
+                subject_id=self.item.subject_id,
+            ).exists():
+                raise ValidationError({'assessed_by': 'Преподаватель не связан с предметом произведения.'})
+
+    def save(self, *args, **kwargs):
+        recalculate = kwargs.pop('recalculate', True)
+        self.full_clean()
+        result = super().save(*args, **kwargs)
+        if recalculate:
+            from .assessment_services import recalculate_student_subject_final
+            recalculate_student_subject_final(
+                self.enrollment.student,
+                self.item.subject,
+                self.item.academic_year,
+            )
+        return result
+
+    def delete(self, *args, **kwargs):
+        student = self.enrollment.student
+        subject = self.item.subject
+        academic_year = self.item.academic_year
+        result = super().delete(*args, **kwargs)
+        from .assessment_services import recalculate_student_subject_final
+        recalculate_student_subject_final(student, subject, academic_year)
+        return result
+
+
+class FinalGradeRule(models.Model):
+    RULE_COUNT = 'count'
+    RULE_ALL_REQUIRED = 'all_required'
+    RULE_DEFAULT = 'default'
+    RULE_TYPE_CHOICES = (
+        (RULE_COUNT, 'По количеству зачётов'),
+        (RULE_ALL_REQUIRED, 'Все обязательные произведения'),
+        (RULE_DEFAULT, 'Значение по умолчанию'),
+    )
+
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name='final_grade_rules',
+        verbose_name='Предмет',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name='final_grade_rules',
+        verbose_name='Учебный год',
+    )
+    assessment_group = models.ForeignKey(
+        AssessmentGroup,
+        on_delete=models.PROTECT,
+        related_name='final_grade_rules',
+        verbose_name='Группа произведений',
+        help_text='Оставьте пустым для общего правила предмета.',
+        blank=True,
+        null=True,
+    )
+    rule_type = models.CharField('Тип правила', max_length=20, choices=RULE_TYPE_CHOICES)
+    passed_count = models.PositiveIntegerField('Количество зачётов', blank=True, null=True)
+    condition_value = models.BooleanField(
+        'Условие выполнено',
+        blank=True,
+        null=True,
+        help_text='Для правила «Все обязательные произведения»: да или нет.',
+    )
+    grade = models.CharField('Итоговая оценка', max_length=64)
+    priority = models.PositiveIntegerField('Приоритет', default=100)
+    is_active = models.BooleanField('Активно', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Правило итоговой оценки'
+        verbose_name_plural = 'Правила итоговых оценок'
+        ordering = ['academic_year__starts_on', 'subject__name', 'priority', 'pk']
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    'subject', 'academic_year', 'assessment_group',
+                    'rule_type', 'passed_count', 'condition_value',
+                ],
+                name='unique_final_grade_rule_condition',
+                nulls_distinct=False,
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['academic_year', 'subject', 'is_active'], name='final_rule_year_subject_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.subject} — {self.get_rule_type_display()} → {self.grade}'
+
+    def clean(self) -> None:
+        super().clean()
+        self.grade = (self.grade or '').strip()
+        if not self.grade:
+            raise ValidationError({'grade': 'Введите строковое значение итоговой оценки.'})
+        if self.subject_id and not self.subject.uses_element_assessment:
+            raise ValidationError({'subject': 'Правила доступны только для специального режима предмета.'})
+        if self.assessment_group_id:
+            if self.assessment_group.subject_id != self.subject_id:
+                raise ValidationError({'assessment_group': 'Группа относится к другому предмету.'})
+            if self.assessment_group.academic_year_id != self.academic_year_id:
+                raise ValidationError({'assessment_group': 'Группа относится к другому учебному году.'})
+        errors = {}
+        if self.rule_type == self.RULE_COUNT:
+            if self.passed_count is None:
+                errors['passed_count'] = 'Укажите количество зачётов.'
+            self.condition_value = None
+        elif self.rule_type == self.RULE_ALL_REQUIRED:
+            if self.condition_value is None:
+                errors['condition_value'] = 'Укажите, выполнено ли условие.'
+            self.passed_count = None
+        elif self.rule_type == self.RULE_DEFAULT:
+            self.passed_count = None
+            self.condition_value = None
+        if errors:
+            raise ValidationError(errors)
+        if self.academic_year_id:
+            validate_active_academic_year(self.academic_year)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        result = super().save(*args, **kwargs)
+        from .assessment_services import recalculate_subject_finals
+        recalculate_subject_finals(self.subject, self.academic_year)
+        return result
+
+    def delete(self, *args, **kwargs):
+        subject = self.subject
+        academic_year = self.academic_year
+        result = super().delete(*args, **kwargs)
+        from .assessment_services import recalculate_subject_finals
+        recalculate_subject_finals(subject, academic_year)
+        return result
+
+
 class CourseRegistrationSettings(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     telegram_group_url = models.URLField(
@@ -1697,7 +2292,7 @@ class CourseRegistrationSettings(models.Model):
     minimum_registration_age = models.PositiveSmallIntegerField(
         'Минимальный возраст для регистрации',
         default=14,
-        help_text='Возраст считается на дату начала активного учебного года.',
+        help_text='Допускаются ученики, которым в год начала курсов исполнится указанный возраст.',
     )
     updated_at = models.DateTimeField('Дата изменения', auto_now=True)
 
@@ -1868,17 +2463,18 @@ class CourseApplication(models.Model):
         (GENDER_FEMALE, 'Женский'),
     )
 
-    MUSIC_EDUCATION_NONE = 'none'
     MUSIC_EDUCATION_SELF = 'self_taught'
     MUSIC_EDUCATION_BASIC = 'basic'
     MUSIC_EDUCATION_SECONDARY = 'secondary'
     MUSIC_EDUCATION_HIGHER = 'higher'
+    # Compatibility alias for old code and fixtures. Existing database value
+    # ``none`` is converted to ``self_taught`` by migration 0020.
+    MUSIC_EDUCATION_NONE = MUSIC_EDUCATION_SELF
     MUSIC_EDUCATION_CHOICES = (
-        (MUSIC_EDUCATION_NONE, 'Нет'),
         (MUSIC_EDUCATION_SELF, 'Самоучка'),
-        (MUSIC_EDUCATION_BASIC, 'Начальное'),
-        (MUSIC_EDUCATION_SECONDARY, 'Среднее'),
-        (MUSIC_EDUCATION_HIGHER, 'Высшее'),
+        (MUSIC_EDUCATION_BASIC, 'Музыкальная школа'),
+        (MUSIC_EDUCATION_SECONDARY, 'Колледж'),
+        (MUSIC_EDUCATION_HIGHER, 'Институт'),
     )
 
     STATUS_CONFIRMED = 'confirmed'
@@ -1895,12 +2491,25 @@ class CourseApplication(models.Model):
     gender = models.CharField('Пол', max_length=10, choices=GENDER_CHOICES)
     birth_date = models.DateField('Дата рождения')
     city_church = models.CharField('Город / Церковь', max_length=255)
-    instrument = models.CharField('Музыкальный инструмент / партия в оркестре', max_length=255)
+    instrument = models.CharField(
+        'Музыкальный инструмент / партия в оркестре',
+        max_length=255,
+        help_text='Отображаемое значение, синхронизированное со структурированными полями.',
+    )
+    instrument_reference = models.ForeignKey(
+        Instrument,
+        on_delete=models.PROTECT,
+        related_name='course_applications',
+        verbose_name='Инструмент из справочника',
+        null=True,
+        blank=True,
+    )
+    custom_instrument = models.CharField('Собственный инструмент', max_length=255, blank=True)
     music_education = models.CharField(
         'Музыкальное образование',
         max_length=20,
         choices=MUSIC_EDUCATION_CHOICES,
-        default=MUSIC_EDUCATION_NONE,
+        default=MUSIC_EDUCATION_SELF,
     )
     student_phone = models.CharField('Телефон ученика', max_length=32)
     parent_contacts = models.TextField('Телефон родителей', blank=True)
@@ -1979,6 +2588,13 @@ class CourseApplication(models.Model):
                 fields=['academic_year', 'student_phone'],
                 name='unique_course_app_phone_per_year',
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(instrument_reference__isnull=False, custom_instrument='')
+                    | (Q(instrument_reference__isnull=True) & ~Q(custom_instrument=''))
+                ),
+                name='course_app_exactly_one_instrument_source',
+            ),
         ]
 
     def __str__(self) -> str:
@@ -2015,6 +2631,17 @@ class CourseApplication(models.Model):
             value = getattr(self, field_name, '')
             if value:
                 setattr(self, field_name, value.strip())
+        self.custom_instrument = (self.custom_instrument or '').strip()
+        if bool(self.instrument_reference_id) == bool(self.custom_instrument):
+            raise ValidationError({
+                'instrument_reference': 'Выберите инструмент из справочника или вариант «Другой инструмент».',
+                'custom_instrument': 'При выборе другого инструмента укажите его название.',
+            })
+        self.instrument = (
+            self.instrument_reference.name
+            if self.instrument_reference_id
+            else self.custom_instrument
+        )
 
         if self.student_phone:
             self.student_phone = normalize_phone_number(self.student_phone)
@@ -2127,8 +2754,8 @@ class CourseApplication(models.Model):
         if not group.is_active:
             group.is_active = True
             group.save(update_fields=['is_active'])
-        instrument_name = self.instrument.strip() or self.DEFAULT_INSTRUMENT_NAME
-        instrument, _ = Instrument.objects.get_or_create(name=instrument_name)
+        instrument = self.instrument_reference
+        custom_instrument = '' if instrument is not None else self.custom_instrument.strip()
 
         enrollment_existed = (
             existing_student is not None
@@ -2146,6 +2773,7 @@ class CourseApplication(models.Model):
                 city_church=self.city_church,
                 group=group,
                 instrument=instrument,
+                custom_instrument=custom_instrument,
                 music_education=self.music_education,
                 student_phone=self.student_phone,
                 parent_contacts=self.parent_contacts,
@@ -2161,6 +2789,7 @@ class CourseApplication(models.Model):
             existing_student.city_church = self.city_church
             existing_student.group = group
             existing_student.instrument = instrument
+            existing_student.custom_instrument = custom_instrument
             existing_student.music_education = self.music_education
             existing_student.student_phone = self.student_phone
             existing_student.parent_contacts = self.parent_contacts

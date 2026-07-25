@@ -31,7 +31,6 @@ from .assignment_options import (
     active_student_queryset,
     assignment_teacher_queryset,
     group_subject_queryset,
-    is_default_specialty_assignment,
     student_subject_queryset,
 )
 from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
@@ -43,13 +42,18 @@ from .grade_options import (
 )
 from .models import (
     AcademicYear,
+    AssessmentGroup,
+    AssessmentItem,
+    AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
     Grade,
     GroupSubject,
+    FinalGradeRule,
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
     StudyGroup,
@@ -883,6 +887,31 @@ class StudentAdminForm(forms.ModelForm):
 
         self.fields['group'].queryset = group_queryset
 
+        if 'instrument' in self.fields:
+            self.fields['instrument'].empty_label = 'Другой инструмент'
+            self.fields['instrument'].widget.attrs['data-instrument-reference'] = '1'
+        if 'custom_instrument' in self.fields:
+            self.fields['custom_instrument'].widget.attrs.update({
+                'data-custom-instrument': '1',
+                'placeholder': 'Название собственного инструмента',
+            })
+
+    class Media:
+        js = ('journal/admin_responsive.js',)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        instrument = cleaned_data.get('instrument')
+        custom = (cleaned_data.get('custom_instrument') or '').strip()
+        cleaned_data['custom_instrument'] = custom
+        if instrument and custom:
+            self.add_error('custom_instrument', 'Оставьте только один способ указания инструмента.')
+        elif not instrument and not custom:
+            self.add_error('custom_instrument', 'Выберите инструмент или укажите собственный.')
+        if instrument:
+            cleaned_data['custom_instrument'] = ''
+        return cleaned_data
+
 
 class GroupSubjectAdminForm(forms.ModelForm):
     class Meta:
@@ -1036,8 +1065,6 @@ class StudentSubjectAdminForm(forms.ModelForm):
                     'data-assignment-options-url': url,
                     'data-assignment-type': assignment_type,
                 })
-        if 'is_specialty' in self.fields:
-            self.fields['is_specialty'].widget.attrs['data-assignment-specialty-target'] = '1'
 
     def clean(self):
         cleaned_data = super().clean()
@@ -1046,10 +1073,8 @@ class StudentSubjectAdminForm(forms.ModelForm):
         teacher = cleaned_data.get('teacher')
         is_active = cleaned_data.get('is_active')
 
-        if subject:
-            cleaned_data['is_specialty'] = is_default_specialty_assignment(subject)
-            if not subject.is_specialty:
-                self.add_error('subject', 'Групповой предмет нельзя назначить индивидуальному ученику.')
+        if subject and not subject.is_specialty:
+            self.add_error('subject', 'Групповой предмет нельзя назначить индивидуальному ученику.')
 
         active_year = AcademicYear.get_active()
         if student and student.enrollment_for_year(active_year) is None:
@@ -1069,19 +1094,243 @@ class StudentSubjectAdminForm(forms.ModelForm):
             if duplicate_qs.exists():
                 self.add_error('subject', 'У ученика уже есть такой индивидуальный предмет.')
 
-        if student and cleaned_data.get('is_specialty') and is_active:
-            specialty_qs = StudentSubject.objects.filter(
-                student=student,
-                academic_year=active_year,
-                is_specialty=True,
-                is_active=True,
-            )
-            if self.instance.pk:
-                specialty_qs = specialty_qs.exclude(pk=self.instance.pk)
-            if specialty_qs.exists():
-                self.add_error('is_specialty', 'У ученика уже есть активная специальность.')
 
         return cleaned_data
+
+
+class AssessmentDependencyFormMixin:
+    assessment_type = ''
+    dependency_fields = ()
+
+    class Media:
+        js = ('journal/admin_assessment_dependencies.js',)
+
+    def _raw_value(self, field_name):
+        if self.is_bound:
+            return self.data.get(self.add_prefix(field_name)) or self.data.get(field_name)
+        return getattr(self.instance, f'{field_name}_id', None)
+
+    def _set_queryset(self, field_name, queryset):
+        """Assign a queryset only when the field is present in this form.
+
+        Django removes the parent foreign-key field from inline forms.  The
+        same ModelForm is intentionally reused both as a standalone admin form
+        and as an inline, therefore direct ``self.fields['parent']`` access is
+        unsafe and caused the Student change page to fail with ``KeyError``.
+        """
+        field = self.fields.get(field_name)
+        if field is not None:
+            field.queryset = queryset
+        return field
+
+    def _set_help_text(self, field_name, value):
+        field = self.fields.get(field_name)
+        if field is not None:
+            field.help_text = value
+        return field
+
+    def _selected_object(self, queryset, field_name):
+        raw_value = self._raw_value(field_name)
+        if not raw_value:
+            return None
+        try:
+            return queryset.filter(pk=raw_value).first()
+        except (TypeError, ValueError):
+            return None
+
+    def _include_selected(self, queryset, model, field_name):
+        selected = self._selected_object(model.objects.all(), field_name)
+        if selected is None:
+            return queryset
+        return model.objects.filter(Q(pk__in=queryset.values('pk')) | Q(pk=selected.pk)).distinct()
+
+    def attach_dependencies(self):
+        endpoint = reverse('assessment_options_api')
+        for field_name in self.dependency_fields:
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs.update({
+                    'data-assessment-options-url': endpoint,
+                    'data-assessment-type': self.assessment_type,
+                })
+
+
+class AssessmentGroupAdminForm(forms.ModelForm):
+    class Meta:
+        model = AssessmentGroup
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        subject_field = self.fields.get('subject')
+        if subject_field is not None:
+            subject_field.queryset = Subject.objects.filter(
+                is_active=True,
+                assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            ).order_by('name')
+        year_field = self.fields.get('academic_year')
+        if year_field is not None:
+            year_field.queryset = AcademicYear.objects.filter(
+                is_active=True,
+            ).order_by('-starts_on')
+
+
+class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
+    assessment_type = 'item'
+    dependency_fields = ('subject', 'academic_year', 'group', 'responsible_teacher')
+
+    class Meta:
+        model = AssessmentItem
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        subject = self._selected_object(Subject.objects.all(), 'subject')
+        year = self._selected_object(AcademicYear.objects.all(), 'academic_year')
+        group = (
+            self._selected_object(AssessmentGroup.objects.all(), 'group')
+            or getattr(self, 'parent_assessment_group', None)
+        )
+        if group is not None:
+            subject = group.subject
+            year = group.academic_year
+        self._set_queryset('subject', self._include_selected(
+            Subject.objects.filter(
+                is_active=True,
+                assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            ).order_by('name'),
+            Subject,
+            'subject',
+        ))
+        self._set_queryset('academic_year', self._include_selected(
+            AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+            AcademicYear,
+            'academic_year',
+        ))
+        groups = AssessmentGroup.objects.filter(is_active=True)
+        if subject is not None:
+            groups = groups.filter(subject=subject)
+        if year is not None:
+            groups = groups.filter(academic_year=year)
+        self._set_queryset('group', self._include_selected(
+            groups.select_related('subject', 'academic_year').order_by('sort_order', 'name'),
+            AssessmentGroup,
+            'group',
+        ))
+        teachers = Teacher.objects.filter(is_active=True)
+        if subject is not None:
+            teachers = teachers.filter(subjects__subject=subject)
+        if year is not None:
+            teachers = teachers.filter(
+                academic_year_memberships__academic_year=year,
+                academic_year_memberships__is_active=True,
+            )
+        self._set_queryset('responsible_teacher', self._include_selected(
+            teachers.distinct().order_by('full_name'),
+            Teacher,
+            'responsible_teacher',
+        ))
+        self._set_help_text('responsible_teacher', (
+            'Без ответственного преподавателя произведение считается не полностью '
+            'настроенным и недоступно для выставления результатов.'
+        ))
+        self.attach_dependencies()
+
+
+class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
+    assessment_type = 'student_group'
+    dependency_fields = ('student', 'academic_year', 'assessment_group')
+
+    class Meta:
+        model = StudentAssessmentGroup
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        student = (
+            self._selected_object(Student.objects.all(), 'student')
+            or getattr(self, 'parent_student', None)
+        )
+        year = (
+            self._selected_object(AcademicYear.objects.all(), 'academic_year')
+            or getattr(self, 'parent_academic_year', None)
+        )
+        group = self._selected_object(AssessmentGroup.objects.all(), 'assessment_group')
+        if group is not None:
+            year = group.academic_year
+        self._set_queryset('student', self._include_selected(
+            active_student_queryset(), Student, 'student'
+        ))
+        self._set_queryset('academic_year', self._include_selected(
+            AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+            AcademicYear,
+            'academic_year',
+        ))
+        groups = AssessmentGroup.objects.filter(is_active=True)
+        if year is not None:
+            groups = groups.filter(academic_year=year)
+        if student is not None and year is not None:
+            enrollment = student.enrollment_for_year(year)
+            subject_ids = set(StudentSubject.objects.filter(
+                student=student,
+                academic_year=year,
+                is_active=True,
+            ).values_list('subject_id', flat=True))
+            if enrollment is not None and enrollment.group_id:
+                subject_ids.update(GroupSubject.objects.filter(
+                    group_id=enrollment.group_id,
+                    is_active=True,
+                ).values_list('subject_id', flat=True))
+            groups = groups.filter(subject_id__in=subject_ids)
+        self._set_queryset('assessment_group', self._include_selected(
+            groups.select_related('subject', 'academic_year').order_by('subject__name', 'sort_order', 'name'),
+            AssessmentGroup,
+            'assessment_group',
+        ))
+        self.attach_dependencies()
+
+
+class FinalGradeRuleAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
+    assessment_type = 'rule'
+    dependency_fields = ('subject', 'academic_year', 'assessment_group')
+
+    class Meta:
+        model = FinalGradeRule
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        subject = (
+            self._selected_object(Subject.objects.all(), 'subject')
+            or getattr(self, 'parent_subject', None)
+        )
+        year = (
+            self._selected_object(AcademicYear.objects.all(), 'academic_year')
+            or getattr(self, 'parent_academic_year', None)
+        )
+        self._set_queryset('subject', self._include_selected(
+            Subject.objects.filter(
+                is_active=True,
+                assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            ).order_by('name'),
+            Subject,
+            'subject',
+        ))
+        self._set_queryset('academic_year', self._include_selected(
+            AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+            AcademicYear,
+            'academic_year',
+        ))
+        groups = AssessmentGroup.objects.all()
+        if subject is not None:
+            groups = groups.filter(subject=subject)
+        if year is not None:
+            groups = groups.filter(academic_year=year)
+        self._set_queryset('assessment_group', self._include_selected(
+            groups.select_related('subject', 'academic_year').order_by('sort_order', 'name'),
+            AssessmentGroup,
+            'assessment_group',
+        ))
+        self.attach_dependencies()
 
 
 class StudentChoiceWithCityWidget(forms.Select):
@@ -1346,14 +1595,6 @@ class StudentSubjectInlineFormSet(UniqueInlineFormSetMixin, forms.models.BaseInl
             'fields': ('student', 'subject', 'academic_year'),
             'message': 'У ученика уже есть такой индивидуальный предмет.',
         },
-        {
-            'fields': ('student', 'academic_year'),
-            'condition': lambda cleaned_data: (
-                cleaned_data.get('is_specialty') and cleaned_data.get('is_active')
-            ),
-            'filters': {'is_specialty': True, 'is_active': True},
-            'message': 'У ученика уже есть активная специальность.',
-        },
     )
 
     def _unique_field_value(self, form, field_name):
@@ -1439,7 +1680,7 @@ class StudentSubjectInline(
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 0
-    fields = ('subject', 'teacher', 'is_specialty', 'is_active')
+    fields = ('subject', 'teacher', 'is_active')
     show_change_link = True
     verbose_name = 'Индивидуальный предмет'
     verbose_name_plural = 'Индивидуальные предметы ученика'
@@ -1450,7 +1691,7 @@ class StudentSubjectForTeacherInline(SelectedAcademicYearStudentSubjectInlineMix
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 1
-    fields = ('student', 'subject', 'is_specialty', 'is_active')
+    fields = ('student', 'subject', 'is_active')
     show_change_link = True
     verbose_name = 'Индивидуальный ученик'
     verbose_name_plural = 'Индивидуальные ученики преподавателя'
@@ -1461,7 +1702,7 @@ class StudentSubjectForSubjectInline(SelectedAcademicYearStudentSubjectInlineMix
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 0
-    fields = ('student', 'teacher', 'is_specialty', 'is_active')
+    fields = ('student', 'teacher', 'is_active')
     show_change_link = True
     classes = ('collapse',)
     verbose_name = 'Индивидуальный предмет ученика'
@@ -1674,6 +1915,7 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     )
     list_display = (
         'name',
+        'assessment_mode',
         'final_grade_type',
         'is_specialty',
         'is_active',
@@ -1681,7 +1923,7 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
         'teachers_count',
         'individual_students_count',
     )
-    list_filter = ('final_grade_type', 'is_specialty', 'is_active')
+    list_filter = ('assessment_mode', 'final_grade_type', 'is_specialty', 'is_active')
     search_fields = (
         'name',
         'group_subjects__group__name',
@@ -1697,10 +1939,11 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     list_per_page = 50
     fieldsets = (
         ('Предмет', {
-            'fields': ('name', 'final_grade_type', 'is_specialty', 'is_active'),
+            'fields': ('name', 'assessment_mode', 'final_grade_type', 'is_specialty', 'is_active'),
             'description': (
                 'Групповые предметы назначаются группе. Индивидуальные предметы '
-                'назначаются конкретному ученику.'
+                'назначаются конкретному ученику. Специальный режим включается явно и '
+                'не зависит от названия предмета.'
             ),
         }),
     )
@@ -2064,6 +2307,37 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         return truncate_text(', '.join(items), length=120)
 
 
+class StudentAssessmentGroupInline(admin.TabularInline):
+    model = StudentAssessmentGroup
+    form = StudentAssessmentGroupAdminForm
+    fk_name = 'student'
+    extra = 0
+    fields = ('assessment_group', 'is_active')
+    show_change_link = True
+    verbose_name = 'Группа произведений'
+    verbose_name_plural = 'Группы произведений ученика'
+
+    def get_formset(self, request, obj=None, **kwargs):
+        base_form = self.form
+        selected_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
+        kwargs['form'] = type(
+            'InlineStudentAssessmentGroupAdminForm',
+            (base_form,),
+            {
+                'parent_student': obj,
+                'parent_academic_year': selected_year,
+            },
+        )
+        return super().get_formset(request, obj, **kwargs)
+
+    def get_queryset(self, request):
+        academic_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
+        queryset = super().get_queryset(request).select_related(
+            'assessment_group', 'assessment_group__subject', 'academic_year'
+        )
+        return queryset.filter(academic_year=academic_year) if academic_year else queryset.none()
+
+
 @admin.register(Student)
 class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
@@ -2074,7 +2348,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     list_display = (
         'full_name',
         'selected_year_group_display',
-        'instrument',
+        'instrument_display',
         'age_display',
         'student_phone',
         'city_church',
@@ -2100,13 +2374,14 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'user__email',
         'group__name',
         'instrument__name',
+        'custom_instrument',
         'individual_subjects__teacher__full_name',
         'individual_subjects__teacher_name_snapshot',
         'individual_subjects__subject__name',
         'individual_subjects__subject_name_snapshot',
     )
     autocomplete_fields = ('user', 'group', 'instrument')
-    inlines = (StudentSubjectInline, SubjectResultInline)
+    inlines = (StudentSubjectInline, StudentAssessmentGroupInline, SubjectResultInline)
     ordering = ('full_name',)
     list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
     list_per_page = 40
@@ -2120,6 +2395,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                 'age_display',
                 'group',
                 'instrument',
+                'custom_instrument',
                 'is_active',
             ),
             'description': (
@@ -2162,7 +2438,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                     queryset=(
                         StudentSubject.objects
                         .filter(
-                            is_specialty=True,
+                            subject__is_specialty=True,
                             is_active=True,
                             academic_year=academic_year,
                         )
@@ -2193,7 +2469,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                     'birth_date',
                     'age_display',
                     'selected_year_group_display',
-                    'instrument',
+                    'instrument_display',
                     'selected_year_active_display',
                 ),
                 'description': (
@@ -2268,6 +2544,10 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     @admin.display(description='Пользователь')
     def user_link(self, obj):
         return admin_change_link(obj.user)
+
+    @admin.display(description='Инструмент', ordering='instrument__name')
+    def instrument_display(self, obj):
+        return obj.instrument_display
 
     @admin.display(description='Возраст')
     def age_display(self, obj):
@@ -2404,17 +2684,16 @@ class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptio
         'subject_name_display',
         'teacher_name_display',
         'academic_year',
-        'is_specialty',
         'is_active',
     )
-    list_filter = ('academic_year', 'is_active', 'is_specialty', 'subject', 'teacher')
+    list_filter = ('academic_year', 'is_active', 'subject', 'teacher')
     search_fields = ('student__full_name', 'subject__name', 'teacher__full_name', 'subject_name_snapshot')
     list_select_related = ('student', 'subject', 'teacher', 'academic_year')
     ordering = ('student__full_name', 'subject__name')
     list_per_page = 50
     fieldsets = (
         ('Индивидуальный предмет ученика', {
-            'fields': ('student', 'subject', 'teacher', 'is_specialty', 'is_active'),
+            'fields': ('student', 'subject', 'teacher', 'is_active'),
             'description': (
                 'Связь можно редактировать здесь, в карточке ученика, преподавателя или предмета. '
                 'При смене преподавателя связанные оценки по этому назначению обновляются автоматически.'
@@ -2698,7 +2977,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         'age_display',
         'student_phone',
         'city_church',
-        'instrument',
+        'instrument_display',
     )
     list_filter = (
         'status',
@@ -2716,6 +2995,8 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         'parent_contacts',
         'city_church',
         'instrument',
+        'instrument_reference__name',
+        'custom_instrument',
         'generated_login',
         'user__username',
         'student__full_name',
@@ -2733,7 +3014,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         'journal_removed_at',
     )
     date_hierarchy = 'registration_date'
-    list_select_related = ('student', 'user', 'academic_year')
+    list_select_related = ('student', 'user', 'academic_year', 'instrument_reference')
     actions = ('confirm_applications', 'reject_applications')
     list_per_page = 40
 
@@ -2775,7 +3056,8 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         ('Контакты и обучение', {
             'fields': (
                 'city_church',
-                'instrument',
+                'instrument_reference',
+                'custom_instrument',
                 'music_education',
                 'student_phone',
                 'parent_contacts',
@@ -2808,6 +3090,10 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
     @admin.display(description='ФИО', ordering='last_name')
     def full_name_display(self, obj):
         return obj.full_name
+
+    @admin.display(description='Инструмент', ordering='instrument')
+    def instrument_display(self, obj):
+        return obj.instrument
 
     @admin.display(description='Возраст на начало курсов')
     def age_display(self, obj):
@@ -3052,3 +3338,231 @@ class PasswordRecoveryContactAdmin(JournalAdminDescriptionMixin, admin.ModelAdmi
             ),
         }),
     )
+
+
+class SelectedAssessmentYearAdminMixin(ArchivedAcademicYearAdminMixin):
+    academic_year_lookup = 'academic_year'
+
+    def selected_year(self, request):
+        return self.selected_academic_year(request) or AcademicYear.get_active()
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        academic_year = self.selected_year(request)
+        if academic_year is None:
+            return queryset.none()
+        return queryset.filter(**{self.academic_year_lookup: academic_year})
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        academic_year = self.selected_year(request)
+        if academic_year is not None:
+            initial.setdefault('academic_year', academic_year.pk)
+        return initial
+
+
+class ProtectedAssessmentDeleteAdminMixin:
+    protected_related_message = 'Используемую запись удалить нельзя. Деактивируйте её, чтобы сохранить историю.'
+
+    def object_has_protected_history(self, obj):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and self.object_has_protected_history(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        deletable_ids = []
+        protected_count = 0
+        for obj in queryset:
+            if self.object_has_protected_history(obj):
+                protected_count += 1
+            else:
+                deletable_ids.append(obj.pk)
+        if protected_count:
+            self.message_user(
+                request,
+                f'{self.protected_related_message} Пропущено записей: {protected_count}.',
+                level='ERROR',
+            )
+        if deletable_ids:
+            super().delete_queryset(request, queryset.filter(pk__in=deletable_ids))
+
+
+@admin.register(AssessmentGroup)
+class AssessmentGroupAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    form = AssessmentGroupAdminForm
+    changelist_description = (
+        'Отдельные группы произведений. Они не являются учебными группами учеников и '
+        'используются только для распределения произведений в специальном режиме предмета.'
+    )
+    list_display = (
+        'name', 'subject', 'academic_year', 'items_count_display',
+        'students_count_display', 'is_active',
+    )
+    list_filter = ('academic_year', 'subject', 'is_active')
+    search_fields = ('name', 'description', 'subject__name')
+    list_select_related = ('subject', 'academic_year')
+    ordering = ('subject__name', 'sort_order', 'name')
+    fields = ('name', 'description', 'subject', 'academic_year', 'sort_order', 'is_active')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _items_count=Count('items', distinct=True),
+            _students_count=Count(
+                'student_assignments',
+                filter=Q(student_assignments__is_active=True),
+                distinct=True,
+            ),
+        )
+
+    @admin.display(description='Произведений', ordering='_items_count')
+    def items_count_display(self, obj):
+        url = reverse('admin:journal_assessmentitem_changelist')
+        return format_html('<a href="{}?group__id__exact={}">{}</a>', url, obj.pk, obj._items_count)
+
+    @admin.display(description='Учеников', ordering='_students_count')
+    def students_count_display(self, obj):
+        url = reverse('admin:journal_studentassessmentgroup_changelist')
+        return format_html(
+            '<a href="{}?assessment_group__id__exact={}">{}</a>',
+            url,
+            obj.pk,
+            obj._students_count,
+        )
+
+    protected_related_message = (
+        'Используемую группу произведений удалить нельзя. '
+        'Деактивируйте её, чтобы сохранить историю.'
+    )
+
+    def object_has_protected_history(self, obj):
+        return bool(
+            obj.items.exists()
+            or obj.student_assignments.exists()
+            or obj.final_grade_rules.exists()
+        )
+
+
+@admin.register(AssessmentItem)
+class AssessmentItemAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    form = AssessmentItemAdminForm
+    changelist_description = (
+        'Каждое произведение относится ровно к одной группе и имеет не более одного '
+        'текущего ответственного преподавателя-дирижёра.'
+    )
+    list_display = (
+        'title', 'group', 'subject', 'responsible_teacher', 'configuration_status',
+        'academic_year', 'sort_order', 'is_required', 'is_active', 'results_count_display',
+    )
+    list_filter = ('academic_year', 'subject', 'group', 'responsible_teacher', 'is_required', 'is_active')
+    search_fields = ('title', 'description', 'group__name', 'subject__name', 'responsible_teacher__full_name')
+    list_select_related = ('group', 'subject', 'responsible_teacher', 'academic_year')
+    ordering = ('group__sort_order', 'sort_order', 'title')
+    fields = (
+        'title', 'description', 'subject', 'academic_year', 'group', 'responsible_teacher',
+        'sort_order', 'is_required', 'is_active',
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(_results_count=Count('results', distinct=True))
+
+    @admin.display(description='Результатов', ordering='_results_count')
+    def results_count_display(self, obj):
+        url = reverse('admin:journal_assessmentresult_changelist')
+        return format_html('<a href="{}?item__id__exact={}">{}</a>', url, obj.pk, obj._results_count)
+
+
+    @admin.display(description='Настройка')
+    def configuration_status(self, obj):
+        if obj.responsible_teacher_id:
+            return 'Готово'
+        return format_html('<strong style="color:#b45309">Не назначен дирижёр</strong>')
+
+    protected_related_message = (
+        'Произведение с результатами удалить нельзя. '
+        'Деактивируйте его, чтобы сохранить историю.'
+    )
+
+    def object_has_protected_history(self, obj):
+        return obj.results.exists()
+
+
+@admin.register(StudentAssessmentGroup)
+class StudentAssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    form = StudentAssessmentGroupAdminForm
+    changelist_description = (
+        'Назначение ученику одной или нескольких групп произведений. Доступные группы '
+        'ограничиваются предметами ученика и выбранным учебным годом.'
+    )
+    list_display = ('student', 'assessment_group', 'subject_display', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'assessment_group__subject', 'assessment_group', 'is_active')
+    search_fields = ('student__full_name', 'assessment_group__name', 'assessment_group__subject__name')
+    list_select_related = ('student', 'assessment_group', 'assessment_group__subject', 'academic_year', 'enrollment')
+    fields = ('student', 'academic_year', 'assessment_group', 'is_active')
+
+    @admin.display(description='Предмет', ordering='assessment_group__subject__name')
+    def subject_display(self, obj):
+        return obj.assessment_group.subject
+
+
+@admin.register(AssessmentResult)
+class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    academic_year_lookup = 'item__academic_year'
+    changelist_description = (
+        'История результатов по каждому произведению. Изменения преподавателя в кабинете '
+        'дополнительно проверяются сервером по текущему назначению дирижёра.'
+    )
+    list_display = (
+        'student_display', 'item', 'subject_display', 'status', 'assessed_by',
+        'assessed_at', 'academic_year_display',
+    )
+    list_filter = ('item__academic_year', 'item__subject', 'item', 'status', 'assessed_by')
+    search_fields = ('enrollment__full_name', 'item__title', 'assessed_by__full_name', 'comment')
+    list_select_related = (
+        'enrollment', 'enrollment__student', 'item', 'item__subject',
+        'item__academic_year', 'assessed_by',
+    )
+    readonly_fields = ('created_at', 'updated_at')
+    fields = ('enrollment', 'item', 'status', 'assessed_by', 'assessed_at', 'comment', 'created_at', 'updated_at')
+
+    @admin.display(description='Ученик', ordering='enrollment__full_name')
+    def student_display(self, obj):
+        return obj.enrollment.full_name
+
+    @admin.display(description='Предмет', ordering='item__subject__name')
+    def subject_display(self, obj):
+        return obj.item.subject
+
+    @admin.display(description='Учебный год', ordering='item__academic_year__starts_on')
+    def academic_year_display(self, obj):
+        return obj.item.academic_year
+
+
+@admin.register(FinalGradeRule)
+class FinalGradeRuleAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    form = FinalGradeRuleAdminForm
+    changelist_description = (
+        'Настраиваемое соответствие количества зачётов или выполнения всех обязательных '
+        'произведений строковой итоговой оценке.'
+    )
+    list_display = (
+        'subject', 'assessment_group', 'academic_year', 'rule_type',
+        'condition_display', 'grade', 'priority', 'is_active',
+    )
+    list_filter = ('academic_year', 'subject', 'assessment_group', 'rule_type', 'is_active')
+    search_fields = ('subject__name', 'assessment_group__name', 'grade')
+    list_select_related = ('subject', 'assessment_group', 'academic_year')
+    fields = (
+        'subject', 'academic_year', 'assessment_group', 'rule_type',
+        'passed_count', 'condition_value', 'grade', 'priority', 'is_active',
+    )
+
+    @admin.display(description='Условие')
+    def condition_display(self, obj):
+        if obj.rule_type == FinalGradeRule.RULE_COUNT:
+            return f'{obj.passed_count} зачётов'
+        if obj.rule_type == FinalGradeRule.RULE_ALL_REQUIRED:
+            return 'Все сданы' if obj.condition_value else 'Не все сданы'
+        return 'По умолчанию'

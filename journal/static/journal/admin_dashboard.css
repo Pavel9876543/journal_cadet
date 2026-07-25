@@ -1303,3 +1303,383 @@ body.change-form .inline-group .add-row a:focus {
         margin: 10px 12px !important;
     }
 }
+/* -------------------------------------------------------------------------
+   Универсальная адаптивность административной панели и связанных окон
+   ------------------------------------------------------------------------- */
+
+html,
+body {
+    max-width: 100%;
+}
+
+body:not(.login-page) {
+    overflow-x: hidden;
+}
+
+body:not(.login-page) img,
+body:not(.login-page) svg,
+body:not(.login-page) video,
+body:not(.login-page) canvas {
+    max-width: 100%;
+}
+
+.app-wrapper,
+.app-main,
+.app-content,
+.app-content-header,
+.content-wrapper,
+#content,
+#content-main,
+#changelist,
+.results,
+.inline-group,
+fieldset,
+.card,
+.card-body,
+.form-row,
+.form-group,
+.row,
+[class*="col-"] {
+    min-width: 0;
+}
+
+body.change-list #changelist .results,
+body.change-form .inline-group .tabular,
+.journal-responsive-table {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+body.change-form .related-widget-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+}
+
+body.change-form .related-widget-wrapper > select,
+body.change-form .related-widget-wrapper > input,
+body.change-form .related-widget-wrapper > .select2,
+body.change-form .related-widget-wrapper > .select2-container {
+    flex: 1 1 240px;
+    width: auto !important;
+    min-width: min(100%, 220px) !important;
+    max-width: 100% !important;
+}
+
+body.change-form .related-widget-wrapper-link,
+body.change-form .related-lookup,
+body.change-form .related-widget-wrapper a {
+    display: inline-flex;
+    flex: 0 0 38px;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    margin: 0 !important;
+    border: 1px solid var(--journal-admin-border);
+    border-radius: 6px;
+    background: var(--journal-admin-surface-soft);
+    text-decoration: none;
+}
+
+body.change-form .selector {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+    max-width: 100%;
+}
+
+body.change-form .selector-available,
+body.change-form .selector-chosen {
+    width: 100% !important;
+    min-width: 0;
+}
+
+body.change-form .selector select {
+    width: 100% !important;
+    min-width: 0 !important;
+}
+
+body.change-form .selector .selector-chooser {
+    align-self: center;
+    margin: 0;
+}
+
+body.change-form .datetimeshortcuts {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: 6px;
+    white-space: normal;
+}
+
+body.change-form .submit-row,
+body.change-form #jazzy-actions .d-flex,
+body.delete-confirmation form > div,
+body.delete-confirmation .submit-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+body.change-form .submit-row input,
+body.change-form .submit-row a,
+body.delete-confirmation .submit-row input,
+body.delete-confirmation .submit-row a {
+    min-height: 40px;
+    white-space: normal;
+}
+
+.modal.journal-related-modal {
+    padding: 0 !important;
+}
+
+.modal.journal-related-modal .modal-dialog,
+.modal:has(iframe[src*="/admin/"]) .modal-dialog {
+    width: min(94vw, 1440px) !important;
+    max-width: none !important;
+    height: min(92vh, var(--journal-viewport-height, 92vh)) !important;
+    margin: max(12px, 4vh) auto !important;
+}
+
+.modal.journal-related-modal .modal-content,
+.modal:has(iframe[src*="/admin/"]) .modal-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100% !important;
+    max-height: 100%;
+    overflow: hidden;
+    border-radius: 8px;
+}
+
+.modal.journal-related-modal .modal-header,
+.modal:has(iframe[src*="/admin/"]) .modal-header {
+    flex: 0 0 auto;
+}
+
+.modal.journal-related-modal .modal-body,
+.modal:has(iframe[src*="/admin/"]) .modal-body {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+.modal.journal-related-modal iframe,
+.modal:has(iframe[src*="/admin/"]) iframe {
+    display: block;
+    flex: 1 1 auto;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    border: 0;
+}
+
+html.journal-admin-popup,
+body.journal-admin-popup {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 100%;
+    overflow-x: hidden;
+}
+
+body.journal-admin-popup #jazzy-sidebar,
+body.journal-admin-popup #jazzy-navbar,
+body.journal-admin-popup .main-footer,
+body.journal-admin-popup .app-footer {
+    display: none !important;
+}
+
+body.journal-admin-popup .app-wrapper,
+body.journal-admin-popup .app-main,
+body.journal-admin-popup .content-wrapper,
+body.journal-admin-popup .app-content,
+body.journal-admin-popup .app-content-header,
+body.journal-admin-popup #content,
+body.journal-admin-popup #content-main {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+}
+
+body.journal-admin-popup .app-content-header {
+    padding-top: 10px;
+}
+
+body.journal-admin-popup .app-content .container-fluid,
+body.journal-admin-popup .app-content-header .container-fluid {
+    width: 100%;
+    max-width: none;
+}
+
+body.journal-admin-popup #jazzy-actions {
+    top: 12px;
+}
+
+body.journal-admin-popup .breadcrumb {
+    display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+    body.change-form .related-widget-wrapper-link,
+    body.change-form .related-lookup,
+    body.change-form .related-widget-wrapper a {
+        flex-basis: 44px;
+        width: 44px;
+        min-width: 44px;
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .modal.journal-related-modal .modal-dialog,
+    .modal:has(iframe[src*="/admin/"]) .modal-dialog {
+        width: calc(100vw - 16px) !important;
+        height: calc(var(--journal-viewport-height, 100vh) - 16px) !important;
+        margin: 8px auto !important;
+    }
+
+    body.change-form .selector {
+        grid-template-columns: 1fr;
+    }
+
+    body.change-form .selector .selector-chooser {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        transform: rotate(90deg);
+    }
+
+    body.journal-admin-popup #jazzy-actions {
+        position: static;
+        margin-top: 10px;
+    }
+}
+
+@media (max-width: 767.98px) {
+    #jazzy-navbar .navbar-nav,
+    #jazzy-navbar .navbar-nav.ms-auto {
+        min-width: 0;
+    }
+
+    #jazzy-navbar .nav-link {
+        padding-right: 8px;
+        padding-left: 8px;
+    }
+
+    .app-content-header,
+    .app-content {
+        overflow-x: clip;
+    }
+
+    body.change-form .related-widget-wrapper > select,
+    body.change-form .related-widget-wrapper > input,
+    body.change-form .related-widget-wrapper > .select2,
+    body.change-form .related-widget-wrapper > .select2-container {
+        flex-basis: calc(100% - 100px);
+        min-width: 0 !important;
+    }
+
+    body.change-form .form-row,
+    body.change-form fieldset .row,
+    body.change-form .fieldBox,
+    body.change-form .checkbox-row {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    body.change-form .submit-row,
+    body.change-form #jazzy-actions .d-flex,
+    body.delete-confirmation .submit-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    body.change-form .submit-row input,
+    body.change-form .submit-row a,
+    body.change-form #jazzy-actions input,
+    body.change-form #jazzy-actions a,
+    body.delete-confirmation .submit-row input,
+    body.delete-confirmation .submit-row a {
+        width: 100% !important;
+    }
+
+    body.change-list #result_list th:first-child,
+    body.change-list #result_list td:first-child,
+    body.change-form .inline-group table th:first-child,
+    body.change-form .inline-group table td:first-child {
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        background: var(--journal-admin-surface);
+        box-shadow: 1px 0 0 var(--journal-admin-border);
+    }
+
+    body.change-list #result_list thead th:first-child,
+    body.change-form .inline-group table thead th:first-child {
+        z-index: 3;
+        background: var(--journal-admin-surface-soft);
+    }
+
+    body.journal-admin-popup .app-content .container-fluid,
+    body.journal-admin-popup .app-content-header .container-fluid {
+        padding-right: 10px;
+        padding-left: 10px;
+    }
+}
+
+@media (max-width: 575.98px) {
+    body.change-form .related-widget-wrapper {
+        align-items: stretch;
+    }
+
+    body.change-form .related-widget-wrapper > select,
+    body.change-form .related-widget-wrapper > input,
+    body.change-form .related-widget-wrapper > .select2,
+    body.change-form .related-widget-wrapper > .select2-container {
+        flex: 1 1 100%;
+    }
+
+    body.change-form .related-widget-wrapper-link,
+    body.change-form .related-lookup,
+    body.change-form .related-widget-wrapper a {
+        flex: 1 1 44px;
+        max-width: none;
+    }
+
+    body.change-list #changelist .results,
+    body.change-form .inline-group,
+    body.change-form .inline-group .tabular,
+    .journal-responsive-table {
+        margin-right: -4px;
+        margin-left: -4px;
+    }
+
+    .modal.journal-related-modal .modal-dialog,
+    .modal:has(iframe[src*="/admin/"]) .modal-dialog {
+        width: 100vw !important;
+        height: var(--journal-viewport-height, 100vh) !important;
+        margin: 0 !important;
+    }
+
+    .modal.journal-related-modal .modal-content,
+    .modal:has(iframe[src*="/admin/"]) .modal-content {
+        border: 0;
+        border-radius: 0;
+    }
+}

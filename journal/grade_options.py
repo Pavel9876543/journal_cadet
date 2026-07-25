@@ -193,7 +193,9 @@ def get_grade_subjects(
     )
     if year.is_active:
         subjects = subjects.filter(is_active=True)
-    return subjects.distinct().order_by('name')
+    return subjects.filter(
+        assessment_mode=Subject.ASSESSMENT_MODE_STANDARD,
+    ).distinct().order_by('name')
 
 
 def get_grade_teachers(
