@@ -2903,7 +2903,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                             is_active=True,
                             academic_year=academic_year,
                         )
-                        .select_related('subject', 'teacher')
+                        .select_related('subject', 'teacher', 'academic_year')
                         .order_by('subject__name')
                     ),
                     to_attr='selected_year_specialty_assignments',

@@ -66,7 +66,10 @@
     function responsivePopupFeatures(features) {
         var screenWidth = availableScreenWidth();
         var screenHeight = availableScreenHeight();
-        var compact = Math.min(screenWidth, viewportWidth()) < 768;
+        var compact = (
+            window.matchMedia &&
+            window.matchMedia('(max-width: 767.98px)').matches
+        ) || Math.min(screenWidth, viewportWidth()) < 768;
         var featureMap = parseFeatures(features);
         var width;
         var height;
@@ -127,7 +130,7 @@
         if (!iframeIsAdminPopup(iframe)) {
             return;
         }
-        modal.classList.add('journal-related-modal');
+        modal.classList.add('journal-related-modal', 'responsive-admin-modal');
         var dialog = modal.querySelector('.modal-dialog');
         if (dialog) {
             dialog.classList.add('journal-related-modal__dialog');

@@ -1438,11 +1438,13 @@ body.delete-confirmation .submit-row a {
     white-space: normal;
 }
 
-.modal.journal-related-modal {
+.modal.journal-related-modal,
+.modal.responsive-admin-modal {
     padding: 0 !important;
 }
 
 .modal.journal-related-modal .modal-dialog,
+.modal.responsive-admin-modal .modal-dialog,
 .modal:has(iframe[src*="/admin/"]) .modal-dialog {
     width: min(94vw, 1440px) !important;
     max-width: none !important;
@@ -1451,6 +1453,7 @@ body.delete-confirmation .submit-row a {
 }
 
 .modal.journal-related-modal .modal-content,
+.modal.responsive-admin-modal .modal-content,
 .modal:has(iframe[src*="/admin/"]) .modal-content {
     display: flex;
     flex-direction: column;
@@ -1462,11 +1465,13 @@ body.delete-confirmation .submit-row a {
 }
 
 .modal.journal-related-modal .modal-header,
+.modal.responsive-admin-modal .modal-header,
 .modal:has(iframe[src*="/admin/"]) .modal-header {
     flex: 0 0 auto;
 }
 
 .modal.journal-related-modal .modal-body,
+.modal.responsive-admin-modal .modal-body,
 .modal:has(iframe[src*="/admin/"]) .modal-body {
     display: flex;
     flex: 1 1 auto;
@@ -1477,6 +1482,7 @@ body.delete-confirmation .submit-row a {
 }
 
 .modal.journal-related-modal iframe,
+.modal.responsive-admin-modal iframe,
 .modal:has(iframe[src*="/admin/"]) iframe {
     display: block;
     flex: 1 1 auto;
@@ -1548,6 +1554,7 @@ body.journal-admin-popup .breadcrumb {
 
 @media (max-width: 991.98px) {
     .modal.journal-related-modal .modal-dialog,
+    .modal.responsive-admin-modal .modal-dialog,
     .modal:has(iframe[src*="/admin/"]) .modal-dialog {
         width: calc(100vw - 16px) !important;
         height: calc(var(--journal-viewport-height, 100vh) - 16px) !important;
@@ -1671,6 +1678,7 @@ body.journal-admin-popup .breadcrumb {
     }
 
     .modal.journal-related-modal .modal-dialog,
+    .modal.responsive-admin-modal .modal-dialog,
     .modal:has(iframe[src*="/admin/"]) .modal-dialog {
         width: 100vw !important;
         height: var(--journal-viewport-height, 100vh) !important;
@@ -1678,6 +1686,7 @@ body.journal-admin-popup .breadcrumb {
     }
 
     .modal.journal-related-modal .modal-content,
+    .modal.responsive-admin-modal .modal-content,
     .modal:has(iframe[src*="/admin/"]) .modal-content {
         border: 0;
         border-radius: 0;

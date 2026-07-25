@@ -129,7 +129,6 @@ def write_users_sheet(workbook: Workbook, academic_year: AcademicYear | None) ->
 
 def write_reference_sheets(workbook: Workbook, academic_year: AcademicYear | None) -> None:
     subject_ids: set[int] = set()
-    instrument_ids: set[int] = set()
     if academic_year is not None:
         subject_ids.update(
             GroupSubject.objects.filter(group__academic_year=academic_year)
@@ -151,19 +150,6 @@ def write_reference_sheets(workbook: Workbook, academic_year: AcademicYear | Non
             AssessmentGroup.objects.filter(academic_year=academic_year)
             .values_list('subject_id', flat=True)
         )
-        instrument_ids.update(
-            StudentEnrollment.objects.filter(
-                academic_year=academic_year,
-                student__instrument__isnull=False,
-            ).values_list('student__instrument_id', flat=True)
-        )
-        instrument_ids.update(
-            CourseApplication.objects.filter(
-                academic_year=academic_year,
-                instrument_reference__isnull=False,
-            ).values_list('instrument_reference_id', flat=True)
-        )
-
     write_custom_sheet(
         workbook,
         'Учебные годы',
@@ -177,7 +163,7 @@ def write_reference_sheets(workbook: Workbook, academic_year: AcademicYear | Non
     write_custom_sheet(
         workbook,
         'Инструменты',
-        Instrument.objects.filter(pk__in=instrument_ids).order_by('name'),
+        Instrument.objects.order_by('name'),
         [('Название инструмента', lambda item: item.name)],
     )
     write_custom_sheet(
@@ -245,7 +231,7 @@ def write_teachers_sheet(workbook: Workbook, academic_year: AcademicYear | None)
     memberships = (
         TeacherEnrollment.objects.filter(academic_year=academic_year)
         .select_related('teacher', 'academic_year')
-        .order_by('full_name')
+        .order_by('teacher__full_name')
         if academic_year else TeacherEnrollment.objects.none()
     )
     write_custom_sheet(
@@ -253,7 +239,7 @@ def write_teachers_sheet(workbook: Workbook, academic_year: AcademicYear | None)
         'Преподаватели',
         memberships,
         [
-            ('Преподаватель', lambda item: item.full_name),
+            ('Преподаватель', lambda item: item.teacher.full_name),
             ('Дата рождения', lambda item: item.teacher.birth_date),
             ('Телефон', lambda item: item.teacher.phone),
             ('Email', lambda item: item.teacher.email),

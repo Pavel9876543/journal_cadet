@@ -55,7 +55,8 @@ def academic_year_is_active(academic_year: 'AcademicYear | None') -> bool:
     if academic_year is None:
         return False
     if getattr(academic_year, 'pk', None):
-        return AcademicYear.objects.filter(pk=academic_year.pk, is_active=True).exists()
+        active_pk = AcademicYear.active_pk()
+        return academic_year.pk == active_pk
     return bool(academic_year.is_active)
 
 
@@ -93,13 +94,16 @@ def academic_year_for_object(obj):
 
 def object_is_in_archived_academic_year(obj) -> bool:
     academic_year = academic_year_for_object(obj)
-    # This helper is used repeatedly while Django renders admin permissions.
-    # Related academic years are already loaded for those objects, so checking
-    # the in-memory flag avoids one identical EXISTS query per permission call.
+    # Admin querysets load the related year together with the row.  Keeping the
+    # permission check in memory prevents the same lookup from being repeated
+    # for every inline and every permission hook on a change page.
     return academic_year is not None and not bool(academic_year.is_active)
 
 
 class AcademicYear(models.Model):
+    _active_pk_cache = None
+    _active_pk_cache_ready = False
+
     name = models.CharField('Учебный год', max_length=20, unique=True)
     starts_on = models.DateField('Дата начала')
     ends_on = models.DateField('Дата окончания')
@@ -203,6 +207,8 @@ class AcademicYear(models.Model):
             years = cls.objects.order_by('-starts_on', '-ends_on', '-pk')
             latest_year = years.first()
             if latest_year is None:
+                cls._active_pk_cache = None
+                cls._active_pk_cache_ready = True
                 return None
 
             if previous_active_id is None:
@@ -220,6 +226,8 @@ class AcademicYear(models.Model):
             years.exclude(pk=latest_year.pk).update(is_active=False)
             cls.objects.filter(pk=latest_year.pk).update(is_active=True)
             latest_year.is_active = True
+            cls._active_pk_cache = latest_year.pk
+            cls._active_pk_cache_ready = True
 
             if active_changed:
                 sync_people_with_active_academic_year(latest_year.pk)
@@ -252,7 +260,20 @@ class AcademicYear(models.Model):
 
     @classmethod
     def get_active(cls):
-        return cls.objects.filter(is_active=True).first()
+        active_pk = cls.active_pk()
+        return cls.objects.filter(pk=active_pk).first() if active_pk is not None else None
+
+    @classmethod
+    def active_pk(cls):
+        if not cls._active_pk_cache_ready:
+            cls._active_pk_cache = (
+                cls.objects
+                .filter(is_active=True)
+                .values_list('pk', flat=True)
+                .first()
+            )
+            cls._active_pk_cache_ready = True
+        return cls._active_pk_cache
 
     @classmethod
     def get_for_date(cls, date):
@@ -338,6 +359,31 @@ class Subject(models.Model):
         super().clean()
         if self.name:
             self.name = self.name.strip()
+        if self.pk:
+            previous_grade_type = (
+                type(self).objects
+                .filter(pk=self.pk)
+                .values_list('final_grade_type', flat=True)
+                .first()
+            )
+            if previous_grade_type and previous_grade_type != self.final_grade_type:
+                allowed_values = self.get_final_grade_allowed_values()
+                result_values = self.subject_results.values_list(
+                    'exam_grade',
+                    'final_grade',
+                )
+                has_incompatible_results = any(
+                    value not in {None, ''} and self.normalize_final_grade(value) not in allowed_values
+                    for result in result_values
+                    for value in result
+                )
+                if has_incompatible_results:
+                    raise ValidationError({
+                        'final_grade_type': (
+                            'Нельзя изменить тип итоговой оценки: '
+                            'существующие результаты ему не соответствуют.'
+                        ),
+                    })
         if self.pk and self.is_specialty and self.group_subjects.exists():
             raise ValidationError({
                 'is_specialty': 'Нельзя сделать предмет индивидуальным, пока он назначен группам.'

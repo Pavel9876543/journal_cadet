@@ -11,6 +11,7 @@ from .models import (
     StudyGroup,
     Subject,
     Teacher,
+    academic_year_is_active,
 )
 
 
@@ -18,26 +19,26 @@ def _selected_year(academic_year):
     return academic_year or AcademicYear.get_active()
 
 
+def _year_is_active(year):
+    return academic_year_is_active(year)
+
+
 def _assignment_querysets(academic_year):
     year = _selected_year(academic_year)
     if year is None:
         return year, GroupSubject.objects.none(), StudentSubject.objects.none()
 
-    group_assignments = GroupSubject.objects.filter(
-        is_active=True,
-        group__academic_year=year,
-    )
-    individual_assignments = StudentSubject.objects.filter(
-        is_active=True,
-        academic_year=year,
-    )
-    if year.is_active:
+    group_assignments = GroupSubject.objects.filter(group__academic_year=year)
+    individual_assignments = StudentSubject.objects.filter(academic_year=year)
+    if _year_is_active(year):
         group_assignments = group_assignments.filter(
+            is_active=True,
             group__is_active=True,
             subject__is_active=True,
             teacher__is_active=True,
         )
         individual_assignments = individual_assignments.filter(
+            is_active=True,
             student__is_active=True,
             subject__is_active=True,
             teacher__is_active=True,
@@ -86,7 +87,7 @@ def get_grade_groups(
         Q(pk__in=group_assignments.values_list('group_id', flat=True))
         | Q(pk__in=individual_group_ids)
     )
-    if year.is_active:
+    if _year_is_active(year):
         groups = groups.filter(is_active=True)
     return groups.select_related('academic_year').distinct().order_by('name')
 
@@ -137,7 +138,7 @@ def get_grade_students(
     students = students.filter(
         Q(pk__in=group_student_ids) | Q(pk__in=individual_student_ids),
     )
-    if year.is_active:
+    if _year_is_active(year):
         students = students.filter(is_active=True)
 
     enrollment_prefetch = Prefetch(
@@ -191,7 +192,7 @@ def get_grade_subjects(
         Q(pk__in=group_assignments.values_list('subject_id', flat=True))
         | Q(pk__in=individual_assignments.values_list('subject_id', flat=True))
     )
-    if year.is_active:
+    if _year_is_active(year):
         subjects = subjects.filter(is_active=True)
     return subjects.filter(
         assessment_mode=Subject.ASSESSMENT_MODE_STANDARD,
@@ -232,6 +233,6 @@ def get_grade_teachers(
         Q(pk__in=group_assignments.values_list('teacher_id', flat=True))
         | Q(pk__in=individual_assignments.values_list('teacher_id', flat=True))
     )
-    if year.is_active:
+    if _year_is_active(year):
         teachers = teachers.filter(is_active=True)
     return teachers.distinct().order_by('full_name')

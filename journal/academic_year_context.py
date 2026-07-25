@@ -131,6 +131,6 @@ def filter_temporary_credentials_for_year(queryset, academic_year):
     # Staff accounts are global rather than academic records. Show them only
     # in the active context; an archived year must never acquire a copy of a
     # yearless administrator credential.
-    if academic_year.is_active:
+    if AcademicYear.objects.filter(pk=academic_year.pk, is_active=True).exists():
         year_filter |= Q(user__is_staff=True, course_application__isnull=True)
     return queryset.filter(year_filter).distinct()

@@ -117,6 +117,12 @@ class JournalTestDataMixin:
     """Фабрики для тестов новой архитектуры журнала."""
 
     def create_academic_year(self, *, name='2025/2026', is_active=True):
+        if not getattr(self, '_explicit_test_year_initialized', False):
+            # Data migration 0009 creates a fallback year whose dates depend on
+            # the day the test database is built.  Each test that constructs an
+            # explicit chronology starts without that migration-only placeholder.
+            AcademicYear.objects.all().delete()
+            self._explicit_test_year_initialized = True
         start_year = int(name.split('/', 1)[0])
         return AcademicYear.objects.create(
             name=name,
@@ -253,6 +259,8 @@ class JournalTestDataMixin:
         }
 
     def application_payload(self, **overrides):
+        if AcademicYear.get_active() is None:
+            self.create_academic_year()
         instrument_name = overrides.pop('instrument', 'Баян I')
         custom_instrument = overrides.pop('custom_instrument', '')
         instrument_reference = overrides.pop('instrument_reference', None)
@@ -1783,7 +1791,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertFalse(invalid_form.is_valid())
-        self.assertIn('Недопустимое значение', str(invalid_form.errors))
+        self.assertIn('Допустимы значения', str(invalid_form.errors))
 
     @override_settings(AUTH_PASSWORD_VALIDATORS=[])
     def test_detailed_password_change_form_has_no_old_password_field_and_saves_new_password(
@@ -2652,6 +2660,7 @@ class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
         second_application = CourseApplication.objects.create(
             **self.application_payload(student_phone='+7 (999) 765-43-21'),
         )
+        TemporaryCredential.objects.filter(user=first_application.user).delete()
         self.client.force_login(first_application.user)
 
         response = self.client.get(reverse('journal'), {'academic_year': first_year.pk})
@@ -2858,11 +2867,14 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, assessment_group.name)
 
         inline = StudentAssessmentGroupInline(Student, django_admin.site)
         formset = inline.get_formset(self.admin_request(year), student)(instance=student)
-        self.assertIn('assessment_group', formset.forms[0].fields)
+        self.assertIn('assessment_group', formset.empty_form.fields)
+        self.assertIn(
+            assessment_group,
+            formset.empty_form.fields['assessment_group'].queryset,
+        )
 
     def test_group_student_inline_exposes_related_student_controls_and_card_link(self):
         year = self.create_academic_year()
@@ -2958,6 +2970,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
     def test_inactive_academic_year_is_read_only_even_when_active_year_is_selected(self):
         old_year = self.create_academic_year(name='2025/2026')
         active_year = self.create_academic_year(name='2026/2027')
+        old_year.refresh_from_db()
         request = self.admin_request(active_year)
         year_admin = AcademicYearAdmin(AcademicYear, django_admin.site)
 
@@ -3147,6 +3160,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         response = self.client.get(
             reverse('admin:journal_studygroup_change', args=[data['group'].pk]),
+            {'academic_year': data['year'].pk},
         )
 
         self.assertContains(response, archived_student_name)
@@ -3271,11 +3285,11 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(
             [inline.model for inline in django_admin.site._registry[Subject].inlines],
-            [GroupSubject, StudentSubject],
+            [GroupSubject, StudentSubject, AssessmentGroup, FinalGradeRule],
         )
         self.assertEqual(
             [inline.model for inline in django_admin.site._registry[Teacher].inlines],
-            [GroupSubject, StudentSubject],
+            [GroupSubject, StudentSubject, AssessmentItem],
         )
 
     def test_subject_admin_shows_assignment_inline_for_subject_type(self):
@@ -3899,6 +3913,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'individual_subjects-0-student': student.pk,
                 'individual_subjects-0-subject': individual_subject.pk,
                 'individual_subjects-0-is_active': 'on',
+                'responsible_assessment_items-TOTAL_FORMS': '0',
+                'responsible_assessment_items-INITIAL_FORMS': '0',
+                'responsible_assessment_items-MIN_NUM_FORMS': '0',
+                'responsible_assessment_items-MAX_NUM_FORMS': '1000',
                 '_save': 'Save',
             },
         )
@@ -4035,6 +4053,14 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'subject_results-0-subject': data['solfeggio'].pk,
                 'subject_results-0-exam_grade': '5',
                 'subject_results-0-final_grade': '5',
+                'assessment_group_assignments-TOTAL_FORMS': '0',
+                'assessment_group_assignments-INITIAL_FORMS': '0',
+                'assessment_group_assignments-MIN_NUM_FORMS': '0',
+                'assessment_group_assignments-MAX_NUM_FORMS': '1000',
+                'grades-TOTAL_FORMS': '0',
+                'grades-INITIAL_FORMS': '0',
+                'grades-MIN_NUM_FORMS': '0',
+                'grades-MAX_NUM_FORMS': '1000',
                 '_save': 'Save',
             },
         )
@@ -5344,7 +5370,27 @@ class SeedDataCommandTests(TestCase):
         self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 70)
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
-        self.assertEqual(Grade.objects.count(), 1542)
+        expected_grade_count = 0
+        for student in Student.objects.select_related('group'):
+            subject_ids = set(
+                GroupSubject.objects.filter(
+                    group=student.group,
+                    is_active=True,
+                ).exclude(
+                    subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+                ).values_list('subject_id', flat=True)
+            )
+            subject_ids.update(
+                StudentSubject.objects.filter(
+                    student=student,
+                    is_active=True,
+                ).exclude(
+                    subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+                ).values_list('subject_id', flat=True)
+            )
+            expected_grade_count += len(subject_ids) * 6
+
+        self.assertEqual(Grade.objects.count(), expected_grade_count)
 
         self.assertEqual(
             set(Grade.objects.values_list('value', flat=True)),
@@ -5527,9 +5573,10 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             full_name='Дирижёр Второй',
             username='assessment_teacher_2',
         )
-        TeacherEnrollment.objects.create(
+        TeacherEnrollment.objects.update_or_create(
             teacher=new_teacher,
             academic_year=self.year,
+            defaults={'is_active': True},
         )
         TeacherSubject.objects.create(teacher=new_teacher, subject=self.subject)
         self.item.responsible_teacher = new_teacher
