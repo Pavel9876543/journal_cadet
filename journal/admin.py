@@ -2110,6 +2110,63 @@ class AssessmentItemForTeacherInline(
         return super().get_queryset(request).select_related('group', 'subject', 'academic_year')
 
 
+class AcademicYearParentInlineMixin:
+    """Scope archive permissions to the year being edited, not the UI selection."""
+
+    def selected_academic_year(self, request):
+        return None
+
+
+class StudyGroupForAcademicYearInline(
+    AcademicYearParentInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = StudyGroup
+    fk_name = 'academic_year'
+    extra = 1
+    fields = ('name', 'is_active')
+    show_change_link = True
+    verbose_name = 'Учебная группа'
+    verbose_name_plural = 'Учебные группы'
+
+
+class TeacherEnrollmentForAcademicYearInline(
+    AcademicYearParentInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = TeacherEnrollment
+    fk_name = 'academic_year'
+    extra = 1
+    fields = ('teacher', 'is_active')
+    autocomplete_fields = ('teacher',)
+    show_change_link = False
+    verbose_name = 'Участие преподавателя'
+    verbose_name_plural = 'Преподаватели учебного года'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('teacher')
+
+
+class AssessmentGroupForAcademicYearInline(
+    AcademicYearParentInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = AssessmentGroup
+    form = AssessmentGroupAdminForm
+    fk_name = 'academic_year'
+    extra = 1
+    fields = ('name', 'subject', 'sort_order', 'is_active')
+    show_change_link = True
+    verbose_name = 'Группа произведений'
+    verbose_name_plural = 'Группы произведений'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('subject')
+
+
 # -----------------------------------------------------------------------------
 # Справочники
 # -----------------------------------------------------------------------------
@@ -2121,7 +2178,15 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
         'Учебные годы задают периоды обучения. Активный учебный год используется по умолчанию '
         'для групп, заявок и дат оценок.'
     )
-    list_display = ('name', 'starts_on', 'ends_on', 'is_active', 'groups_count')
+    inlines = (
+        StudyGroupForAcademicYearInline,
+        TeacherEnrollmentForAcademicYearInline,
+        AssessmentGroupForAcademicYearInline,
+    )
+    list_display = (
+        'name', 'starts_on', 'ends_on', 'is_active', 'groups_count',
+        'students_count', 'teachers_count', 'assessment_groups_count',
+    )
     list_filter = ('is_active',)
     search_fields = ('name',)
     ordering = ('-starts_on',)
@@ -2136,7 +2201,24 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.annotate(_groups_count=Count('study_groups', distinct=True))
+        return qs.annotate(
+            _groups_count=Count('study_groups', distinct=True),
+            _students_count=Count(
+                'student_enrollments',
+                filter=Q(student_enrollments__is_active=True),
+                distinct=True,
+            ),
+            _teachers_count=Count(
+                'teacher_enrollments',
+                filter=Q(teacher_enrollments__is_active=True),
+                distinct=True,
+            ),
+            _assessment_groups_count=Count(
+                'assessment_groups',
+                filter=Q(assessment_groups__is_active=True),
+                distinct=True,
+            ),
+        )
 
     def delete_queryset(self, request, queryset):
         deleted = 0
@@ -2171,9 +2253,29 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
                 level='ERROR',
             )
 
-    @admin.display(description='Групп')
+    @admin.display(description='Групп', ordering='_groups_count')
     def groups_count(self, obj):
-        return obj._groups_count
+        return format_html(
+            '<a href="{}">{}</a>',
+            admin_changelist_url('studygroup', {'academic_year__id__exact': obj.pk}),
+            obj._groups_count,
+        )
+
+    @admin.display(description='Учеников', ordering='_students_count')
+    def students_count(self, obj):
+        return obj._students_count
+
+    @admin.display(description='Преподавателей', ordering='_teachers_count')
+    def teachers_count(self, obj):
+        return obj._teachers_count
+
+    @admin.display(description='Групп произведений', ordering='_assessment_groups_count')
+    def assessment_groups_count(self, obj):
+        return format_html(
+            '<a href="{}">{}</a>',
+            admin_changelist_url('assessmentgroup', {'academic_year__id__exact': obj.pk}),
+            obj._assessment_groups_count,
+        )
 
 
 @admin.register(Instrument)
@@ -2200,7 +2302,11 @@ class InstrumentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
 
     @admin.display(description='Учеников')
     def students_count(self, obj):
-        return obj._students_count
+        return format_html(
+            '<a href="{}">{}</a>',
+            admin_changelist_url('student', {'instrument__id__exact': obj.pk}),
+            obj._students_count,
+        )
 
 
 @admin.register(Subject)
@@ -3815,11 +3921,47 @@ class StudentAssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdmin
         'Назначение ученику одной или нескольких групп произведений. Доступные группы '
         'ограничиваются предметами ученика и выбранным учебным годом.'
     )
-    list_display = ('student', 'assessment_group', 'subject_display', 'academic_year', 'is_active')
+    list_display = (
+        'student', 'assessment_group', 'subject_display', 'academic_year',
+        'items_count_display', 'results_workspace_link', 'is_active',
+    )
     list_filter = ('academic_year', 'assessment_group__subject', 'assessment_group', 'is_active')
     search_fields = ('student__full_name', 'assessment_group__name', 'assessment_group__subject__name')
     list_select_related = ('student', 'assessment_group', 'assessment_group__subject', 'academic_year', 'enrollment')
     fields = ('student', 'academic_year', 'assessment_group', 'is_active')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _items_count=Count(
+                'assessment_group__items',
+                filter=Q(assessment_group__items__is_active=True),
+                distinct=True,
+            ),
+        )
+
+    @admin.display(description='Произведений', ordering='_items_count')
+    def items_count_display(self, obj):
+        return format_html(
+            '<a href="{}">{}</a>',
+            admin_changelist_url(
+                'assessmentitem',
+                {'group__id__exact': obj.assessment_group_id},
+            ),
+            obj._items_count,
+        )
+
+    @admin.display(description='Результаты')
+    def results_workspace_link(self, obj):
+        return format_html(
+            '<a href="{}">Открыть</a>',
+            admin_changelist_url(
+                'assessmentresult',
+                {
+                    'item__group__id__exact': obj.assessment_group_id,
+                    'enrollment__student__id__exact': obj.student_id,
+                },
+            ),
+        )
 
     @admin.display(description='Предмет', ordering='assessment_group__subject__name')
     def subject_display(self, obj):
@@ -3838,7 +3980,10 @@ class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescri
         'student_display', 'item', 'subject_display', 'status', 'assessed_by',
         'assessed_at', 'academic_year_display',
     )
-    list_filter = ('item__academic_year', 'item__subject', 'item', 'status', 'assessed_by')
+    list_filter = (
+        'item__academic_year', 'item__subject', 'item__group', 'item',
+        'enrollment__student', 'status', 'assessed_by',
+    )
     search_fields = ('enrollment__full_name', 'item__title', 'assessed_by__full_name', 'comment')
     list_select_related = (
         'enrollment', 'enrollment__student', 'item', 'item__subject',

@@ -5504,6 +5504,55 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         )
         self.assertIn(self.student, formset.forms[-1].fields['student'].queryset)
 
+    def test_academic_year_admin_exposes_cascading_workspaces(self):
+        superuser = User.objects.create_superuser(
+            username='academic_year_workspace_admin',
+            email='year-workspace@example.com',
+            password='AdminPass123!',
+        )
+        request = RequestFactory().get('/admin/')
+        request.user = superuser
+        request.session = {}
+        model_admin = django_admin.site._registry[AcademicYear]
+
+        inline_instances = model_admin.get_inline_instances(request, self.year)
+        inline_names = {type(inline).__name__ for inline in inline_instances}
+
+        self.assertEqual(
+            inline_names,
+            {
+                'StudyGroupForAcademicYearInline',
+                'TeacherEnrollmentForAcademicYearInline',
+                'AssessmentGroupForAcademicYearInline',
+            },
+        )
+        group_inline = next(
+            inline for inline in inline_instances
+            if type(inline).__name__ == 'AssessmentGroupForAcademicYearInline'
+        )
+        formset = group_inline.get_formset(request, self.year)(instance=self.year)
+        self.assertIn(self.subject, formset.forms[-1].fields['subject'].queryset)
+
+    def test_assignment_admin_links_to_filtered_items_and_results(self):
+        superuser = User.objects.create_superuser(
+            username='assignment_workspace_admin',
+            email='assignment-workspace@example.com',
+            password='AdminPass123!',
+        )
+        request = RequestFactory().get('/admin/', {'academic_year': self.year.pk})
+        request.user = superuser
+        request.session = {}
+        model_admin = django_admin.site._registry[StudentAssessmentGroup]
+        assignment = model_admin.get_queryset(request).get(pk=self.assignment.pk)
+
+        items_link = str(model_admin.items_count_display(assignment))
+        results_link = str(model_admin.results_workspace_link(assignment))
+
+        self.assertIn('assessmentitem', items_link)
+        self.assertIn(f'group__id__exact={self.assessment_group.pk}', items_link)
+        self.assertIn('assessmentresult', results_link)
+        self.assertIn(f'enrollment__student__id__exact={self.student.pk}', results_link)
+
     def test_assessment_item_admin_exposes_filtered_result_inline(self):
         superuser = User.objects.create_superuser(
             username='assessment_result_admin',
