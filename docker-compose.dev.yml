@@ -13,6 +13,7 @@ services:
       - .:/app
     environment:
       DEBUG: "1"
+      MIGRATION_MODE: create
 
   db:
     ports:

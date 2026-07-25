@@ -125,13 +125,19 @@ Production-контейнер доступен только на `127.0.0.1:8000
 docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 180
 ```
 
+При сборке Docker-образа выполняются проверка `makemigrations` и полный `migrate` на временной SQLite-базе. Это останавливает сборку, если модели расходятся с миграциями или чистая база не разворачивается.
+
 При старте контейнера `docker/entrypoint.sh` автоматически выполняет:
 
 ```bash
+python manage.py makemigrations --noinput journal   # development: MIGRATION_MODE=create
+python manage.py makemigrations --check --dry-run   # production: MIGRATION_MODE=check
 python manage.py migrate --noinput
 python manage.py ensure_superuser
 python manage.py collectstatic --noinput --clear
 ```
+
+В development новые миграции создаются в примонтированном проекте. В production используется режим `check`: контейнер не создаёт незакоммиченные миграции на сервере и не стартует, пока они не добавлены в репозиторий. Режим `skip` предназначен только для специальных служебных контейнеров.
 
 Статика собирается в контейнерный каталог `/var/lib/cadet-journal/staticfiles`, а не в примонтированный с Windows каталог `/app`. После обновления со старой версии обязательно пересоберите образ через `./scripts/run-local.sh` или командой Compose с `--build`.
 

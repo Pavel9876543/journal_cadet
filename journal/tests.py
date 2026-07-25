@@ -16,7 +16,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import Count, Q
-from django.test import Client, RequestFactory, TestCase, TransactionTestCase, override_settings, tag
+from django.test import Client, RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings, tag
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
@@ -4218,6 +4218,43 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 429)
         self.assertFalse(response.json()['success'])
+
+
+class DockerMigrationBootstrapTests(SimpleTestCase):
+    project_root = Path(__file__).resolve().parents[1]
+
+    def test_entrypoint_runs_makemigrations_before_runtime_migrate(self):
+        entrypoint = (self.project_root / 'docker' / 'entrypoint.sh').read_text(encoding='utf-8')
+
+        create_position = entrypoint.index('python manage.py makemigrations --noinput')
+        check_position = entrypoint.index('python manage.py makemigrations --check --dry-run')
+        migrate_position = entrypoint.index('python manage.py migrate --noinput')
+
+        self.assertLess(create_position, migrate_position)
+        self.assertLess(check_position, migrate_position)
+        self.assertIn('MIGRATION_MODE="${MIGRATION_MODE:-check}"', entrypoint)
+        self.assertIn('create)', entrypoint)
+        self.assertIn('check)', entrypoint)
+
+    def test_docker_build_validates_and_applies_migration_chain(self):
+        dockerfile = (self.project_root / 'Dockerfile').read_text(encoding='utf-8')
+
+        self.assertIn('python manage.py makemigrations --check --dry-run', dockerfile)
+        self.assertIn('python manage.py migrate --noinput', dockerfile)
+        self.assertIn('/tmp/cadet-journal-build-check.sqlite3', dockerfile)
+        self.assertLess(
+            dockerfile.index('python manage.py makemigrations --check --dry-run'),
+            dockerfile.index('python manage.py migrate --noinput'),
+        )
+
+    def test_environment_examples_use_safe_migration_modes(self):
+        development = (self.project_root / '.env.dev.example').read_text(encoding='utf-8')
+        production = (self.project_root / '.env.prod.example').read_text(encoding='utf-8')
+        development_compose = (self.project_root / 'docker-compose.dev.yml').read_text(encoding='utf-8')
+
+        self.assertIn('MIGRATION_MODE=create', development)
+        self.assertIn('MIGRATION_MODE=check', production)
+        self.assertIn('MIGRATION_MODE: create', development_compose)
 
 
 class AsyncDatabaseViewTests(TestCase):

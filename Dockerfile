@@ -33,6 +33,19 @@ RUN pip install --no-index --find-links=/wheels /wheels/* && rm -rf /wheels
 
 COPY --chown=app:app . .
 COPY --chown=app:app docker/entrypoint.sh /entrypoint.sh
+
+# Validate the committed migration graph during image build and prove that it
+# can be applied from an empty database. Runtime PostgreSQL migrations are
+# still executed by entrypoint after the database health check.
+RUN set -eu; \
+    export DB_ENGINE=django.db.backends.sqlite3 \
+    DB_NAME=/tmp/cadet-journal-build-check.sqlite3 \
+    DEBUG=1 \
+    MIGRATION_MODE=check; \
+    python manage.py makemigrations --check --dry-run; \
+    python manage.py migrate --noinput; \
+    rm -f /tmp/cadet-journal-build-check.sqlite3
+
 RUN mkdir -p /var/lib/cadet-journal/staticfiles \
     && chown -R app:app /app /var/lib/cadet-journal \
     && sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
