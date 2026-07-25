@@ -30,13 +30,18 @@ from .academic_year_context import (
 )
 from .models import (
     AcademicYear,
+    AssessmentGroup,
+    AssessmentItem,
+    AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
+    FinalGradeRule,
     Grade,
     GroupSubject,
     Instrument,
     PasswordRecoveryContact,
     Student,
+    StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
     StudyGroup,
@@ -245,35 +250,61 @@ def validate_data_tools_password(request: HttpRequest) -> bool:
 
 def clear_database_data() -> dict[str, int]:
     UserModel = get_user_model()
+
     protected_user_ids = set(
-        UserModel.objects.filter(is_superuser=True).values_list('id', flat=True),
+        UserModel.objects.filter(is_superuser=True)
+        .values_list("id", flat=True)
     )
     protected_user_ids.update(
-        UserModel.objects.filter(is_staff=True).values_list('id', flat=True),
+        UserModel.objects.filter(is_staff=True)
+        .values_list("id", flat=True)
     )
 
     deleted_counts: dict[str, int] = {}
 
+    deletion_order = (
+        # Служебные и регистрационные данные.
+        TemporaryCredential,
+        PasswordRecoveryContact,
+        CourseApplication,
+
+        # Результаты и оценки удаляются раньше назначений.
+        AssessmentResult,
+        SubjectResult,
+        Grade,
+
+        # Связи учеников с группами произведений.
+        StudentAssessmentGroup,
+
+        # Правила и произведения защищают группы произведений.
+        FinalGradeRule,
+        AssessmentItem,
+        AssessmentGroup,
+
+        # Обычные назначения предметов.
+        StudentSubject,
+        GroupSubject,
+        TeacherSubject,
+
+        # Зачисления удаляются раньше учеников, преподавателей и годов.
+        StudentEnrollment,
+        TeacherEnrollment,
+
+        # Основные профили.
+        Student,
+        Teacher,
+
+        # Справочники.
+        StudyGroup,
+        Subject,
+        Instrument,
+        AcademicYear,
+
+        CourseRegistrationSettings,
+    )
+
     with transaction.atomic():
-        for model in (
-            TemporaryCredential,
-            CourseApplication,
-            SubjectResult,
-            Grade,
-            StudentSubject,
-            GroupSubject,
-            TeacherSubject,
-            StudentEnrollment,
-            TeacherEnrollment,  # удалить участия раньше преподавателей и годов
-            Student,
-            Teacher,
-            StudyGroup,
-            Subject,
-            Instrument,
-            AcademicYear,
-            PasswordRecoveryContact,
-            CourseRegistrationSettings,
-        ):
+        for model in deletion_order:
             deleted_count, _deleted_by_model = model.objects.all().delete()
             deleted_counts[model._meta.label_lower] = deleted_count
 
