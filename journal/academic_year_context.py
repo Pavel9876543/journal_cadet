@@ -6,6 +6,7 @@ from django.core.exceptions import ObjectDoesNotExist
 
 ADMIN_ACADEMIC_YEAR_PARAM = 'academic_year'
 ADMIN_ACADEMIC_YEAR_SESSION_KEY = 'journal_admin_academic_year_id'
+ADMIN_ACADEMIC_YEAR_REQUEST_CACHE = '_journal_admin_academic_year'
 
 
 def get_selected_admin_academic_year(request):
@@ -15,6 +16,10 @@ def get_selected_admin_academic_year(request):
     a changelist to a change form. The active year is the default.
     """
     from .models import AcademicYear
+
+    cached = getattr(request, ADMIN_ACADEMIC_YEAR_REQUEST_CACHE, None)
+    if cached is not None:
+        return cached
 
     query_params = getattr(request, 'GET', {})
     session = getattr(request, 'session', None)
@@ -33,18 +38,22 @@ def get_selected_admin_academic_year(request):
         if selected is not None:
             if session is not None:
                 session[ADMIN_ACADEMIC_YEAR_SESSION_KEY] = selected.pk
+            setattr(request, ADMIN_ACADEMIC_YEAR_REQUEST_CACHE, selected)
             return selected
 
     selected_id = session.get(ADMIN_ACADEMIC_YEAR_SESSION_KEY) if session is not None else None
     if selected_id:
         selected = AcademicYear.objects.filter(pk=selected_id).first()
         if selected is not None:
+            setattr(request, ADMIN_ACADEMIC_YEAR_REQUEST_CACHE, selected)
             return selected
         session.pop(ADMIN_ACADEMIC_YEAR_SESSION_KEY, None)
 
     selected = AcademicYear.get_active() or AcademicYear.latest()
     if selected is not None and session is not None:
         session[ADMIN_ACADEMIC_YEAR_SESSION_KEY] = selected.pk
+    if selected is not None:
+        setattr(request, ADMIN_ACADEMIC_YEAR_REQUEST_CACHE, selected)
     return selected
 
 

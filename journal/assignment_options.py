@@ -29,11 +29,14 @@ def active_student_queryset() -> QuerySet[Student]:
     )
 
 
-def assignment_teacher_queryset(subject: Subject | None = None) -> QuerySet[Teacher]:
+def assignment_teacher_queryset(
+    subject: Subject | None = None,
+    academic_year: AcademicYear | None = None,
+) -> QuerySet[Teacher]:
     # A historical teacher may be enrolled into the new active year by making
     # an assignment. A teacher explicitly deactivated in the current year must
     # stay unavailable until reactivated deliberately.
-    active_year = AcademicYear.get_active()
+    active_year = academic_year or AcademicYear.get_active()
     if active_year is None:
         return Teacher.objects.filter(is_active=True).order_by('full_name')
 

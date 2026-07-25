@@ -274,21 +274,39 @@ class SelectedAcademicYearGroupSubjectInlineMixin:
 class SelectedAcademicYearStudentSubjectInlineMixin:
     def get_queryset(self, request):
         selected = get_selected_admin_academic_year(request)
-        queryset = super().get_queryset(request)
+        queryset = super().get_queryset(request).select_related(
+            'student',
+            'subject',
+            'teacher',
+            'academic_year',
+        )
         return queryset.filter(academic_year=selected) if selected else queryset.none()
 
 
 class SelectedAcademicYearSubjectResultInlineMixin:
     def get_queryset(self, request):
         selected = get_selected_admin_academic_year(request)
-        queryset = super().get_queryset(request)
+        queryset = super().get_queryset(request).select_related(
+            'student',
+            'subject',
+            'academic_year',
+            'enrollment',
+            'enrollment__group',
+        )
         return queryset.filter(academic_year=selected) if selected else queryset.none()
 
 
 class SelectedAcademicYearGradeInlineMixin:
     def get_queryset(self, request):
         selected = get_selected_admin_academic_year(request)
-        queryset = super().get_queryset(request)
+        queryset = super().get_queryset(request).select_related(
+            'student',
+            'subject',
+            'teacher',
+            'academic_year',
+            'enrollment',
+            'enrollment__group',
+        )
         return queryset.filter(academic_year=selected) if selected else queryset.none()
 
 
@@ -1018,6 +1036,10 @@ class StudentSubjectAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         subject_id = self._raw_value('subject')
         subject = self._selected_object(Subject.objects.all(), subject_id)
+        academic_year = (
+            getattr(self, 'parent_academic_year', None)
+            or getattr(self.instance, 'academic_year', None)
+        )
 
         if 'student' in self.fields:
             self.fields['student'].queryset = self._include_selected_choice(
@@ -1033,7 +1055,7 @@ class StudentSubjectAdminForm(forms.ModelForm):
             )
         if 'teacher' in self.fields:
             self.fields['teacher'].queryset = self._include_selected_choice(
-                assignment_teacher_queryset(subject),
+                assignment_teacher_queryset(subject, academic_year),
                 Teacher,
                 'teacher',
             )
@@ -1075,12 +1097,15 @@ class StudentSubjectAdminForm(forms.ModelForm):
         student = cleaned_data.get('student')
         subject = cleaned_data.get('subject')
         teacher = cleaned_data.get('teacher')
-        is_active = cleaned_data.get('is_active')
 
         if subject and not subject.is_specialty:
             self.add_error('subject', 'Групповой предмет нельзя назначить индивидуальному ученику.')
 
-        active_year = AcademicYear.get_active()
+        active_year = (
+            getattr(self, 'parent_academic_year', None)
+            or getattr(self.instance, 'academic_year', None)
+            or AcademicYear.get_active()
+        )
         if student and student.enrollment_for_year(active_year) is None:
             self.add_error('student', 'Ученик не зачислен в активный учебный год.')
 
@@ -1233,7 +1258,7 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         ))
         teachers = Teacher.objects.filter(is_active=True)
         if subject is not None:
-            teachers = teachers.filter(subjects__subject=subject)
+            teachers = teachers.filter(qualified_subjects=subject)
         if year is not None:
             teachers = teachers.filter(
                 academic_year_memberships__academic_year=year,
@@ -1763,10 +1788,24 @@ class StudentSubjectInline(
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
     extra = 0
+    autocomplete_fields = ('subject', 'teacher')
     fields = ('subject', 'teacher', 'is_active')
     show_change_link = True
     verbose_name = 'Индивидуальный предмет'
     verbose_name_plural = 'Индивидуальные предметы ученика'
+
+    def get_formset(self, request, obj=None, **kwargs):
+        base_form = self.form
+        selected_year = get_selected_admin_academic_year(request)
+        kwargs['form'] = type(
+            'InlineStudentSubjectAdminForm',
+            (base_form,),
+            {
+                'parent_student': obj,
+                'parent_academic_year': selected_year,
+            },
+        )
+        return super().get_formset(request, obj, **kwargs)
 
 
 class StudentSubjectForTeacherInline(SelectedAcademicYearStudentSubjectInlineMixin, ArchivedAcademicYearInlineMixin, admin.TabularInline):
@@ -1836,7 +1875,7 @@ class GradeInline(SelectedAcademicYearGradeInlineMixin, ArchivedAcademicYearInli
     model = Grade
     form = GradeAdminForm
     extra = 0
-    autocomplete_fields = ('academic_year',)
+    autocomplete_fields = ('subject', 'teacher', 'academic_year')
     fields = ('date', 'subject', 'teacher', 'value', 'academic_year', 'comment')
     ordering = ('-date',)
     show_change_link = True
@@ -1844,7 +1883,6 @@ class GradeInline(SelectedAcademicYearGradeInlineMixin, ArchivedAcademicYearInli
 
     class Media:
         js = ('journal/grade_dependencies.js',)
-
 
 class SubjectResultInline(
     SelectedAcademicYearSubjectResultInlineMixin,
@@ -1855,6 +1893,7 @@ class SubjectResultInline(
     form = SubjectResultAdminForm
     formset = SubjectResultInlineFormSet
     extra = 0
+    autocomplete_fields = ('academic_year', 'subject')
     fields = ('academic_year', 'subject', 'exam_grade', 'final_grade')
     show_change_link = True
     verbose_name = 'Итог'
@@ -1865,6 +1904,7 @@ class SubjectResultInline(
 
     def get_formset(self, request, obj=None, **kwargs):
         parent_student = obj
+        selected_year = get_selected_admin_academic_year(request)
         base_form = self.form
 
         class InlineSubjectResultAdminForm(base_form):
@@ -1880,6 +1920,7 @@ class SubjectResultInline(
                     None,
                 )
                 academic_year = self._selected_object(AcademicYear.objects.all(), academic_year_id)
+                academic_year = academic_year or selected_year
                 self.fields['subject'].queryset = self._include_selected_choice(
                     get_grade_subjects(
                         student=parent_student,
@@ -2726,6 +2767,7 @@ class StudentAssessmentGroupInline(admin.TabularInline):
     form = StudentAssessmentGroupAdminForm
     fk_name = 'student'
     extra = 0
+    autocomplete_fields = ('assessment_group',)
     fields = ('assessment_group', 'is_active')
     show_change_link = True
     verbose_name = 'Группа произведений'

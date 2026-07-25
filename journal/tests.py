@@ -24,7 +24,6 @@ from openpyxl import load_workbook
 from journal.academic_year_context import filter_temporary_credentials_for_year
 from journal.assessment_services import (
     available_assessment_items_for_student,
-    calculate_final_grade,
     set_assessment_result,
 )
 from journal.services.excel_export import build_full_export_workbook
@@ -2904,7 +2903,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertTrue(student.is_active)
 
     def test_old_teacher_can_be_reused_in_active_year_assignment(self):
-        old_year = self.create_academic_year(name='2025/2026')
+        self.create_academic_year(name='2025/2026')
         teacher = self.create_teacher()
         new_year = self.create_academic_year(name='2026/2027')
         new_group = self.create_group(academic_year=new_year)
@@ -2958,7 +2957,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
 
     def test_inactive_academic_year_is_read_only_even_when_active_year_is_selected(self):
         old_year = self.create_academic_year(name='2025/2026')
-        self.create_academic_year(name='2026/2027')
+        active_year = self.create_academic_year(name='2026/2027')
         request = self.admin_request(active_year)
         year_admin = AcademicYearAdmin(AcademicYear, django_admin.site)
 
@@ -3098,6 +3097,23 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             email='dashboard-admin@example.com',
         )
 
+    def test_student_change_card_uses_bounded_query_count(self):
+        data = self.create_base_journal()
+        self.client.force_login(self.admin_user)
+
+        with CaptureQueriesContext(connection) as captured_queries:
+            response = self.client.get(
+                reverse('admin:journal_student_change', args=[data['student'].pk]),
+                {'academic_year': data['year'].pk},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLessEqual(
+            len(captured_queries),
+            85,
+            'Карточка ученика снова выполняет слишком много SQL-запросов.',
+        )
+
     def test_archived_academic_year_records_are_read_only_in_admin(self):
         data = self.create_base_journal()
         AcademicYear.objects.create(
@@ -3180,7 +3196,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, reverse('admin_guide'))
 
     def test_admin_guide_is_visible_only_for_superuser(self):
-        staff_user = User.objects.create_user(
+        User.objects.create_user(
             username='guide_staff',
             password='Pass12345!',
             is_staff=True,
@@ -4437,7 +4453,7 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
     def test_admin_temporary_credentials_export_uses_selected_year(self):
         old_year = self.create_academic_year(name='2025/2026')
         old_application = CourseApplication.objects.create(**self.application_payload())
-        active_year = self.create_academic_year(name='2026/2027')
+        self.create_academic_year(name='2026/2027')
         active_application = CourseApplication.objects.create(
             **self.application_payload(
                 last_name='Петров',

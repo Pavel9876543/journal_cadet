@@ -93,7 +93,10 @@ def academic_year_for_object(obj):
 
 def object_is_in_archived_academic_year(obj) -> bool:
     academic_year = academic_year_for_object(obj)
-    return academic_year is not None and not academic_year_is_active(academic_year)
+    # This helper is used repeatedly while Django renders admin permissions.
+    # Related academic years are already loaded for those objects, so checking
+    # the in-memory flag avoids one identical EXISTS query per permission call.
+    return academic_year is not None and not bool(academic_year.is_active)
 
 
 class AcademicYear(models.Model):
@@ -1713,7 +1716,11 @@ class SubjectResult(models.Model):
             for field_name in ('exam_grade', 'final_grade'):
                 value = getattr(self, field_name)
                 if field_name == 'final_grade' and self.is_auto_calculated:
-                    normalized = Subject.normalize_final_grade(value)
+                    normalized = (
+                        str(value).strip()
+                        if value not in {None, ''}
+                        else None
+                    )
                 else:
                     normalized = self.subject.validate_final_grade(value)
                 setattr(self, field_name, normalized)
@@ -2929,7 +2936,6 @@ class CourseApplication(models.Model):
         if not self.pk:
             return
 
-        login = self.generated_login or ''
         student = self._get_existing_student()
         user = self._get_existing_user(get_user_model())
 
