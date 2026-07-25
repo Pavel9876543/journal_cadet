@@ -78,12 +78,12 @@ jobs:
         env:
           KEEP_TEST_DB: "0"
           TEST_PROCESSES: "2"
-        run: ./scripts/test-fast.sh -v 2
+        run: bash ./scripts/test-fast.sh -v 2
 
       - name: Slow tests
         env:
           KEEP_TEST_DB: "0"
-        run: ./scripts/test-slow.sh -v 2
+        run: bash ./scripts/test-slow.sh -v 2
 
   docker-build-check:
     runs-on: ubuntu-latest
