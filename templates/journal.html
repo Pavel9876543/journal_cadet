@@ -1515,6 +1515,7 @@
                             <div class="field">
                                 <label for="id_value">Оценка</label>
                                 {{ grade_form.value }}
+                                <small class="muted">Допустимы 1–5, знак +/− после оценки или Н.</small>
                                 {% if grade_form.value.errors %}
                                     <div class="field-errors">
                                         {% for error in grade_form.value.errors %}
@@ -1793,7 +1794,7 @@
                                                                 {% if cell %}
                                                                     <input
                                                                         type="text"
-                                                                        maxlength="64"
+                                                                        maxlength="2"
                                                                         name="grade__{{ table.subject.id }}__{{ row.student.id }}__{{ lesson_date|date:'Y-m-d' }}"
                                                                         value="{{ cell }}"
                                                                         aria-label="{{ row.student_name }}: {{ lesson_date|date:'d.m.Y' }}"
@@ -1820,7 +1821,7 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <input type="text" maxlength="64" name="exam__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.exam_grade }}" aria-label="{{ row.student_name }}: экзамен" placeholder="—">
+                                                        <input type="text" maxlength="64" name="exam__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.exam_grade }}" aria-label="{{ row.student_name }}: экзамен" placeholder="4+, 5- или Н">
                                                     {% else %}
                                                         {% if row.exam_grade %}
                                                             {{ row.exam_grade }}
@@ -1831,7 +1832,7 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <input type="text" maxlength="64" name="final__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.final_grade }}" aria-label="{{ row.student_name }}: итоговая оценка" placeholder="—">
+                                                        <input type="text" maxlength="64" name="final__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.final_grade }}" aria-label="{{ row.student_name }}: итоговая оценка" placeholder="4+, 5- или Н">
                                                     {% else %}
                                                         {% if row.final_grade %}
                                                             {{ row.final_grade }}

@@ -27,6 +27,23 @@ ARCHIVED_ACADEMIC_YEAR_ERROR = (
     'Изменения можно вносить только в активном учебном году.'
 )
 
+NUMERIC_GRADE_VALUES = tuple(
+    value
+    for number in range(1, 6)
+    for value in (str(number), f'{number}+', f'{number}-')
+)
+ABSENT_GRADE_VALUE = 'Н'
+
+
+def normalize_grade_value(value):
+    if value is None or value == '':
+        return None
+
+    normalized = str(value).strip()
+    if normalized.casefold() in {'н', 'n'}:
+        return ABSENT_GRADE_VALUE
+    return normalized
+
 
 def academic_year_name_for_dates(starts_on: date, ends_on: date) -> str:
     if starts_on.year == ends_on.year:
@@ -336,10 +353,9 @@ class Subject(models.Model):
         return self.assessment_mode == self.ASSESSMENT_MODE_ELEMENTS
 
     def get_final_grade_allowed_values(self) -> set[str]:
-        # The set is used only as UI suggestions. Storage accepts arbitrary strings.
         if self.final_grade_type == self.FINAL_GRADE_TYPE_PASS_FAIL:
             return {'Зачет', 'Незачет', 'Не аттестован'}
-        return {'1', '2', '3', '4', '4+', '4-', '5', '5+', '5-', 'Н', 'N'}
+        return {*NUMERIC_GRADE_VALUES, ABSENT_GRADE_VALUE}
 
     @staticmethod
     def normalize_final_grade(value):
@@ -354,7 +370,19 @@ class Subject(models.Model):
         if normalized_lower == 'незачет':
             return 'Незачет'
 
-        return normalized.upper()
+        return normalize_grade_value(normalized)
+
+    def validate_final_grade(self, value):
+        normalized = self.normalize_final_grade(value)
+        if normalized is None:
+            return None
+        if normalized not in self.get_final_grade_allowed_values():
+            if self.final_grade_type == self.FINAL_GRADE_TYPE_PASS_FAIL:
+                message = 'Допустимы значения: Зачет, Незачет или Не аттестован.'
+            else:
+                message = 'Допустимы оценки от 1 до 5 со знаком +/− либо Н.'
+            raise ValidationError(message)
+        return normalized
 
 
 class StudyGroup(models.Model):
@@ -1320,12 +1348,7 @@ class Grade(models.Model):
     GRADE_4 = '4'
     GRADE_5 = '5'
     GRADE_ABSENT = 'Н'
-    GRADE_CHOICES = (
-        (GRADE_1, '1'),
-        (GRADE_2, '2'),
-        (GRADE_3, '3'),
-        (GRADE_4, '4'),
-        (GRADE_5, '5'),
+    GRADE_CHOICES = tuple((value, value) for value in NUMERIC_GRADE_VALUES) + (
         (GRADE_ABSENT, 'Н'),
     )
     ALLOWED_VALUES = {choice[0] for choice in GRADE_CHOICES}
@@ -1449,16 +1472,7 @@ class Grade(models.Model):
         ).exists()
 
     def normalize_value(self):
-        if self.value is None:
-            return
-        normalized = str(self.value).strip()
-        if normalized.casefold() in {'н', 'n'}:
-            normalized = normalized.upper()
-        elif normalized.casefold().replace('ё', 'е') == 'зачет':
-            normalized = 'Зачет'
-        elif normalized.casefold().replace('ё', 'е') == 'незачет':
-            normalized = 'Незачет'
-        self.value = normalized
+        self.value = normalize_grade_value(self.value)
 
     def full_clean(self, exclude=None, validate_unique=True, validate_constraints=True):
         self.normalize_value()
@@ -1476,6 +1490,10 @@ class Grade(models.Model):
 
         if not self.value:
             raise ValidationError({'value': 'Укажите оценку.'})
+        if self.value not in self.ALLOWED_VALUES:
+            raise ValidationError({
+                'value': 'Допустимы оценки от 1 до 5 со знаком +/− либо Н.',
+            })
 
         if self.date and not self.academic_year_id:
             self.academic_year = AcademicYear.get_for_date(self.date) or AcademicYear.get_active()
@@ -1694,7 +1712,10 @@ class SubjectResult(models.Model):
         if self.subject_id:
             for field_name in ('exam_grade', 'final_grade'):
                 value = getattr(self, field_name)
-                normalized = Subject.normalize_final_grade(value)
+                if field_name == 'final_grade' and self.is_auto_calculated:
+                    normalized = Subject.normalize_final_grade(value)
+                else:
+                    normalized = self.subject.validate_final_grade(value)
                 setattr(self, field_name, normalized)
 
     def save(self, *args, allow_auto_update: bool = False, **kwargs):

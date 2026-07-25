@@ -5,6 +5,7 @@ from typing import Optional
 
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 
 from .grade_options import (
@@ -247,7 +248,7 @@ class GradeCreateForm(forms.ModelForm):
         widgets = {
             'date': html_date_input(),
             'comment': forms.TextInput(attrs={'placeholder': 'Комментарий, если нужен'}),
-            'value': forms.TextInput(attrs={'maxlength': 64, 'placeholder': '5, 5+, Зачёт, N…'}),
+            'value': forms.TextInput(attrs={'maxlength': 2, 'placeholder': 'Например: 4+, 5- или Н'}),
         }
 
     def __init__(
@@ -439,9 +440,13 @@ class GradeCreateForm(forms.ModelForm):
         return academic_year
 
     def clean_value(self):
-        value = str(self.cleaned_data['value']).strip().upper()
+        value = Grade(value=self.cleaned_data['value'])
+        value.normalize_value()
+        value = value.value
         if value not in Grade.ALLOWED_VALUES:
-            raise forms.ValidationError('Оценка должна быть 1-5 или Н.')
+            raise forms.ValidationError(
+                'Допустимы оценки от 1 до 5 со знаком +/− либо Н.',
+            )
         return value
 
     def clean(self):
@@ -537,8 +542,8 @@ class SubjectResultForm(forms.ModelForm):
         model = SubjectResult
         fields = ['student', 'subject', 'academic_year', 'exam_grade', 'final_grade']
         widgets = {
-            'exam_grade': forms.TextInput(attrs={'placeholder': 'Например: 5 или Зачет'}),
-            'final_grade': forms.TextInput(attrs={'placeholder': 'Например: 5 или Зачет'}),
+            'exam_grade': forms.TextInput(attrs={'placeholder': 'Например: 4+, 5- или Н'}),
+            'final_grade': forms.TextInput(attrs={'placeholder': 'Например: 4+, 5- или Н'}),
         }
 
     def __init__(self, *args, student: Optional[Student] = None, subject: Optional[Subject] = None, **kwargs):
@@ -593,7 +598,12 @@ class SubjectResultForm(forms.ModelForm):
                     'Итог специального режима рассчитывается автоматически и вручную не изменяется.',
                 )
             for field_name in ('exam_grade', 'final_grade'):
-                cleaned_data[field_name] = Subject.normalize_final_grade(cleaned_data.get(field_name))
+                try:
+                    cleaned_data[field_name] = subject.validate_final_grade(
+                        cleaned_data.get(field_name),
+                    )
+                except ValidationError as exc:
+                    self.add_error(field_name, exc)
 
         return cleaned_data
 

@@ -82,6 +82,7 @@ from journal.registration_utils import (
 from journal.templatetags.admin_dashboard import journal_admin_dashboard
 from journal.views import (
     _build_journal_tables,
+    _calculate_average,
     _is_duplicate_course_application_phone_error,
 )
 from journal.models import (
@@ -908,6 +909,26 @@ class GradeModelTests(JournalTestDataMixin, TestCase):
                 value='6',
             )
 
+    def test_grade_accepts_plus_and_minus_for_every_numeric_mark(self):
+        self.assertEqual(
+            Grade.ALLOWED_VALUES,
+            {
+                '1', '1+', '1-',
+                '2', '2+', '2-',
+                '3', '3+', '3-',
+                '4', '4+', '4-',
+                '5', '5+', '5-',
+                'Н',
+            },
+        )
+
+    def test_average_applies_modifiers_and_ignores_absence(self):
+        self.assertEqual(
+            _calculate_average(['4+', '5-', 'Н', 'n']),
+            '4.50',
+        )
+        self.assertEqual(_calculate_average(['Н']), '')
+
 
 class SubjectResultModelTests(JournalTestDataMixin, TestCase):
     def test_subject_result_is_unique_for_student_subject_and_year(self):
@@ -974,6 +995,28 @@ class SubjectResultModelTests(JournalTestDataMixin, TestCase):
                 exam_grade='5',
                 final_grade='5',
             )
+
+    def test_numeric_exam_and_final_accept_modifiers_and_absence(self):
+        data = self.create_base_journal()
+
+        result = SubjectResult.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            academic_year=data['year'],
+            exam_grade='4+',
+            final_grade='n',
+        )
+
+        self.assertEqual(result.exam_grade, '4+')
+        self.assertEqual(result.final_grade, 'Н')
+
+        result.exam_grade = '5-'
+        result.final_grade = '3+'
+        result.save()
+        result.refresh_from_db()
+
+        self.assertEqual(result.exam_grade, '5-')
+        self.assertEqual(result.final_grade, '3+')
 
 
 class CourseApplicationLifecycleTests(JournalTestDataMixin, TestCase):

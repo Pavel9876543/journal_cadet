@@ -586,11 +586,15 @@ def _student_subject_defaults(student: Student | None, subject: Subject | None) 
 
 
 def _calculate_average(grade_values: Iterable[str]) -> str:
-    numeric_values: list[int] = []
+    numeric_values: list[float] = []
     for value in grade_values:
         text = str(value).strip().upper()
-        if text in {'1', '2', '3', '4', '5'}:
-            numeric_values.append(int(text))
+        if text in {'Н', 'N'}:
+            continue
+        if len(text) in {1, 2} and text[0] in {'1', '2', '3', '4', '5'}:
+            modifier = {'+': 0.5, '-': -0.5, '': 0}.get(text[1:], None)
+            if modifier is not None:
+                numeric_values.append(int(text[0]) + modifier)
     if not numeric_values:
         return ''
     return f'{(sum(numeric_values) / len(numeric_values)):.2f}'
@@ -606,21 +610,15 @@ def _form_error_messages(form) -> list[str]:
 
 
 def _normalize_grade_value(value: str) -> str:
-    normalized = str(value or '').strip()
-    folded = normalized.casefold().replace('ё', 'е')
-    if folded in {'н', 'n'}:
-        return 'Н'
-    if folded == 'зачет':
-        return 'Зачет'
-    if folded == 'незачет':
-        return 'Незачет'
-    return normalized
+    normalized = Grade(value=value)
+    normalized.normalize_value()
+    return normalized.value or ''
 
 
 def _normalize_final_grade_value(subject: Subject, value: str):
     if subject.uses_element_assessment:
         raise ValidationError('Итог специального режима рассчитывается автоматически.')
-    return Subject.normalize_final_grade(value)
+    return subject.validate_final_grade(value)
 
 
 def _get_selected_object(queryset, raw_pk):
@@ -876,7 +874,11 @@ def _table_assignment_maps(
 def _final_grade_options(final_grade_type: str) -> list[str]:
     if final_grade_type == Subject.FINAL_GRADE_TYPE_PASS_FAIL:
         return ['Зачет', 'Незачет']
-    return ['1', '2', '3', '4', '5', 'Н']
+    return [
+        value
+        for number in range(1, 6)
+        for value in (str(number), f'{number}+', f'{number}-')
+    ] + ['Н']
 
 
 def _build_journal_tables(
