@@ -28,7 +28,9 @@ from .assessment_services import (
     assessment_rows_for_student,
     assessment_sections_for_teacher,
     clear_assessment_result,
+    enrollments_for_assessment_item,
     set_assessment_result,
+    students_eligible_for_assessment_group,
 )
 
 from .academic_year_context import (
@@ -271,7 +273,7 @@ async def assessment_options_api(request):
 
 def _assessment_options_api_sync(request):
     assessment_type = request.GET.get('type')
-    if assessment_type not in {'item', 'student_group', 'rule'}:
+    if assessment_type not in {'item', 'student_group', 'rule', 'result'}:
         return JsonResponse({'error': 'Не удалось определить тип связанных полей.'}, status=400)
 
     selected_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
@@ -292,6 +294,24 @@ def _assessment_options_api_sync(request):
     student = _get_selected_object(
         Student.objects.filter(is_active=True), request.GET.get('student')
     )
+    item = _get_selected_object(
+        AssessmentItem.objects.select_related(
+            'subject', 'academic_year', 'group', 'responsible_teacher'
+        ),
+        request.GET.get('item'),
+    )
+    enrollment = _get_selected_object(
+        StudentEnrollment.objects.select_related('student', 'group', 'academic_year'),
+        request.GET.get('enrollment'),
+    )
+    assessed_by = _get_selected_object(
+        Teacher.objects.all(), request.GET.get('assessed_by')
+    )
+
+    if item is not None:
+        group = item.group
+        subject = item.subject
+        academic_year = item.academic_year
 
     if group is not None:
         subject = group.subject
@@ -307,6 +327,10 @@ def _assessment_options_api_sync(request):
     groups = AssessmentGroup.objects.filter(is_active=True).select_related('subject', 'academic_year')
     teachers = Teacher.objects.filter(is_active=True)
     students = active_student_queryset()
+    items = AssessmentItem.objects.filter(is_active=True, group__is_active=True).select_related(
+        'subject', 'academic_year', 'group', 'responsible_teacher'
+    )
+    enrollments = StudentEnrollment.objects.none()
 
     if academic_year is not None:
         groups = groups.filter(academic_year=academic_year)
@@ -316,9 +340,18 @@ def _assessment_options_api_sync(request):
         ).values('teacher_id')
         teachers = teachers.filter(pk__in=teacher_ids)
         students = students.filter(enrollments__academic_year=academic_year, enrollments__is_active=True)
+        items = items.filter(academic_year=academic_year)
     if subject is not None:
         groups = groups.filter(subject=subject)
         teachers = teachers.filter(subjects__subject=subject)
+        items = items.filter(subject=subject)
+    if group is not None:
+        items = items.filter(group=group)
+    if assessment_type == 'student_group' and group is not None:
+        students = students_eligible_for_assessment_group(
+            group,
+            include_inactive=bool(student),
+        )
     if assessment_type == 'student_group' and student is not None and academic_year is not None:
         enrollment = student.enrollment_for_year(academic_year)
         subject_ids = set(
@@ -336,6 +369,24 @@ def _assessment_options_api_sync(request):
                 ).values_list('subject_id', flat=True)
             )
         groups = groups.filter(subject_id__in=subject_ids)
+    if assessment_type == 'result':
+        if item is not None:
+            enrollments = enrollments_for_assessment_item(
+                item,
+                include_inactive=bool(enrollment),
+            )
+            if item.responsible_teacher_id:
+                teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
+                if assessed_by is not None and assessed_by.pk != item.responsible_teacher_id:
+                    teachers = Teacher.objects.filter(
+                        Q(pk=item.responsible_teacher_id) | Q(pk=assessed_by.pk)
+                    )
+        elif academic_year is not None:
+            enrollments = StudentEnrollment.objects.filter(
+                academic_year=academic_year,
+                is_active=True,
+                student__is_active=True,
+            ).select_related('student', 'group', 'academic_year')
 
     groups = _include_selected_option(groups, AssessmentGroup, group).distinct().order_by(
         'subject__name', 'sort_order', 'name'
@@ -343,6 +394,12 @@ def _assessment_options_api_sync(request):
     subjects = _include_selected_option(subjects, Subject, subject).distinct().order_by('name')
     students = _include_selected_option(students, Student, student).distinct().order_by('full_name')
     teachers = teachers.distinct().order_by('full_name')
+    items = _include_selected_option(items, AssessmentItem, item).distinct().order_by(
+        'subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title'
+    )
+    enrollments = _include_selected_option(
+        enrollments, StudentEnrollment, enrollment
+    ).distinct().order_by('full_name', 'pk')
 
     defaults = {}
     if academic_year is not None:
@@ -358,6 +415,8 @@ def _assessment_options_api_sync(request):
             defaults['responsible_teacher_id'] = group.items.filter(
                 responsible_teacher__isnull=False
             ).values_list('responsible_teacher_id', flat=True).first()
+    if item is not None and item.responsible_teacher_id:
+        defaults['assessed_by_id'] = item.responsible_teacher_id
 
     return JsonResponse({
         'academic_years': [
@@ -384,6 +443,25 @@ def _assessment_options_api_sync(request):
         'students': [
             {'id': item.pk, 'label': item.full_name}
             for item in students
+        ],
+        'items': [
+            {
+                'id': assessment_item.pk,
+                'label': f'{assessment_item.title} — {assessment_item.group.name}',
+                'subject_id': assessment_item.subject_id,
+                'academic_year_id': assessment_item.academic_year_id,
+            }
+            for assessment_item in items
+        ],
+        'enrollments': [
+            {
+                'id': enrollment_item.pk,
+                'label': (
+                    f'{enrollment_item.full_name}'
+                    + (f' — {enrollment_item.group.name}' if enrollment_item.group_id else '')
+                ),
+            }
+            for enrollment_item in enrollments
         ],
         'defaults': defaults,
     })

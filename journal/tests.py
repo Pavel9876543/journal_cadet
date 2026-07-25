@@ -5411,6 +5411,78 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(grade.value, '5+')
 
+    def test_assessment_group_admin_exposes_cascading_workspaces(self):
+        superuser = User.objects.create_superuser(
+            username='assessment_admin',
+            email='assessment-admin@example.com',
+            password='AdminPass123!',
+        )
+        request = RequestFactory().get('/admin/', {'academic_year': self.year.pk})
+        request.user = superuser
+        request.session = {}
+        model_admin = django_admin.site._registry[AssessmentGroup]
+
+        inline_instances = model_admin.get_inline_instances(request, self.assessment_group)
+        inline_names = {type(inline).__name__ for inline in inline_instances}
+
+        self.assertEqual(
+            inline_names,
+            {
+                'AssessmentItemForGroupInline',
+                'StudentAssessmentGroupForGroupInline',
+                'FinalGradeRuleForGroupInline',
+            },
+        )
+
+        student_inline = next(
+            inline for inline in inline_instances
+            if type(inline).__name__ == 'StudentAssessmentGroupForGroupInline'
+        )
+        formset = student_inline.get_formset(request, self.assessment_group)(
+            instance=self.assessment_group,
+        )
+        self.assertIn(self.student, formset.forms[-1].fields['student'].queryset)
+
+    def test_assessment_item_admin_exposes_filtered_result_inline(self):
+        superuser = User.objects.create_superuser(
+            username='assessment_result_admin',
+            email='result-admin@example.com',
+            password='AdminPass123!',
+        )
+        request = RequestFactory().get('/admin/', {'academic_year': self.year.pk})
+        request.user = superuser
+        request.session = {}
+        model_admin = django_admin.site._registry[AssessmentItem]
+        inline = model_admin.get_inline_instances(request, self.item)[0]
+        formset = inline.get_formset(request, self.item)(instance=self.item)
+        blank_form = formset.forms[-1]
+
+        self.assertEqual(type(inline).__name__, 'AssessmentResultForItemInline')
+        self.assertIn(self.assignment.enrollment, blank_form.fields['enrollment'].queryset)
+        self.assertEqual(blank_form.fields['assessed_by'].initial, self.teacher.pk)
+
+    def test_assessment_result_options_api_returns_only_valid_related_values(self):
+        superuser = User.objects.create_superuser(
+            username='assessment_options_admin',
+            email='options-admin@example.com',
+            password='AdminPass123!',
+        )
+        self.client.force_login(superuser)
+
+        response = self.client.get(
+            reverse('assessment_options_api'),
+            {'type': 'result', 'item': self.item.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [row['id'] for row in payload['enrollments']],
+            [self.assignment.enrollment_id],
+        )
+        self.assertEqual([row['id'] for row in payload['teachers']], [self.teacher.pk])
+        self.assertEqual(payload['defaults']['assessed_by_id'], self.teacher.pk)
+
 
 class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
     def test_export_uses_requested_archive_year_and_exact_results_columns(self):

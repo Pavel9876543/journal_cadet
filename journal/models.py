@@ -2239,6 +2239,11 @@ class FinalGradeRule(models.Model):
 
     def clean(self) -> None:
         super().clean()
+        if self.assessment_group_id:
+            if not self.subject_id:
+                self.subject = self.assessment_group.subject
+            if not self.academic_year_id:
+                self.academic_year = self.assessment_group.academic_year
         self.grade = (self.grade or '').strip()
         if not self.grade:
             raise ValidationError({'grade': 'Введите строковое значение итоговой оценки.'})

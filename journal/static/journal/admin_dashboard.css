@@ -1683,3 +1683,59 @@ body.journal-admin-popup .breadcrumb {
         border-radius: 0;
     }
 }
+
+/* Complex change pages use Jazzmin tabs for parent data and related tables. */
+body.change-form .nav-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 100%;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--journal-admin-border);
+}
+
+body.change-form .nav-tabs .nav-item {
+    min-width: 0;
+}
+
+body.change-form .nav-tabs .nav-link {
+    min-height: 40px;
+    padding: 9px 12px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+body.change-form .tab-content,
+body.change-form .tab-pane {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+}
+
+body.change-form .inline-group .module h2,
+body.change-form .inline-group .card-header {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 767.98px) {
+    body.change-form .nav-tabs {
+        flex-wrap: nowrap;
+        padding-bottom: 4px;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    body.change-form .nav-tabs .nav-item {
+        flex: 0 0 auto;
+        max-width: min(82vw, 320px);
+    }
+
+    body.change-form .nav-tabs .nav-link {
+        width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}

@@ -33,6 +33,10 @@ from .assignment_options import (
     group_subject_queryset,
     student_subject_queryset,
 )
+from .assessment_services import (
+    enrollments_for_assessment_item,
+    students_eligible_for_assessment_group,
+)
 from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
 from .grade_options import (
     get_grade_groups,
@@ -1146,12 +1150,23 @@ class AssessmentDependencyFormMixin:
 
     def attach_dependencies(self):
         endpoint = reverse('assessment_options_api')
+        parent_attrs = {
+            'parent_student': 'data-parent-student-id',
+            'parent_assessment_group': 'data-parent-assessment-group-id',
+            'parent_assessment_item': 'data-parent-assessment-item-id',
+            'parent_academic_year': 'data-parent-academic-year-id',
+        }
         for field_name in self.dependency_fields:
             if field_name in self.fields:
                 self.fields[field_name].widget.attrs.update({
                     'data-assessment-options-url': endpoint,
                     'data-assessment-type': self.assessment_type,
                 })
+                for attribute_name, data_attribute in parent_attrs.items():
+                    parent = getattr(self, attribute_name, None)
+                    parent_id = getattr(parent, 'pk', parent)
+                    if parent_id:
+                        self.fields[field_name].widget.attrs[data_attribute] = str(parent_id)
 
 
 class AssessmentGroupAdminForm(forms.ModelForm):
@@ -1254,11 +1269,20 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
             self._selected_object(AcademicYear.objects.all(), 'academic_year')
             or getattr(self, 'parent_academic_year', None)
         )
-        group = self._selected_object(AssessmentGroup.objects.all(), 'assessment_group')
+        group = (
+            self._selected_object(AssessmentGroup.objects.all(), 'assessment_group')
+            or getattr(self, 'parent_assessment_group', None)
+        )
         if group is not None:
             year = group.academic_year
+        student_queryset = active_student_queryset()
+        if group is not None:
+            student_queryset = students_eligible_for_assessment_group(
+                group,
+                include_inactive=bool(self.instance and self.instance.pk),
+            )
         self._set_queryset('student', self._include_selected(
-            active_student_queryset(), Student, 'student'
+            student_queryset, Student, 'student'
         ))
         self._set_queryset('academic_year', self._include_selected(
             AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
@@ -1285,6 +1309,65 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
             groups.select_related('subject', 'academic_year').order_by('subject__name', 'sort_order', 'name'),
             AssessmentGroup,
             'assessment_group',
+        ))
+        self.attach_dependencies()
+
+
+class AssessmentResultAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
+    assessment_type = 'result'
+    dependency_fields = ('item', 'enrollment', 'assessed_by')
+
+    class Meta:
+        model = AssessmentResult
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        item = (
+            self._selected_object(AssessmentItem.objects.all(), 'item')
+            or getattr(self, 'parent_assessment_item', None)
+        )
+        selected_year = getattr(self, 'parent_academic_year', None)
+        items = AssessmentItem.objects.select_related(
+            'group', 'subject', 'academic_year', 'responsible_teacher'
+        )
+        if selected_year is not None:
+            items = items.filter(academic_year=selected_year)
+        if not (self.instance and self.instance.pk):
+            items = items.filter(is_active=True, group__is_active=True)
+        self._set_queryset('item', self._include_selected(
+            items.order_by('subject__name', 'group__sort_order', 'sort_order', 'title'),
+            AssessmentItem,
+            'item',
+        ))
+
+        enrollments = StudentEnrollment.objects.none()
+        teachers = Teacher.objects.none()
+        if item is not None:
+            enrollments = enrollments_for_assessment_item(
+                item,
+                include_inactive=bool(self.instance and self.instance.pk),
+            )
+            if item.responsible_teacher_id:
+                teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
+                assessed_by_id = getattr(self.instance, 'assessed_by_id', None)
+                if assessed_by_id and assessed_by_id != item.responsible_teacher_id:
+                    teachers = Teacher.objects.filter(
+                        Q(pk=item.responsible_teacher_id) | Q(pk=assessed_by_id)
+                    )
+                assessed_by_field = self.fields.get('assessed_by')
+                if assessed_by_field is not None and not assessed_by_field.initial:
+                    assessed_by_field.initial = item.responsible_teacher_id
+
+        self._set_queryset('enrollment', self._include_selected(
+            enrollments,
+            StudentEnrollment,
+            'enrollment',
+        ))
+        self._set_queryset('assessed_by', self._include_selected(
+            teachers.order_by('full_name'),
+            Teacher,
+            'assessed_by',
         ))
         self.attach_dependencies()
 
@@ -1814,6 +1897,219 @@ class SubjectResultInline(
         return super().get_formset(request, obj, **kwargs)
 
 
+class SelectedAssessmentYearInlineMixin:
+    academic_year_lookup = 'academic_year'
+
+    def get_queryset(self, request):
+        selected = get_selected_admin_academic_year(request) or AcademicYear.get_active()
+        queryset = super().get_queryset(request)
+        if selected is None:
+            return queryset.none()
+        return queryset.filter(**{self.academic_year_lookup: selected})
+
+
+class ParentContextInlineMixin:
+    """Expose a parent object to reusable ModelForms without duplicating forms."""
+
+    def get_form_context(self, request, obj=None):
+        return {}
+
+    def get_formset(self, request, obj=None, **kwargs):
+        base_form = kwargs.get('form', self.form)
+        attributes = {
+            '__module__': base_form.__module__,
+            **self.get_form_context(request, obj),
+        }
+        kwargs['form'] = type(
+            f'{self.__class__.__name__}Form',
+            (base_form,),
+            attributes,
+        )
+        return super().get_formset(request, obj, **kwargs)
+
+
+class AssessmentItemInlineFormSet(forms.models.BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        for form in self.forms:
+            if not getattr(form, 'cleaned_data', None):
+                continue
+            if not form.cleaned_data.get('DELETE'):
+                continue
+            item = form.instance
+            if item.pk and item.results.exists():
+                form.add_error(
+                    None,
+                    'Произведение с результатами нельзя удалить из вкладки. '
+                    'Деактивируйте его, чтобы сохранить историю.',
+                )
+
+
+class AssessmentItemForGroupInline(
+    ParentContextInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = AssessmentItem
+    form = AssessmentItemAdminForm
+    formset = AssessmentItemInlineFormSet
+    fk_name = 'group'
+    extra = 1
+    fields = ('title', 'responsible_teacher', 'sort_order', 'is_required', 'is_active')
+    show_change_link = True
+    verbose_name = 'Произведение / элемент'
+    verbose_name_plural = 'Произведения и ответственные дирижёры'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_assessment_group': obj,
+            'parent_academic_year': obj.academic_year if obj else None,
+        }
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'subject', 'academic_year', 'responsible_teacher'
+        )
+
+
+class StudentAssessmentGroupForGroupInline(
+    ParentContextInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = StudentAssessmentGroup
+    form = StudentAssessmentGroupAdminForm
+    fk_name = 'assessment_group'
+    extra = 1
+    fields = ('student', 'is_active')
+    show_change_link = True
+    verbose_name = 'Назначение ученику'
+    verbose_name_plural = 'Ученики группы произведений'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_assessment_group': obj,
+            'parent_academic_year': obj.academic_year if obj else None,
+        }
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'student', 'academic_year', 'enrollment', 'enrollment__group'
+        )
+
+
+class FinalGradeRuleForGroupInline(
+    ParentContextInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = FinalGradeRule
+    form = FinalGradeRuleAdminForm
+    fk_name = 'assessment_group'
+    extra = 1
+    fields = ('rule_type', 'passed_count', 'condition_value', 'grade', 'priority', 'is_active')
+    show_change_link = True
+    verbose_name = 'Правило итоговой оценки'
+    verbose_name_plural = 'Правила итоговой оценки этой группы'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_subject': obj.subject if obj else None,
+            'parent_academic_year': obj.academic_year if obj else None,
+        }
+
+
+class AssessmentResultForItemInline(
+    ParentContextInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = AssessmentResult
+    form = AssessmentResultAdminForm
+    fk_name = 'item'
+    extra = 1
+    fields = ('enrollment', 'status', 'assessed_by', 'assessed_at', 'comment')
+    show_change_link = True
+    verbose_name = 'Результат ученика'
+    verbose_name_plural = 'Результаты учеников по произведению'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_assessment_item': obj,
+            'parent_academic_year': obj.academic_year if obj else None,
+        }
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'enrollment', 'enrollment__student', 'enrollment__group', 'assessed_by'
+        )
+
+
+class AssessmentGroupForSubjectInline(
+    SelectedAssessmentYearInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = AssessmentGroup
+    form = AssessmentGroupAdminForm
+    fk_name = 'subject'
+    extra = 1
+    fields = ('name', 'academic_year', 'sort_order', 'is_active')
+    show_change_link = True
+    verbose_name = 'Группа произведений'
+    verbose_name_plural = 'Группы произведений выбранного учебного года'
+
+
+class FinalGradeRuleForSubjectInline(
+    ParentContextInlineMixin,
+    SelectedAssessmentYearInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = FinalGradeRule
+    form = FinalGradeRuleAdminForm
+    fk_name = 'subject'
+    extra = 1
+    fields = (
+        'academic_year', 'assessment_group', 'rule_type', 'passed_count',
+        'condition_value', 'grade', 'priority', 'is_active',
+    )
+    show_change_link = True
+    verbose_name = 'Правило итоговой оценки'
+    verbose_name_plural = 'Правила автоматической итоговой оценки'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_subject': obj,
+            'parent_academic_year': get_selected_admin_academic_year(request) or AcademicYear.get_active(),
+        }
+
+
+class AssessmentItemForTeacherInline(
+    ParentContextInlineMixin,
+    SelectedAssessmentYearInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = AssessmentItem
+    form = AssessmentItemAdminForm
+    fk_name = 'responsible_teacher'
+    academic_year_lookup = 'academic_year'
+    extra = 1
+    fields = ('title', 'group', 'subject', 'academic_year', 'sort_order', 'is_required', 'is_active')
+    show_change_link = True
+    verbose_name = 'Произведение под руководством преподавателя'
+    verbose_name_plural = 'Произведения, где преподаватель назначен дирижёром'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_academic_year': get_selected_admin_academic_year(request) or AcademicYear.get_active(),
+        }
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('group', 'subject', 'academic_year')
+
+
 # -----------------------------------------------------------------------------
 # Справочники
 # -----------------------------------------------------------------------------
@@ -1934,6 +2230,8 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     inlines = (
         GroupSubjectForSubjectInline,
         StudentSubjectForSubjectInline,
+        AssessmentGroupForSubjectInline,
+        FinalGradeRuleForSubjectInline,
     )
     ordering = ('name',)
     list_per_page = 50
@@ -1951,9 +2249,15 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     def get_inlines(self, request, obj=None):
         if obj is None:
             return ()
+        assessment_inlines = ()
+        if obj.uses_element_assessment:
+            assessment_inlines = (
+                AssessmentGroupForSubjectInline,
+                FinalGradeRuleForSubjectInline,
+            )
         if obj.is_specialty:
-            return (StudentSubjectForSubjectInline,)
-        return (GroupSubjectForSubjectInline,)
+            return (StudentSubjectForSubjectInline, *assessment_inlines)
+        return (GroupSubjectForSubjectInline, *assessment_inlines)
 
     def get_queryset(self, request):
         academic_year = self.selected_academic_year(request)
@@ -2150,7 +2454,11 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'individual_subjects__student__full_name',
     )
     autocomplete_fields = ('user',)
-    inlines = (GroupSubjectForTeacherInline, StudentSubjectForTeacherInline)
+    inlines = (
+        GroupSubjectForTeacherInline,
+        StudentSubjectForTeacherInline,
+        AssessmentItemForTeacherInline,
+    )
     ordering = ('full_name',)
     list_select_related = ('user',)
     list_per_page = 30
@@ -2381,7 +2689,12 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'individual_subjects__subject_name_snapshot',
     )
     autocomplete_fields = ('user', 'group', 'instrument')
-    inlines = (StudentSubjectInline, StudentAssessmentGroupInline, SubjectResultInline)
+    inlines = (
+        StudentSubjectInline,
+        StudentAssessmentGroupInline,
+        SubjectResultInline,
+        GradeInline,
+    )
     ordering = ('full_name',)
     list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
     list_per_page = 40
@@ -3393,6 +3706,11 @@ class ProtectedAssessmentDeleteAdminMixin:
 @admin.register(AssessmentGroup)
 class AssessmentGroupAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     form = AssessmentGroupAdminForm
+    inlines = (
+        AssessmentItemForGroupInline,
+        StudentAssessmentGroupForGroupInline,
+        FinalGradeRuleForGroupInline,
+    )
     changelist_description = (
         'Отдельные группы произведений. Они не являются учебными группами учеников и '
         'используются только для распределения произведений в специальном режиме предмета.'
@@ -3448,6 +3766,7 @@ class AssessmentGroupAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessme
 @admin.register(AssessmentItem)
 class AssessmentItemAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     form = AssessmentItemAdminForm
+    inlines = (AssessmentResultForItemInline,)
     changelist_description = (
         'Каждое произведение относится ровно к одной группе и имеет не более одного '
         'текущего ответственного преподавателя-дирижёра.'
@@ -3510,6 +3829,7 @@ class StudentAssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdmin
 @admin.register(AssessmentResult)
 class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     academic_year_lookup = 'item__academic_year'
+    form = AssessmentResultAdminForm
     changelist_description = (
         'История результатов по каждому произведению. Изменения преподавателя в кабинете '
         'дополнительно проверяются сервером по текущему назначению дирижёра.'
@@ -3526,6 +3846,17 @@ class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescri
     )
     readonly_fields = ('created_at', 'updated_at')
     fields = ('enrollment', 'item', 'status', 'assessed_by', 'assessed_at', 'comment', 'created_at', 'updated_at')
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        base_form = super().get_form(request, obj, change=change, **kwargs)
+        return type(
+            'YearScopedAssessmentResultAdminForm',
+            (base_form,),
+            {
+                '__module__': base_form.__module__,
+                'parent_academic_year': self.selected_year(request),
+            },
+        )
 
     @admin.display(description='Ученик', ordering='enrollment__full_name')
     def student_display(self, obj):

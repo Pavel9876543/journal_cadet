@@ -13,6 +13,10 @@
         rule: {
             fields: ['subject', 'academic_year', 'assessment_group'],
             payload: {subject: 'subjects', academic_year: 'academic_years', assessment_group: 'groups'}
+        },
+        result: {
+            fields: ['item', 'enrollment', 'assessed_by'],
+            payload: {item: 'items', enrollment: 'enrollments', assessed_by: 'teachers'}
         }
     };
 
@@ -109,6 +113,9 @@
             if (source.dataset.parentAssessmentGroupId && !url.searchParams.has('assessment_group')) {
                 url.searchParams.set('assessment_group', source.dataset.parentAssessmentGroupId);
             }
+            if (source.dataset.parentAssessmentItemId && !url.searchParams.has('item')) {
+                url.searchParams.set('item', source.dataset.parentAssessmentItemId);
+            }
             if (source.dataset.parentAcademicYearId && !url.searchParams.has('academic_year')) {
                 url.searchParams.set('academic_year', source.dataset.parentAcademicYearId);
             }
@@ -202,6 +209,7 @@
             changedAny = setValue('academic_year', defaults.academic_year_id, false) || changedAny;
             changedAny = setValue('subject', defaults.subject_id, changed === 'group' || changed === 'assessment_group') || changedAny;
             changedAny = setValue('responsible_teacher', defaults.responsible_teacher_id, false) || changedAny;
+            changedAny = setValue('assessed_by', defaults.assessed_by_id, false) || changedAny;
             return changedAny;
         }
 

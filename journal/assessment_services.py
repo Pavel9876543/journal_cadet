@@ -167,6 +167,54 @@ def students_for_assessment_item(item: AssessmentItem, *, include_inactive: bool
     ).order_by('full_name')
 
 
+def enrollments_eligible_for_assessment_group(
+    group: AssessmentGroup,
+    *,
+    include_inactive: bool = False,
+):
+    """Return year-scoped enrollments that may be assigned to a work group.
+
+    This is the same eligibility rule enforced by ``StudentAssessmentGroup``:
+    the student must be enrolled in the group's academic year and must already
+    have the corresponding subject through either their study group or an
+    individual assignment.
+    """
+    queryset = (
+        StudentEnrollment.objects
+        .filter(academic_year=group.academic_year)
+        .filter(
+            Q(
+                group__group_subjects__subject=group.subject,
+                group__group_subjects__is_active=True,
+            )
+            | Q(
+                student__individual_subjects__subject=group.subject,
+                student__individual_subjects__academic_year=group.academic_year,
+                student__individual_subjects__is_active=True,
+            )
+        )
+        .select_related('student', 'group', 'academic_year')
+        .distinct()
+        .order_by('full_name', 'pk')
+    )
+    if not include_inactive:
+        queryset = queryset.filter(is_active=True, student__is_active=True)
+    return queryset
+
+
+def students_eligible_for_assessment_group(
+    group: AssessmentGroup,
+    *,
+    include_inactive: bool = False,
+):
+    return Student.objects.filter(
+        pk__in=enrollments_eligible_for_assessment_group(
+            group,
+            include_inactive=include_inactive,
+        ).values('student_id'),
+    ).order_by('full_name', 'pk')
+
+
 def teacher_can_edit_item(teacher: Teacher, item: AssessmentItem) -> bool:
     return bool(
         item.responsible_teacher_id == teacher.pk
