@@ -1391,10 +1391,20 @@ class Command(BaseCommand):
 
         for application_data in application_specs:
             application_data = dict(application_data)
-            instrument_name = application_data.pop('instrument').strip()
-            instrument_reference = Instrument.objects.filter(name=instrument_name).first()
-            application_data['instrument_reference'] = instrument_reference
-            application_data['custom_instrument'] = '' if instrument_reference else instrument_name
+
+            instrument_name = (application_data.get('instrument') or '').strip()
+            instrument_reference = (
+                Instrument.objects
+                .filter(name=instrument_name)
+                .first()
+            )
+
+            application_data.update(
+                instrument=instrument_name,
+                instrument_reference=instrument_reference,
+                custom_instrument='' if instrument_reference else instrument_name,
+            )
+
             application = CourseApplication.objects.create(**application_data)
             application.refresh_from_db()
 

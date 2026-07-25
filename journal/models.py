@@ -2629,56 +2629,103 @@ class CourseApplication(models.Model):
     def has_journal_student(self) -> bool:
         return bool(self.student_id and self.user_id)
 
+    def sync_instrument_display(self) -> None:
+        """
+        Синхронизирует старое строковое поле instrument
+        со структурированными полями инструмента.
+        """
+        self.custom_instrument = (self.custom_instrument or '').strip()
+
+        if self.instrument_reference_id:
+            self.instrument = self.instrument_reference.name.strip()
+        else:
+            self.instrument = self.custom_instrument
+
     def clean(self) -> None:
         super().clean()
 
-        for field_name in ('last_name', 'first_name', 'middle_name', 'city_church', 'instrument'):
+        for field_name in (
+                'last_name',
+                'first_name',
+                'middle_name',
+                'city_church',
+        ):
             value = getattr(self, field_name, '')
-            if value:
+
+            if isinstance(value, str):
                 setattr(self, field_name, value.strip())
+
         self.custom_instrument = (self.custom_instrument or '').strip()
-        if bool(self.instrument_reference_id) == bool(self.custom_instrument):
+
+        has_reference = bool(self.instrument_reference_id)
+        has_custom = bool(self.custom_instrument)
+
+        # Должен быть выбран ровно один вариант:
+        # справочный инструмент или собственное название.
+        if has_reference == has_custom:
+            if has_reference:
+                message = (
+                    'Нельзя одновременно выбрать инструмент из справочника '
+                    'и указать собственный инструмент.'
+                )
+            else:
+                message = (
+                    'Выберите инструмент из справочника '
+                    'или укажите другой инструмент.'
+                )
+
             raise ValidationError({
-                'instrument_reference': 'Выберите инструмент из справочника или вариант «Другой инструмент».',
-                'custom_instrument': 'При выборе другого инструмента укажите его название.',
+                'instrument_reference': message,
+                'custom_instrument': message,
             })
-        self.instrument = (
-            self.instrument_reference.name
-            if self.instrument_reference_id
-            else self.custom_instrument
-        )
+
+        self.sync_instrument_display()
 
         if self.student_phone:
-            self.student_phone = normalize_phone_number(self.student_phone)
+            self.student_phone = normalize_phone_number(
+                self.student_phone,
+            )
 
         if self.academic_year_id is None:
             self.academic_year = AcademicYear.get_active()
 
         if self.academic_year_id is None:
-            raise ValidationError('Сначала создайте активный учебный год.')
+            raise ValidationError(
+                'Сначала создайте активный учебный год.',
+            )
 
         if not academic_year_is_active(self.academic_year):
-            raise ValidationError(ARCHIVED_ACADEMIC_YEAR_ERROR)
+            raise ValidationError(
+                ARCHIVED_ACADEMIC_YEAR_ERROR,
+            )
 
         if self.student_phone:
             duplicate_qs = CourseApplication.objects.filter(
                 student_phone=self.student_phone,
                 academic_year=self.academic_year,
             )
+
             if self.pk:
                 duplicate_qs = duplicate_qs.exclude(pk=self.pk)
+
             if duplicate_qs.exists():
                 raise ValidationError({
                     'student_phone': ValidationError(
-                        'Ученик с таким номером телефона уже зарегистрирован.',
+                        'Ученик с таким номером телефона '
+                        'уже зарегистрирован.',
                         code='duplicate_phone_for_year',
                     ),
                 })
 
         if self.parent_contacts:
-            self.parent_contacts = normalize_parent_contacts(self.parent_contacts)
+            self.parent_contacts = normalize_parent_contacts(
+                self.parent_contacts,
+            )
 
     def save(self, *args, **kwargs):
+        # Проверка полей внутри full_clean выполняется раньше clean(),
+        # поэтому обязательное поле instrument заполняется заранее.
+        self.sync_instrument_display()
         self.full_clean()
 
         with transaction.atomic():

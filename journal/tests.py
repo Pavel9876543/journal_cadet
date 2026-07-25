@@ -5063,6 +5063,29 @@ class SeedDataCommandTests(TestCase):
             ).filter(assessment_group_count__gte=2).exists(),
         )
 
+    def test_seed_data_creates_course_applications_with_instruments(self):
+        applications = CourseApplication.objects.select_related(
+            'instrument_reference',
+        )
+
+        self.assertTrue(applications.exists())
+
+        for application in applications:
+            self.assertTrue(application.instrument)
+
+            if application.instrument_reference_id:
+                self.assertEqual(
+                    application.instrument,
+                    application.instrument_reference.name,
+                )
+                self.assertEqual(application.custom_instrument, '')
+            else:
+                self.assertEqual(
+                    application.instrument,
+                    application.custom_instrument,
+                )
+                self.assertTrue(application.custom_instrument)
+
     def test_seed_data_assigns_user_roles(self):
         self.assertTrue(Group.objects.filter(name='Администратор').exists())
         self.assertTrue(Group.objects.filter(name='Преподаватель').exists())
