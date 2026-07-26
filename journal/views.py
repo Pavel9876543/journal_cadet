@@ -34,6 +34,11 @@ from .assessment_services import (
     set_assessment_result,
     students_eligible_for_assessment_group,
 )
+from .assessment_filtering import (
+    assessment_filter_querysets,
+    resolve_assessment_filter_selection,
+    serialize_assessment_filter_options,
+)
 
 from .academic_year_context import (
     academic_year_ids_for_user,
@@ -268,6 +273,60 @@ def _grade_options_api_sync(request):
 @require_GET
 async def assessment_options_api(request):
     return await _run_db_sync(_assessment_options_api_sync, request)
+
+
+@login_required
+@require_GET
+async def assessment_filter_options_api(request):
+    return await _run_db_sync(_assessment_filter_options_api_sync, request)
+
+
+def _assessment_filter_options_api_sync(request):
+    fixed_teacher = getattr(request.user, 'teacher_profile', None)
+    if request.user.is_superuser:
+        academic_years = AcademicYear.objects.all()
+    elif fixed_teacher is not None:
+        academic_years = AcademicYear.objects.filter(
+            pk__in=academic_year_ids_for_user(request.user),
+        )
+    else:
+        return JsonResponse(
+            {'error': 'Фильтры сдачи произведений недоступны для этой учетной записи.'},
+            status=403,
+        )
+
+    academic_year = _get_selected_object(
+        academic_years,
+        request.GET.get('academic_year'),
+    )
+    if academic_year is None:
+        active_year = AcademicYear.get_active()
+        academic_year = (
+            academic_years.filter(pk=getattr(active_year, 'pk', None)).first()
+            or academic_years.order_by('-starts_on', '-pk').first()
+        )
+    if academic_year is None:
+        return JsonResponse({
+            'academic_years': [],
+            'teachers': [],
+            'subjects': [],
+            'study_groups': [],
+            'assessment_groups': [],
+            'items': [],
+            'students': [],
+        })
+
+    selection = resolve_assessment_filter_selection(
+        request.GET,
+        academic_year=academic_year,
+        fixed_teacher=fixed_teacher,
+    )
+    options = assessment_filter_querysets(
+        selection,
+        allowed_academic_years=academic_years,
+        fixed_teacher=fixed_teacher,
+    )
+    return JsonResponse(serialize_assessment_filter_options(options))
 
 
 def _assessment_options_api_sync(request):
@@ -713,6 +772,110 @@ def _redirect_journal(*, group=None, subject=None, academic_year=None):
     if query:
         return redirect(f'{url}?{urlencode(query)}')
     return redirect(url)
+
+
+def _redirect_current_journal(request):
+    query = request.GET.urlencode()
+    url = reverse('journal')
+    return redirect(f'{url}?{query}' if query else url)
+
+
+def _assessment_workspace_context(
+    request,
+    *,
+    academic_year: AcademicYear | None,
+    academic_years,
+    fixed_teacher: Teacher | None = None,
+):
+    if academic_year is None:
+        return {
+            'assessment_filter_enabled': True,
+            'assessment_sections': [],
+            'assessment_summary': assessment_summary_for_teacher([]),
+        }
+
+    selection = resolve_assessment_filter_selection(
+        request.GET,
+        academic_year=academic_year,
+        fixed_teacher=fixed_teacher,
+    )
+    options = assessment_filter_querysets(
+        selection,
+        allowed_academic_years=academic_years,
+        fixed_teacher=fixed_teacher,
+    )
+    sections = assessment_sections_for_teacher(
+        selection.teacher,
+        academic_year,
+        subject=selection.subject,
+        study_group=selection.study_group,
+        assessment_group=selection.assessment_group,
+        item=selection.item,
+        student=selection.student,
+    )
+    return {
+        'assessment_filter_enabled': True,
+        'assessment_filter_options': options,
+        'assessment_selection': selection,
+        'assessment_sections': sections,
+        'assessment_summary': assessment_summary_for_teacher(sections),
+        'assessment_fixed_teacher': fixed_teacher,
+    }
+
+
+def _handle_assessment_result_post(
+    request,
+    *,
+    can_edit: bool,
+    fixed_teacher: Teacher | None = None,
+):
+    if request.method != 'POST' or request.POST.get('action') != 'assessment_result':
+        return None
+    if not can_edit:
+        messages.error(request, 'Результаты выбранного учебного года доступны только для просмотра.')
+        return _redirect_current_journal(request)
+
+    item = _get_selected_object(
+        AssessmentItem.objects.select_related(
+            'group',
+            'subject',
+            'academic_year',
+            'responsible_teacher',
+        ),
+        request.POST.get('item_id'),
+    )
+    student = _get_selected_object(
+        Student.objects.filter(is_active=True),
+        request.POST.get('student_id'),
+    )
+    status = (request.POST.get('status') or '').strip()
+    comment = (request.POST.get('comment') or '').strip()
+    try:
+        if item is None or student is None:
+            raise ValidationError('Не удалось определить произведение или ученика.')
+        acting_teacher = fixed_teacher or item.responsible_teacher
+        if acting_teacher is None:
+            raise ValidationError('У произведения не назначен ответственный преподаватель.')
+        if status == 'clear':
+            clear_assessment_result(
+                item=item,
+                student=student,
+                acting_teacher=acting_teacher,
+            )
+            messages.success(request, 'Результат очищен. Итоговая оценка пересчитана.')
+        else:
+            set_assessment_result(
+                item=item,
+                student=student,
+                acting_teacher=acting_teacher,
+                status=status,
+                comment=comment,
+            )
+            messages.success(request, 'Результат сохранён. Итоговая оценка пересчитана.')
+    except (PermissionDenied, ValidationError) as exc:
+        error_messages = getattr(exc, 'messages', None) or [str(exc)]
+        messages.error(request, '; '.join(error_messages))
+    return _redirect_current_journal(request)
 
 
 def _student_subject_allowed_for_teacher(
@@ -1413,6 +1576,18 @@ def _journal_for_admin(
         selected_academic_year=selected_academic_year,
     )
 
+    assessment_context = _assessment_workspace_context(
+        request,
+        academic_year=selected_academic_year,
+        academic_years=academic_years,
+    )
+    assessment_post_response = _handle_assessment_result_post(
+        request,
+        can_edit=can_edit_journal,
+    )
+    if assessment_post_response is not None:
+        return assessment_post_response
+
     archived_post_response = _reject_archived_academic_year_post(
         request,
         selected_academic_year,
@@ -1451,23 +1626,25 @@ def _journal_for_admin(
     if isinstance(grade_form, HttpResponse):
         return grade_form
 
+    context = _journal_context(
+        role_mode=role_mode,
+        groups=groups,
+        subjects=subjects,
+        students=students,
+        journal_tables=journal_tables,
+        selected_group=selected_group,
+        selected_group_id=selected_group_id,
+        selected_subject_id=selected_subject_id,
+        academic_years=academic_years,
+        selected_academic_year=selected_academic_year,
+        grade_form=grade_form,
+        can_edit_journal=can_edit_journal,
+    )
+    context.update(assessment_context)
     return render(
         request,
         'journal.html',
-        _journal_context(
-            role_mode=role_mode,
-            groups=groups,
-            subjects=subjects,
-            students=students,
-            journal_tables=journal_tables,
-            selected_group=selected_group,
-            selected_group_id=selected_group_id,
-            selected_subject_id=selected_subject_id,
-            academic_years=academic_years,
-            selected_academic_year=selected_academic_year,
-            grade_form=grade_form,
-            can_edit_journal=can_edit_journal,
-        ),
+        context,
     )
 
 
@@ -1558,48 +1735,19 @@ def _journal_for_teacher(
         teacher=teacher,
     )
 
-    assessment_sections = assessment_sections_for_teacher(
-        teacher,
-        selected_academic_year,
-    ) if selected_academic_year is not None else []
-
-    if request.method == 'POST' and request.POST.get('action') == 'assessment_result':
-        if not can_edit_journal:
-            messages.error(request, 'Результаты архивного учебного года доступны только для просмотра.')
-            return _redirect_journal(academic_year=selected_academic_year)
-        item = _get_selected_object(
-            AssessmentItem.objects.select_related('group', 'subject', 'academic_year', 'responsible_teacher'),
-            request.POST.get('item_id'),
-        )
-        student = _get_selected_object(
-            Student.objects.filter(is_active=True),
-            request.POST.get('student_id'),
-        )
-        status = (request.POST.get('status') or '').strip()
-        comment = (request.POST.get('comment') or '').strip()
-        try:
-            if item is None or student is None:
-                raise ValidationError('Не удалось определить произведение или ученика.')
-            if status == 'clear':
-                clear_assessment_result(item=item, student=student, acting_teacher=teacher)
-                messages.success(request, 'Результат очищен. Итоговая оценка пересчитана.')
-            else:
-                set_assessment_result(
-                    item=item,
-                    student=student,
-                    acting_teacher=teacher,
-                    status=status,
-                    comment=comment,
-                )
-                messages.success(request, 'Результат сохранён. Итоговая оценка пересчитана.')
-        except (PermissionDenied, ValidationError) as exc:
-            error_messages = getattr(exc, 'messages', None) or [str(exc)]
-            messages.error(request, '; '.join(error_messages))
-        return _redirect_journal(
-            group=selected_group,
-            subject=selected_subject,
-            academic_year=selected_academic_year,
-        )
+    assessment_context = _assessment_workspace_context(
+        request,
+        academic_year=selected_academic_year,
+        academic_years=academic_years,
+        fixed_teacher=teacher,
+    )
+    assessment_post_response = _handle_assessment_result_post(
+        request,
+        can_edit=can_edit_journal,
+        fixed_teacher=teacher,
+    )
+    if assessment_post_response is not None:
+        return assessment_post_response
 
     archived_post_response = _reject_archived_academic_year_post(
         request,
@@ -1666,8 +1814,7 @@ def _journal_for_teacher(
         grade_form=grade_form,
         can_edit_journal=can_edit_journal,
     )
-    context['assessment_sections'] = assessment_sections
-    context['assessment_summary'] = assessment_summary_for_teacher(assessment_sections)
+    context.update(assessment_context)
     return render(request, 'journal.html', context)
 
 

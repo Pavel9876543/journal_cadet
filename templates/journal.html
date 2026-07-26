@@ -1589,12 +1589,99 @@
             {% endif %}
 
 
-            {% if assessment_sections %}
+            {% if assessment_filter_enabled %}
                 <section class="assessment-stack" aria-label="Сдача произведений">
                     <div class="workspace-title">
                         <h2>Сдача произведений</h2>
-                        <p>Вы видите только произведения, где назначены ответственным дирижёром.</p>
+                        <p>Фильтры показывают только совместимые назначения и произведения.</p>
                     </div>
+                    <form
+                        method="get"
+                        class="filter-form assessment-filter-form"
+                        data-assessment-filter-url="{% url 'assessment_filter_options_api' %}"
+                        data-fixed-teacher="{% if assessment_fixed_teacher %}{{ assessment_fixed_teacher.id }}{% endif %}"
+                    >
+                        {% if selected_group_id %}<input type="hidden" name="group" value="{{ selected_group_id }}">{% endif %}
+                        {% if selected_subject_id %}<input type="hidden" name="subject" value="{{ selected_subject_id }}">{% endif %}
+                        <div class="field">
+                            <label for="assessment_academic_year">Учебный год</label>
+                            <select id="assessment_academic_year" name="academic_year">
+                                {% for academic_year in assessment_filter_options.academic_years %}
+                                    <option value="{{ academic_year.id }}" {% if assessment_selection.academic_year_id == academic_year.id %}selected{% endif %}>{{ academic_year.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="assessment_teacher">Преподаватель</label>
+                            {% if assessment_fixed_teacher %}
+                                <input id="assessment_teacher" type="text" value="{{ assessment_fixed_teacher.full_name }}" readonly>
+                                <input type="hidden" name="assessment_teacher" value="{{ assessment_fixed_teacher.id }}">
+                            {% else %}
+                                <select id="assessment_teacher" name="assessment_teacher">
+                                    <option value="">Все преподаватели</option>
+                                    {% for teacher in assessment_filter_options.teachers %}
+                                        <option value="{{ teacher.id }}" {% if assessment_selection.teacher_id == teacher.id %}selected{% endif %}>{{ teacher.full_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            {% endif %}
+                        </div>
+                        <div class="field">
+                            <label for="assessment_subject">Предмет</label>
+                            <select id="assessment_subject" name="assessment_subject">
+                                <option value="">Все предметы</option>
+                                {% for subject in assessment_filter_options.subjects %}
+                                    <option value="{{ subject.id }}" {% if assessment_selection.subject_id == subject.id %}selected{% endif %}>{{ subject.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="assessment_study_group">Учебная группа</label>
+                            <select id="assessment_study_group" name="assessment_study_group">
+                                <option value="">Все группы</option>
+                                {% for group in assessment_filter_options.study_groups %}
+                                    <option value="{{ group.id }}" {% if assessment_selection.study_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="assessment_group">Группа произведений</label>
+                            <select id="assessment_group" name="assessment_group">
+                                <option value="">Все группы произведений</option>
+                                {% for group in assessment_filter_options.assessment_groups %}
+                                    <option value="{{ group.id }}" {% if assessment_selection.assessment_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="assessment_item">Произведение</label>
+                            <select id="assessment_item" name="assessment_item">
+                                <option value="">Все произведения</option>
+                                {% for item in assessment_filter_options.items %}
+                                    <option value="{{ item.id }}" {% if assessment_selection.item_id == item.id %}selected{% endif %}>{{ item.title }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="assessment_student">Ученик</label>
+                            <select id="assessment_student" name="assessment_student">
+                                <option value="">Все ученики</option>
+                                {% for student in assessment_filter_options.students %}
+                                    <option value="{{ student.id }}" {% if assessment_selection.student_id == student.id %}selected{% endif %}>{{ student.full_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-action">
+                            <button type="submit">
+                                <svg class="icon" aria-hidden="true"><use href="#icon-filter"></use></svg>
+                                <span>Применить</span>
+                            </button>
+                            <a class="button button-secondary" href="{% url 'journal' %}?academic_year={{ selected_academic_year_id }}">
+                                <svg class="icon" aria-hidden="true"><use href="#icon-reset"></use></svg>
+                                <span>Сбросить</span>
+                            </a>
+                        </div>
+                        <div class="dependency-status" data-assessment-filter-status role="status" aria-live="polite"></div>
+                    </form>
                     <div class="assessment-summary-grid" aria-label="Сводка по сдаче произведений">
                         <div class="assessment-summary-card"><strong>{{ assessment_summary.item_count }}</strong><span>произведений</span></div>
                         <div class="assessment-summary-card"><strong>{{ assessment_summary.student_count }}</strong><span>учеников</span></div>
@@ -1670,6 +1757,8 @@
                                 </table>
                             </div>
                         </details>
+                    {% empty %}
+                        <div class="empty-state">По выбранным фильтрам произведения и ученики не найдены.</div>
                     {% endfor %}
                 </section>
             {% endif %}
@@ -1918,6 +2007,7 @@
 </div>
 
 <script src="{% static 'journal/grade_dependencies.js' %}"></script>
+<script src="{% static 'journal/assessment_filters.js' %}"></script>
 <script>
     (function () {
         const key = 'journal-scroll-y';

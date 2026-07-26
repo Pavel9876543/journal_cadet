@@ -459,8 +459,39 @@ def assessment_rows_for_student(student: Student, academic_year: AcademicYear):
     ]
 
 
-def assessment_sections_for_teacher(teacher: Teacher, academic_year: AcademicYear):
-    items = list(assessment_items_for_teacher(teacher, academic_year))
+def assessment_sections_for_teacher(
+    teacher: Teacher | None,
+    academic_year: AcademicYear,
+    *,
+    subject: Subject | None = None,
+    study_group=None,
+    assessment_group: AssessmentGroup | None = None,
+    item: AssessmentItem | None = None,
+    student: Student | None = None,
+):
+    if teacher is None:
+        items_queryset = (
+            AssessmentItem.objects
+            .filter(
+                academic_year=academic_year,
+                subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+                responsible_teacher__isnull=False,
+            )
+            .select_related('subject', 'academic_year', 'group', 'responsible_teacher')
+            .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
+        )
+        if academic_year.is_active:
+            items_queryset = items_queryset.filter(is_active=True, group__is_active=True)
+    else:
+        items_queryset = assessment_items_for_teacher(teacher, academic_year)
+    if subject is not None:
+        items_queryset = items_queryset.filter(subject=subject)
+    if assessment_group is not None:
+        items_queryset = items_queryset.filter(group=assessment_group)
+    if item is not None:
+        items_queryset = items_queryset.filter(pk=item.pk)
+
+    items = list(items_queryset)
     if not items:
         return []
 
@@ -491,6 +522,18 @@ def assessment_sections_for_teacher(teacher: Teacher, academic_year: AcademicYea
         .select_related('student', 'group', 'academic_year')
         .order_by('full_name', 'pk')
     )
+    if study_group is not None:
+        enrollments = [
+            enrollment
+            for enrollment in enrollments
+            if enrollment.group_id == study_group.pk
+        ]
+    if student is not None:
+        enrollments = [
+            enrollment
+            for enrollment in enrollments
+            if enrollment.student_id == student.pk
+        ]
     enrollment_by_student = {enrollment.student_id: enrollment for enrollment in enrollments}
     enrollment_ids = [enrollment.pk for enrollment in enrollments]
     subject_ids = {item.subject_id for item in items}
@@ -556,14 +599,16 @@ def assessment_sections_for_teacher(teacher: Teacher, academic_year: AcademicYea
             1 for row in rows
             if row['result'] and row['result'].status == AssessmentResult.STATUS_FAILED
         )
-        sections.append({
+        section = {
             'item': item,
             'rows': rows,
             'student_count': len(rows),
             'passed_count': passed_count,
             'failed_count': failed_count,
             'not_evaluated_count': len(rows) - passed_count - failed_count,
-        })
+        }
+        if rows or (study_group is None and student is None):
+            sections.append(section)
     return sections
 
 
@@ -637,4 +682,3 @@ def assessment_subject_sections_for_student(
         )
         sections.append(section)
     return sections
-

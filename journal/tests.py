@@ -5903,6 +5903,150 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             [row['id'] for row in payload['teachers']],
         )
 
+    def test_teacher_assessment_filters_include_group_and_individual_subjects(self):
+        individual_subject = Subject.objects.create(
+            name='Индивидуальная сдача партий',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            is_specialty=True,
+        )
+        StudentSubject.objects.create(
+            student=self.student,
+            subject=individual_subject,
+            teacher=self.teacher,
+        )
+        individual_group = AssessmentGroup.objects.create(
+            name='Индивидуальная программа',
+            subject=individual_subject,
+            academic_year=self.year,
+        )
+        individual_item = AssessmentItem.objects.create(
+            title='Индивидуальное произведение',
+            subject=individual_subject,
+            academic_year=self.year,
+            group=individual_group,
+            responsible_teacher=self.teacher,
+        )
+        StudentAssessmentGroup.objects.create(
+            student=self.student,
+            assessment_group=individual_group,
+            academic_year=self.year,
+        )
+        self.client.force_login(self.teacher.user)
+
+        response = self.client.get(
+            reverse('assessment_filter_options_api'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertCountEqual(
+            [row['id'] for row in payload['subjects']],
+            [self.subject.pk, individual_subject.pk],
+        )
+        self.assertCountEqual(
+            [row['id'] for row in payload['items']],
+            [self.item.pk, individual_item.pk],
+        )
+        self.assertEqual(
+            [row['id'] for row in payload['study_groups']],
+            [self.group.pk],
+        )
+        self.assertEqual(
+            [row['id'] for row in payload['students']],
+            [self.student.pk],
+        )
+
+        filtered_response = self.client.get(
+            reverse('assessment_filter_options_api'),
+            {
+                'academic_year': self.year.pk,
+                'assessment_group': individual_group.pk,
+            },
+        )
+        filtered_payload = filtered_response.json()
+        self.assertEqual(
+            [row['id'] for row in filtered_payload['subjects']],
+            [individual_subject.pk],
+        )
+        self.assertEqual(
+            [row['id'] for row in filtered_payload['items']],
+            [individual_item.pk],
+        )
+
+    def test_teacher_assessment_item_filter_limits_rendered_sections(self):
+        other_item = AssessmentItem.objects.create(
+            title='Произведение №2',
+            subject=self.subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+            sort_order=20,
+        )
+        self.client.force_login(self.teacher.user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {
+                'academic_year': self.year.pk,
+                'assessment_item': other_item.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [section['item'] for section in response.context['assessment_sections']],
+            [other_item],
+        )
+        self.assertContains(response, 'name="assessment_study_group"')
+        self.assertContains(response, 'name="assessment_group"')
+        self.assertContains(response, 'name="assessment_student"')
+
+    def test_admin_can_filter_and_save_assessment_result_from_journal(self):
+        superuser = User.objects.create_superuser(
+            username='assessment_journal_admin',
+            email='assessment-journal-admin@example.com',
+            password='AdminPass123!',
+        )
+        self.client.force_login(superuser)
+
+        get_response = self.client.get(
+            reverse('journal'),
+            {
+                'academic_year': self.year.pk,
+                'assessment_teacher': self.teacher.pk,
+                'assessment_subject': self.subject.pk,
+            },
+        )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(len(get_response.context['assessment_sections']), 1)
+        self.assertContains(get_response, 'name="assessment_teacher"')
+
+        post_response = self.client.post(
+            (
+                f'{reverse("journal")}?academic_year={self.year.pk}'
+                f'&assessment_teacher={self.teacher.pk}'
+            ),
+            {
+                'action': 'assessment_result',
+                'item_id': self.item.pk,
+                'student_id': self.student.pk,
+                'status': AssessmentResult.STATUS_PASSED,
+                'comment': 'Проверено администратором',
+            },
+        )
+
+        self.assertEqual(post_response.status_code, 302)
+        self.assertTrue(
+            AssessmentResult.objects.filter(
+                item=self.item,
+                enrollment=self.assignment.enrollment,
+                assessed_by=self.teacher,
+                status=AssessmentResult.STATUS_PASSED,
+            ).exists(),
+        )
+
 
     def test_teacher_journal_shows_compact_assessment_summary(self):
         set_assessment_result(
