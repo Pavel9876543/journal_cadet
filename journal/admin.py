@@ -39,6 +39,7 @@ from .assessment_services import (
 )
 from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
 from .grade_options import (
+    get_grade_form_options,
     get_grade_groups,
     get_grade_students,
     get_grade_subjects,
@@ -535,7 +536,7 @@ class GradeAdminForm(forms.ModelForm):
     group = forms.ModelChoiceField(
         label='Группа',
         queryset=StudyGroup.objects.none(),
-        required=False,
+        required=True,
         empty_label='Выберите группу',
     )
 
@@ -547,20 +548,23 @@ class GradeAdminForm(forms.ModelForm):
             'comment': forms.TextInput(attrs={'size': 80}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, fixed_academic_year=None, **kwargs):
         super().__init__(*args, **kwargs)
 
         instance = self.instance if self.instance and self.instance.pk else None
         student = getattr(instance, 'student', None)
         subject = getattr(instance, 'subject', None)
-        teacher = getattr(instance, 'teacher', None)
-        academic_year = getattr(instance, 'academic_year', None)
+        academic_year = fixed_academic_year or getattr(instance, 'academic_year', None)
 
         group_id = self.data.get('group')
         student_id = self.data.get('student') or getattr(instance, 'student_id', None)
         subject_id = self.data.get('subject') or getattr(instance, 'subject_id', None)
         teacher_id = self.data.get('teacher') or getattr(instance, 'teacher_id', None)
-        academic_year_id = self.data.get('academic_year') or getattr(instance, 'academic_year_id', None)
+        academic_year_id = (
+            getattr(fixed_academic_year, 'pk', None)
+            or self.data.get('academic_year')
+            or getattr(instance, 'academic_year_id', None)
+        )
 
         if student_id:
             try:
@@ -573,12 +577,6 @@ class GradeAdminForm(forms.ModelForm):
                 subject = Subject.objects.get(pk=subject_id)
             except (Subject.DoesNotExist, ValueError, TypeError):
                 subject = None
-
-        if teacher_id:
-            try:
-                teacher = Teacher.objects.get(pk=teacher_id)
-            except (Teacher.DoesNotExist, ValueError, TypeError):
-                teacher = None
 
         if academic_year_id:
             try:
@@ -598,14 +596,16 @@ class GradeAdminForm(forms.ModelForm):
             except (StudyGroup.DoesNotExist, ValueError, TypeError):
                 group = None
 
+        dependency_options = get_grade_form_options(
+            academic_year=academic_year,
+            group=group,
+            student=student,
+            subject=subject,
+        )
+
         if 'group' in self.fields:
             self.fields['group'].queryset = self._include_submitted_choice(
-                get_grade_groups(
-                    student=student,
-                    subject=subject,
-                    teacher=teacher,
-                    academic_year=academic_year,
-                ),
+                dependency_options['groups'],
                 StudyGroup,
                 group_id,
             )
@@ -613,34 +613,19 @@ class GradeAdminForm(forms.ModelForm):
             self.fields['group'].widget.attrs['required'] = True
         if 'student' in self.fields:
             self.fields['student'].queryset = self._include_submitted_choice(
-                get_grade_students(
-                    group=group,
-                    subject=subject,
-                    teacher=teacher,
-                    academic_year=academic_year,
-                ),
+                dependency_options['students'],
                 Student,
                 student_id,
             )
         if 'subject' in self.fields:
             self.fields['subject'].queryset = self._include_submitted_choice(
-                get_grade_subjects(
-                    group=group,
-                    student=student,
-                    teacher=teacher,
-                    academic_year=academic_year,
-                ),
+                dependency_options['subjects'],
                 Subject,
                 subject_id,
             )
         if 'teacher' in self.fields:
             self.fields['teacher'].queryset = self._include_submitted_choice(
-                get_grade_teachers(
-                    group=group,
-                    student=student,
-                    subject=subject,
-                    academic_year=academic_year,
-                ),
+                dependency_options['teachers'],
                 Teacher,
                 teacher_id,
             )
@@ -650,13 +635,18 @@ class GradeAdminForm(forms.ModelForm):
                 AcademicYear,
                 academic_year_id,
             )
+            if fixed_academic_year is not None:
+                self.fields['academic_year'].initial = fixed_academic_year
+                self.fields['academic_year'].disabled = True
         dependency_url = reverse('grade_options_api')
         for field_name in ('group', 'student', 'subject', 'teacher'):
             if field_name in self.fields:
                 self.fields[field_name].widget.attrs.update({
                     'data-grade-options-url': dependency_url,
-                    'data-searchable-select': '1',
+                    'data-grade-dependency-mode': 'grade',
                 })
+
+        self.fixed_academic_year = fixed_academic_year
 
     def _include_submitted_choice(self, queryset, model, raw_value):
         if not raw_value:
@@ -677,9 +667,11 @@ class GradeAdminForm(forms.ModelForm):
         student = cleaned_data.get('student')
         subject = cleaned_data.get('subject')
         teacher = cleaned_data.get('teacher')
-        academic_year = cleaned_data.get('academic_year')
+        academic_year = self.fixed_academic_year or cleaned_data.get('academic_year')
+        if self.fixed_academic_year is not None:
+            cleaned_data['academic_year'] = self.fixed_academic_year
 
-        if group is None and student is not None:
+        if group is None and 'group' not in self.fields and student is not None:
             enrollment = student.enrollment_for_year(academic_year)
             group = enrollment.group if enrollment is not None else None
             cleaned_data['group'] = group
@@ -947,7 +939,7 @@ class GroupSubjectAdminForm(forms.ModelForm):
 
     class Media:
         js = (
-            'journal/journal_interface.js',
+            'journal/select_search.js',
             'journal/admin_assignment_dependencies.js',
         )
 
@@ -1040,7 +1032,7 @@ class StudentSubjectAdminForm(forms.ModelForm):
 
     class Media:
         js = (
-            'journal/journal_interface.js',
+            'journal/select_search.js',
             'journal/admin_assignment_dependencies.js',
         )
 
@@ -1146,7 +1138,7 @@ class AssessmentDependencyFormMixin:
 
     class Media:
         js = (
-            'journal/journal_interface.js',
+            'journal/select_search.js',
             'journal/admin_assessment_dependencies.js',
         )
 
@@ -1892,17 +1884,25 @@ class GradeInline(SelectedAcademicYearGradeInlineMixin, ArchivedAcademicYearInli
     model = Grade
     form = GradeAdminForm
     extra = 0
-    autocomplete_fields = ('subject', 'teacher', 'academic_year')
     fields = ('date', 'subject', 'teacher', 'value', 'academic_year', 'comment')
     ordering = ('-date',)
     show_change_link = True
     classes = ('collapse',)
 
     class Media:
-        js = (
-            'journal/journal_interface.js',
-            'journal/grade_dependencies.js',
-        )
+        js = ('journal/grade_dependencies.js',)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        selected_year = get_selected_admin_academic_year(request)
+        base_form = kwargs.get('form', self.form)
+
+        class SelectedYearInlineGradeForm(base_form):
+            def __init__(self, *args, **form_kwargs):
+                form_kwargs['fixed_academic_year'] = selected_year
+                super().__init__(*args, **form_kwargs)
+
+        kwargs['form'] = SelectedYearInlineGradeForm
+        return super().get_formset(request, obj, **kwargs)
 
 class SubjectResultInline(
     SelectedAcademicYearSubjectResultInlineMixin,
@@ -1921,7 +1921,7 @@ class SubjectResultInline(
 
     class Media:
         js = (
-            'journal/journal_interface.js',
+            'journal/select_search.js',
             'journal/grade_dependencies.js',
         )
 
@@ -3256,7 +3256,6 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
         'teacher_name_snapshot',
         'comment',
     )
-    autocomplete_fields = ('academic_year',)
     readonly_fields = ('source_type_display',)
     date_hierarchy = 'date'
     list_select_related = ('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
@@ -3288,9 +3287,19 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
 
     class Media:
         js = (
-            'journal/journal_interface.js',
             'journal/grade_dependencies.js',
         )
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        base_form = super().get_form(request, obj=obj, change=change, **kwargs)
+        selected_year = get_selected_admin_academic_year(request)
+
+        class SelectedYearGradeAdminForm(base_form):
+            def __init__(self, *args, **form_kwargs):
+                form_kwargs['fixed_academic_year'] = selected_year
+                super().__init__(*args, **form_kwargs)
+
+        return SelectedYearGradeAdminForm
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)

@@ -73,6 +73,7 @@ from journal.forms import (
     get_teacher_subjects,
 )
 from journal.grade_options import (
+    get_grade_form_options,
     get_grade_groups,
     get_grade_students,
     get_grade_subjects,
@@ -1593,6 +1594,7 @@ class FormTests(JournalTestDataMixin, TestCase):
 
         form = GradeCreateForm(
             data={
+                'group': data['group'].pk,
                 'student': data['student'].pk,
                 'subject': data['solfeggio'].pk,
                 'teacher': data['teacher'].pk,
@@ -1607,6 +1609,7 @@ class FormTests(JournalTestDataMixin, TestCase):
 
         invalid_form = GradeCreateForm(
             data={
+                'group': data['group'].pk,
                 'student': data['student'].pk,
                 'subject': data['solfeggio'].pk,
                 'teacher': data['other_teacher'].pk,
@@ -1636,10 +1639,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('teacher', form.fields)
         self.assertNotIn('subject', form.fields)
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
-        self.assertEqual(
-            form.fields['student'].widget.attrs['data-searchable-select'],
-            '1',
-        )
+        self.assertNotIn('data-searchable-select', form.fields['student'].widget.attrs)
 
     def test_grade_form_with_fixed_teacher_reports_invalid_subject_without_crash(self):
         data = self.create_base_journal()
@@ -1747,7 +1747,52 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertEqual(list(form.fields['teacher'].queryset), [data['teacher']])
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
         self.assertIn('journal/grade_dependencies.js', GradeAdmin.Media.js)
-        self.assertIn('journal/journal_interface.js', GradeAdmin.Media.js)
+        self.assertNotIn('journal/select_search.js', GradeAdmin.Media.js)
+
+    def test_grade_dependency_options_are_strictly_year_then_group(self):
+        data = self.create_base_journal()
+        other_year = self.create_academic_year(name='2026/2027')
+        other_group = self.create_group(name='Группа другого года', academic_year=other_year)
+        self.create_group_assignment(
+            group=other_group,
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+        )
+
+        without_group = get_grade_form_options(academic_year=data['year'])
+        with_group = get_grade_form_options(
+            academic_year=data['year'],
+            group=data['group'],
+            student=data['student'],
+            subject=data['literature'],
+        )
+
+        self.assertEqual(list(without_group['groups']), [data['group']])
+        self.assertFalse(without_group['students'].exists())
+        self.assertFalse(without_group['subjects'].exists())
+        self.assertEqual(list(with_group['students']), [data['student']])
+        self.assertEqual(
+            set(with_group['subjects']),
+            {data['solfeggio'], data['literature'], data['specialty']},
+        )
+
+    def test_grade_admin_uses_and_locks_year_selected_in_page_filter(self):
+        data = self.create_base_journal()
+        request = RequestFactory().get('/admin/journal/grade/add/', {'academic_year': data['year'].pk})
+        request.user = User.objects.create_superuser(
+            username='grade_form_admin',
+            password='Pass12345!',
+            email='admin@example.com',
+        )
+        request.session = {}
+        model_admin = GradeAdmin(Grade, django_admin.site)
+
+        form = model_admin.get_form(request)()
+
+        self.assertTrue(form.fields['academic_year'].disabled)
+        self.assertEqual(form.fields['academic_year'].initial, data['year'])
+        for field_name in ('group', 'student', 'subject', 'teacher'):
+            self.assertNotIn('data-searchable-select', form.fields[field_name].widget.attrs)
 
     def test_grade_edit_form_keeps_existing_date_value(self):
         form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
@@ -2267,6 +2312,42 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Сольфеджио')
         self.assertNotContains(response, 'Регистрация на курсы')
 
+    def test_grade_options_api_keeps_upstream_groups_independent_of_children(self):
+        second_group = self.create_group(name='Вторая группа', academic_year=self.data['year'])
+        self.create_group_assignment(
+            group=second_group,
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+        )
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse('grade_options_api'), {
+            'mode': 'grade',
+            'academic_year': self.data['year'].pk,
+            'group': self.data['group'].pk,
+            'student': self.data['student'].pk,
+            'subject': self.data['literature'].pk,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            {item['id'] for item in payload['groups']},
+            {self.data['group'].pk, second_group.pk},
+        )
+        self.assertEqual(
+            {item['id'] for item in payload['students']},
+            {self.data['student'].pk},
+        )
+        self.assertEqual(
+            {item['id'] for item in payload['subjects']},
+            {
+                self.data['solfeggio'].pk,
+                self.data['literature'].pk,
+                self.data['specialty'].pk,
+            },
+        )
+
     def test_teacher_sees_all_assigned_tables_without_selecting_group(self):
         self.client.login(username='teacher_ivanov', password='Pass12345!')
 
@@ -2620,6 +2701,30 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 date=date(2025, 10, 16),
                 value='5',
             ).exists(),
+        )
+
+    def test_grade_form_error_is_rendered_only_once_next_to_its_field(self):
+        self.client.force_login(self.admin_user)
+
+        response = self.client.post(
+            f'{reverse("journal")}?academic_year={self.data["year"].pk}&group={self.data["group"].pk}',
+            data={
+                'action': 'add_grade',
+                'group': self.data['group'].pk,
+                'student': self.data['student'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'teacher': self.data['teacher'].pk,
+                'date': '2025-10-16',
+                'value': '9',
+                'comment': '',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            'Допустимы оценки от 1 до 5 со знаком +/− либо Н.',
+            count=1,
         )
 
     def test_grade_post_uses_form_selection_instead_of_page_subject_filter(self):

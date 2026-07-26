@@ -1,0 +1,118 @@
+/* Телефон: портретная и горизонтальная ориентации. */
+@media (max-width: 767.98px),
+       (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    html,
+    body {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    body {
+        overflow-wrap: anywhere;
+    }
+
+    .main,
+    .topbar-inner,
+    .wrap,
+    .auth-shell {
+        width: 100%;
+        max-width: 100%;
+        padding-inline: 10px;
+    }
+
+    .topbar-inner,
+    .workspace-heading,
+    .user-panel,
+    .table-panel-head,
+    .section-head,
+    .journal-year-selector,
+    .journal-dashboard-hero {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .filter-form,
+    .grade-form,
+    .summary-grid,
+    .workspace-search-bar,
+    .form-row,
+    .journal-dashboard-layout,
+    .journal-link-grid,
+    .journal-stat-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .field,
+    .form-group,
+    .fieldBox,
+    .related-widget-wrapper,
+    .form-action,
+    .topbar-actions,
+    .journal-year-selector__form {
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100%;
+    }
+
+    input,
+    select,
+    textarea,
+    button,
+    .button,
+    .btn {
+        width: 100%;
+        max-width: 100%;
+        min-height: 44px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    input,
+    select,
+    textarea {
+        font-size: 16px !important;
+    }
+
+    .table-scroll,
+    .journal-responsive-table,
+    .results,
+    .inline-group,
+    .table-responsive {
+        width: 100%;
+        max-width: 100%;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .table-scroll table,
+    .results table,
+    .inline-group table {
+        width: max-content;
+        min-width: 680px;
+    }
+
+    body.change-form .content,
+    body.change-list .content,
+    body.journal-admin-page .content {
+        padding-inline: 8px !important;
+    }
+
+    .select2-container,
+    .select2-selection,
+    .related-widget-wrapper select {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+}
+
+@media (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    .topbar,
+    .journal-tabs {
+        position: static;
+    }
+
+    .table-scroll {
+        max-height: 72dvh;
+    }
+}

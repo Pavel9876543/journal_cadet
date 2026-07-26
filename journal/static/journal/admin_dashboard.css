@@ -1,3 +1,8 @@
+@import url("layout-desktop.css");
+@import url("layout-laptop.css");
+@import url("layout-tablet.css");
+@import url("layout-mobile.css");
+
 :root {
     --journal-admin-bg: #f4f7fb;
     --journal-admin-surface: #ffffff;

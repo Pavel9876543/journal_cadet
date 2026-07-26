@@ -1,0 +1,20 @@
+/* ПК: широкие экраны от 1440 px. */
+@media (min-width: 1440px) {
+    .main,
+    .topbar-inner,
+    .wrap {
+        max-width: 1480px;
+        margin-inline: auto;
+    }
+
+    .grade-form {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    body.journal-admin-page .content-wrapper > .content,
+    body.change-form .content-wrapper > .content,
+    body.change-list .content-wrapper > .content {
+        max-width: 1680px;
+        margin-inline: auto;
+    }
+}

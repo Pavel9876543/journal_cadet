@@ -1,129 +1,113 @@
 (function () {
     'use strict';
 
-    var FIELD_NAMES = ['group', 'student', 'subject', 'teacher'];
-    var FORM_STATES = new WeakMap();
-
-    function formDependencyState(form, scope) {
-        var formState = FORM_STATES.get(form);
-        if (!formState) {
-            formState = {
-                controllers: [],
-                submitControls: Array.prototype.map.call(
-                    form.querySelectorAll(
-                        'button:not([type]), button[type="submit"], input[type="submit"]'
-                    ),
-                    function (control) {
-                        return {control: control, initiallyDisabled: control.disabled};
-                    }
-                )
-            };
-            FORM_STATES.set(form, formState);
-        }
-
-        var controller = {scope: scope, loading: false, error: false};
-        formState.controllers.push(controller);
-        return {form: formState, controller: controller};
-    }
+    var OPTION_FIELDS = ['group', 'student', 'subject', 'teacher'];
+    var ALL_FIELDS = ['academic_year'].concat(OPTION_FIELDS);
 
     function inlinePrefix(name) {
         var match = String(name || '').match(/^(.*-\d+)-[^-]+$/);
         return match ? match[1] : '';
     }
 
-    function start(root) {
-        var container = root || document;
-        var sources = container.querySelectorAll(
-            'form[data-grade-options-url], [data-grade-options-url]:not(form)'
-        );
+    function syncSelectWidget(select) {
+        if (
+            window.django
+            && window.django.jQuery
+            && select
+            && select.classList.contains('admin-autocomplete')
+        ) {
+            window.django.jQuery(select).trigger('change.select2');
+        }
+    }
 
-        sources.forEach(function (source) {
+    function start(root) {
+        (root || document).querySelectorAll(
+            'form[data-grade-options-url], [data-grade-options-url]:not(form)'
+        ).forEach(function (source) {
             var form = source.matches('form') ? source : source.closest('form');
             if (!form) {
                 return;
             }
-
-            var prefix = source.matches('form') ? '' : inlinePrefix(source.getAttribute('name'));
-            var scope = prefix ? (source.closest('tr') || source.closest('.dynamic-subject_results') || form) : form;
+            var prefix = source.matches('form') ? '' : inlinePrefix(source.name);
+            var scope = prefix ? (source.closest('tr') || source.closest('[class*="dynamic-"]') || form) : form;
             if (scope.dataset.gradeOptionsInitialized === '1') {
                 return;
             }
             scope.dataset.gradeOptionsInitialized = '1';
-            initializeForm(scope, source.dataset.gradeOptionsUrl || form.dataset.gradeOptionsUrl, prefix, form, source);
+            initialize(scope, form, source, prefix);
         });
     }
 
-    function initializeForm(scope, endpoint, prefix, form, source) {
+    function initialize(scope, form, source, prefix) {
+        var endpoint = source.dataset.gradeOptionsUrl || form.dataset.gradeOptionsUrl;
+        var mode = source.dataset.gradeDependencyMode || form.dataset.gradeDependencyMode || 'legacy';
         if (!endpoint) {
             return;
         }
 
-        form = form || scope.closest('form') || scope;
-        source = source || scope;
-
-        function fieldSelector(name) {
+        function selector(name) {
             return prefix ? '[name="' + prefix + '-' + name + '"]' : '[name="' + name + '"]';
         }
 
         var fields = {};
-        FIELD_NAMES.concat(['academic_year']).forEach(function (name) {
-            fields[name] = scope.querySelector(fieldSelector(name));
-        });
-
         var placeholders = {};
-        FIELD_NAMES.forEach(function (name) {
-            var select = fields[name];
-            if (!select) {
-                return;
+        ALL_FIELDS.forEach(function (name) {
+            fields[name] = scope.querySelector(selector(name));
+            if (fields[name] && fields[name].tagName === 'SELECT') {
+                var empty = Array.prototype.find.call(fields[name].options, function (option) {
+                    return option.value === '';
+                });
+                placeholders[name] = empty ? empty.textContent : 'Выберите значение';
             }
-            var emptyOption = Array.prototype.find.call(select.options, function (option) {
-                return option.value === '';
-            });
-            placeholders[name] = emptyOption ? emptyOption.textContent : 'Выберите значение';
         });
 
-        var fixedStudent = scope.dataset.fixedStudent || form.dataset.fixedStudent || source.dataset.fixedStudent || '';
-        var fixedTeacher = form.dataset.fixedTeacher || '';
-        var fixedSubject = form.dataset.fixedSubject || '';
-        var fixedAcademicYear = form.dataset.fixedAcademicYear || '';
-        var activeRequest = null;
+        var fixedStudent = source.dataset.fixedStudent || form.dataset.fixedStudent || '';
+        var fixedTeacher = source.dataset.fixedTeacher || form.dataset.fixedTeacher || '';
+        var fixedSubject = source.dataset.fixedSubject || form.dataset.fixedSubject || '';
+        var fixedYear = source.dataset.fixedAcademicYear || form.dataset.fixedAcademicYear || '';
+        var yearFilterSelector = form.dataset.gradeYearFilter || '';
+        var yearFilter = yearFilterSelector ? document.querySelector(yearFilterSelector) : null;
         var requestSequence = 0;
-        var dependencyState = formDependencyState(form, scope);
+        var activeRequest = null;
 
-        function handleChange(name) {
-            if (name === 'student') {
-                var option = fields.student.options[fields.student.selectedIndex];
-                if (option && option.dataset.groupId && fields.group) {
-                    fields.group.value = option.dataset.groupId;
-                    syncSelectWidget(fields.group);
-                }
-                if (option && option.dataset.academicYearId && fields.academic_year) {
-                    fields.academic_year.value = option.dataset.academicYearId;
-                    syncSelectWidget(fields.academic_year);
-                }
-            }
-            if (name === 'group') {
-                var groupOption = fields.group.options[fields.group.selectedIndex];
-                if (groupOption && groupOption.dataset.academicYearId && fields.academic_year) {
-                    fields.academic_year.value = groupOption.dataset.academicYearId;
-                    syncSelectWidget(fields.academic_year);
+        function setStatus(message, isError) {
+            var status = scope.querySelector('[data-grade-options-status]')
+                || form.querySelector('[data-grade-options-status]');
+            if (!status && source.parentNode) {
+                status = document.createElement('span');
+                status.dataset.gradeOptionsStatus = '1';
+                status.className = 'journal-admin-field-status';
+                var wrapper = source.closest('.related-widget-wrapper') || source.parentElement;
+                if (wrapper && wrapper.parentNode) {
+                    wrapper.parentNode.insertBefore(status, wrapper.nextSibling);
                 }
             }
-            loadOptions(name);
+            if (status) {
+                status.textContent = message || '';
+                status.classList.toggle('journal-admin-field-status--error', Boolean(isError));
+            }
         }
 
-        Object.keys(fields).forEach(function (name) {
-            if (!fields[name]) {
-                return;
-            }
-            fields[name].addEventListener('change', function () {
-                handleChange(name);
+        function setBusy(isBusy) {
+            form.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+            form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach(function (button) {
+                if (isBusy) {
+                    if (typeof button.dataset.gradeWasDisabled === 'undefined') {
+                        button.dataset.gradeWasDisabled = button.disabled ? '1' : '0';
+                    }
+                    button.disabled = true;
+                } else {
+                    if (button.dataset.gradeWasDisabled === '0') {
+                        button.disabled = false;
+                    }
+                    delete button.dataset.gradeWasDisabled;
+                }
             });
-        });
+        }
 
         function buildUrl(changedField) {
             var url = new URL(endpoint, window.location.origin);
-            Object.keys(fields).forEach(function (name) {
+            ALL_FIELDS.forEach(function (name) {
                 if (fields[name] && fields[name].value) {
                     url.searchParams.set(name, fields[name].value);
                 }
@@ -137,9 +121,10 @@
             if (!fields.subject && fixedSubject) {
                 url.searchParams.set('subject', fixedSubject);
             }
-            if (!fields.academic_year && fixedAcademicYear) {
-                url.searchParams.set('academic_year', fixedAcademicYear);
+            if (!fields.academic_year && fixedYear) {
+                url.searchParams.set('academic_year', fixedYear);
             }
+            url.searchParams.set('mode', mode);
             if (changedField) {
                 url.searchParams.set('changed', changedField);
                 url.searchParams.set('strict', '1');
@@ -147,89 +132,23 @@
             return url;
         }
 
-        function statusElement() {
-            return scope.querySelector('[data-grade-options-status]')
-                || form.querySelector('[data-grade-options-status]');
-        }
-
-        function setLoading(isLoading, hasError) {
-            dependencyState.controller.loading = isLoading;
-            dependencyState.controller.error = Boolean(hasError);
-            var submissionBlocked = dependencyState.form.controllers.some(function (controller) {
-                return controller.loading || controller.error;
-            });
-            var formIsLoading = dependencyState.form.controllers.some(function (controller) {
-                return controller.loading;
-            });
-            dependencyState.form.submitControls.forEach(function (item) {
-                item.control.disabled = item.initiallyDisabled || submissionBlocked;
-            });
-            form.setAttribute('aria-busy', formIsLoading ? 'true' : 'false');
-            var status = statusElement();
-            if (!status && source && source.parentNode) {
-                status = document.createElement('span');
-                status.dataset.gradeOptionsStatus = '1';
-                status.className = 'journal-admin-field-status';
-                var wrapper = source.closest('.related-widget-wrapper') || source.parentElement;
-                if (wrapper && wrapper.parentNode) {
-                    wrapper.parentNode.insertBefore(status, wrapper.nextSibling);
-                }
-            }
-            if (status) {
-                status.textContent = isLoading ? 'Обновляем доступные варианты...' : '';
-                status.classList.remove('journal-admin-field-status--error');
-            }
-        }
-
-        function selectedOption(select) {
-            if (!select || select.selectedIndex < 0) {
-                return null;
-            }
-            return select.options[select.selectedIndex] || null;
-        }
-
-        function syncSelectWidget(select) {
-            if (
-                window.django
-                && window.django.jQuery
-                && select
-                && select.classList.contains('admin-autocomplete')
-            ) {
-                window.django.jQuery(select).trigger('change.select2');
-            }
-        }
-
         function replaceOptions(name, items, preserveMissing) {
             var select = fields[name];
-            if (!select) {
+            if (!select || select.tagName !== 'SELECT') {
                 return false;
             }
-
-            var previousValue = select.value;
-            var previousOption = selectedOption(select);
-            var previousLabel = previousOption ? previousOption.textContent : previousValue;
-            var previousGroupId = previousOption && previousOption.dataset.groupId
-                ? previousOption.dataset.groupId
-                : '';
-            var previousAcademicYearId = previousOption && previousOption.dataset.academicYearId
-                ? previousOption.dataset.academicYearId
-                : '';
+            var oldValue = select.value;
+            var oldOption = select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
+            var oldLabel = oldOption ? oldOption.textContent : oldValue;
             var fragment = document.createDocumentFragment();
-            var emptyOption = new Option(
-                items.length || previousValue ? placeholders[name] : 'Нет допустимых вариантов',
+            fragment.appendChild(new Option(
+                items.length ? (placeholders[name] || 'Выберите значение') : 'Нет допустимых вариантов',
                 ''
-            );
-            fragment.appendChild(emptyOption);
-
-            var canKeepValue = false;
+            ));
+            var retained = false;
             items.forEach(function (item) {
-                var itemValue = String(item.id);
-                var option = new Option(
-                    item.label,
-                    itemValue,
-                    false,
-                    itemValue === previousValue
-                );
+                var value = String(item.id);
+                var option = new Option(item.label, value, false, value === oldValue);
                 if (item.group_id) {
                     option.dataset.groupId = String(item.group_id);
                 }
@@ -237,64 +156,52 @@
                     option.dataset.academicYearId = String(item.academic_year_id);
                 }
                 fragment.appendChild(option);
-                if (itemValue === previousValue) {
-                    canKeepValue = true;
-                }
+                retained = retained || value === oldValue;
             });
-
-            if (previousValue && !canKeepValue && preserveMissing) {
-                var preservedOption = new Option(previousLabel || previousValue, previousValue, false, true);
-                if (previousGroupId) {
-                    preservedOption.dataset.groupId = previousGroupId;
-                }
-                if (previousAcademicYearId) {
-                    preservedOption.dataset.academicYearId = previousAcademicYearId;
-                }
-                fragment.appendChild(preservedOption);
-                canKeepValue = true;
+            if (oldValue && !retained && preserveMissing) {
+                fragment.appendChild(new Option(oldLabel || oldValue, oldValue, false, true));
+                retained = true;
             }
-
             select.replaceChildren(fragment);
-            select.value = canKeepValue ? previousValue : '';
-            var valueChanged = Boolean(previousValue && !canKeepValue);
-            if (!select.value && items.length === 1) {
+            select.value = retained ? oldValue : '';
+            if (!select.value && items.length === 1 && name === 'teacher') {
                 select.value = String(items[0].id);
-                valueChanged = true;
             }
             select.disabled = items.length === 0 && !select.value;
             syncSelectWidget(select);
             select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
-            return valueChanged;
+            return Boolean(oldValue && !retained);
         }
 
-        function applyDefaults(defaults, changedField) {
-            var changed = false;
-            if (!defaults) {
-                return false;
+        function clearField(name) {
+            var select = fields[name];
+            if (!select || select.tagName !== 'SELECT') {
+                return;
             }
-            if (fields.group && defaults.group_id && (changedField === 'student' || !fields.group.value)) {
-                if (fields.group.value !== String(defaults.group_id)) {
-                    fields.group.value = String(defaults.group_id);
-                    syncSelectWidget(fields.group);
-                    changed = true;
-                }
+            select.value = '';
+            syncSelectWidget(select);
+        }
+
+        function clearDescendants(changedField) {
+            if (mode !== 'grade') {
+                return;
             }
-            if (
-                fields.academic_year
-                && defaults.academic_year_id
-                && (
-                    changedField === 'group'
-                    || changedField === 'student'
-                    || !fields.academic_year.value
-                )
-            ) {
-                if (fields.academic_year.value !== String(defaults.academic_year_id)) {
-                    fields.academic_year.value = String(defaults.academic_year_id);
-                    syncSelectWidget(fields.academic_year);
-                    changed = true;
-                }
+            if (changedField === 'academic_year') {
+                ['group', 'student', 'subject', 'teacher'].forEach(clearField);
+            } else if (changedField === 'group') {
+                ['student', 'subject', 'teacher'].forEach(clearField);
+            } else if (changedField === 'student' || changedField === 'subject') {
+                clearField('teacher');
             }
-            return changed;
+        }
+
+        function updateFormActionYear(yearId) {
+            if (!yearId || !form.dataset.gradeYearFilter) {
+                return;
+            }
+            var action = new URL(form.getAttribute('action') || window.location.href, window.location.href);
+            action.searchParams.set('academic_year', yearId);
+            form.action = action.pathname + action.search + action.hash;
         }
 
         function loadOptions(changedField) {
@@ -304,16 +211,17 @@
                 activeRequest.abort();
             }
             activeRequest = new AbortController();
-            setLoading(true);
+            setBusy(true);
+            setStatus('Обновляем доступные варианты…', false);
 
             fetch(buildUrl(changedField), {
                 credentials: 'same-origin',
                 headers: {'X-Requested-With': 'XMLHttpRequest'},
-                signal: activeRequest.signal,
+                signal: activeRequest.signal
             })
                 .then(function (response) {
                     if (!response.ok) {
-                        throw new Error('Request failed: ' + response.status);
+                        throw new Error('HTTP ' + response.status);
                     }
                     return response.json();
                 })
@@ -321,42 +229,73 @@
                     if (sequence !== requestSequence) {
                         return;
                     }
-                    var selectionWasCleared = false;
-                    FIELD_NAMES.forEach(function (name) {
-                        var preserveMissing = !changedField || changedField === name;
-                        if (replaceOptions(name, payload[name + 's'] || [], preserveMissing)) {
-                            selectionWasCleared = true;
-                        }
+                    OPTION_FIELDS.forEach(function (name) {
+                        var preserveMissing = mode !== 'grade' && (!changedField || changedField === name);
+                        replaceOptions(name, payload[name + 's'] || [], preserveMissing);
                     });
-                    selectionWasCleared = applyDefaults(payload.defaults || {}, changedField) || selectionWasCleared;
-                    setLoading(false, false);
-                    if (selectionWasCleared) {
-                        loadOptions(changedField);
-                    }
+                    setBusy(false);
+                    setStatus('', false);
                 })
                 .catch(function (error) {
                     if (error.name === 'AbortError') {
                         return;
                     }
-                    setLoading(false, true);
-                    var status = statusElement();
-                    if (status) {
-                        status.textContent = 'Не удалось обновить доступные варианты. Проверьте выбранные значения и попробуйте еще раз.';
-                        status.classList.add('journal-admin-field-status--error');
-                    }
+                    setBusy(false);
+                    setStatus('Не удалось обновить связанные поля. Повторите попытку.', true);
                 });
         }
 
-        loadOptions();
+        ALL_FIELDS.forEach(function (name) {
+            if (!fields[name]) {
+                return;
+            }
+            fields[name].addEventListener('change', function () {
+                if (name === 'academic_year' && fields[name].dataset.gradeYearAutoSubmit === '1') {
+                    if (typeof form.requestSubmit === 'function') {
+                        form.requestSubmit();
+                    } else {
+                        form.submit();
+                    }
+                    return;
+                }
+                if (mode === 'grade' && name === 'teacher') {
+                    return;
+                }
+                clearDescendants(name);
+                loadOptions(name);
+            });
+        });
+
+        if (yearFilter && fields.academic_year) {
+            yearFilter.addEventListener('change', function () {
+                fields.academic_year.value = yearFilter.value;
+                fixedYear = yearFilter.value;
+                syncSelectWidget(fields.academic_year);
+                updateFormActionYear(yearFilter.value);
+                clearDescendants('academic_year');
+                if (yearFilter.dataset.gradeYearAutoSubmit === '1') {
+                    return;
+                }
+                loadOptions('academic_year');
+            });
+            if (yearFilter.value && fields.academic_year.value !== yearFilter.value) {
+                fields.academic_year.value = yearFilter.value;
+            }
+            updateFormActionYear(yearFilter.value);
+        }
+
+        loadOptions('');
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start);
+        document.addEventListener('DOMContentLoaded', function () { start(document); });
     } else {
-        start();
+        start(document);
     }
-
-    document.addEventListener('formset:added', function (event) {
-        start(event.target);
-    });
-})();
+    document.addEventListener('formset:added', function (event) { start(event.target || document); });
+    if (window.django && window.django.jQuery) {
+        window.django.jQuery(document).on('formset:added', function (_event, row) {
+            start(row && row[0] ? row[0] : document);
+        });
+    }
+}());

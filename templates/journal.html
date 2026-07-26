@@ -1244,6 +1244,7 @@
             }
         }
 </style>
+{% include "journal/device_styles.html" %}
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true">
@@ -1403,10 +1404,11 @@
                     method="get"
                     class="filter-form"
                     data-grade-options-url="{% url 'grade_options_api' %}"
+                    data-grade-dependency-mode="grade"
                 >
                     <div class="field">
                         <label for="academic_year">Учебный год</label>
-                        <select id="academic_year" name="academic_year" data-searchable-select data-search-placeholder="Найти учебный год">
+                        <select id="academic_year" name="academic_year" data-searchable-select data-search-placeholder="Найти учебный год" data-grade-year-auto-submit="1">
                             <option value="">Текущий учебный год</option>
                             {% for academic_year in academic_years %}
                                 <option value="{{ academic_year.id }}" {% if selected_academic_year_id == academic_year.id|stringformat:"s" %}selected{% endif %}>
@@ -1529,6 +1531,8 @@
                             data-fixed-teacher="{{ grade_form.dependency_teacher_id }}"
                             data-fixed-subject="{{ grade_form.dependency_subject_id }}"
                             data-fixed-academic-year="{{ grade_form.dependency_academic_year_id }}"
+                            data-grade-dependency-mode="grade"
+                            data-grade-year-filter="#academic_year"
                         >
                             {% csrf_token %}
                             <input type="hidden" name="action" value="add_grade">
@@ -2064,78 +2068,9 @@
 
 <script src="{% static 'journal/grade_dependencies.js' %}"></script>
 <script src="{% static 'journal/assessment_filters.js' %}"></script>
-<script src="{% static 'journal/journal_interface.js' %}"></script>
-<script>
-    (function () {
-        const key = 'journal-scroll-y';
-        const firstFieldError = document.querySelector('[data-error-for]');
-
-        if (firstFieldError) {
-            sessionStorage.removeItem(key);
-            const form = firstFieldError.closest('form') || document.querySelector('#grade-create-form');
-            const fieldName = firstFieldError.dataset.errorFor;
-            let field = null;
-            if (form && fieldName) {
-                field = Array.prototype.find.call(form.elements, (element) => element.name === fieldName);
-            }
-            const target = field || firstFieldError;
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            if (field && typeof field.focus === 'function') {
-                field.focus({ preventScroll: true });
-            }
-        } else {
-            const savedY = sessionStorage.getItem(key);
-            if (savedY !== null) {
-                window.scrollTo(0, Number(savedY) || 0);
-                sessionStorage.removeItem(key);
-            }
-        }
-
-        document.querySelectorAll('main form[method="post"]').forEach((form) => {
-            form.addEventListener('submit', () => {
-                sessionStorage.setItem(key, String(window.scrollY));
-            });
-        });
-
-        const dirtyForms = new Set();
-
-        document.querySelectorAll('.table-form').forEach((form) => {
-            const saveButton = form.querySelector('.table-save-button');
-            const state = form.querySelector('.save-state');
-            const stateText = state ? state.querySelector('span') : null;
-            const controls = form.querySelectorAll('input:not([type="hidden"]), select');
-
-            if (!saveButton || !state || !stateText || controls.length === 0) {
-                return;
-            }
-
-            saveButton.disabled = true;
-
-            const markDirty = () => {
-                dirtyForms.add(form);
-                saveButton.disabled = false;
-                state.classList.add('is-dirty');
-                stateText.textContent = 'Есть несохранённые изменения';
-            };
-
-            controls.forEach((control) => {
-                control.addEventListener('input', markDirty, { once: true });
-                control.addEventListener('change', markDirty, { once: true });
-            });
-
-            form.addEventListener('submit', () => {
-                dirtyForms.delete(form);
-            });
-        });
-
-        window.addEventListener('beforeunload', (event) => {
-            if (dirtyForms.size === 0) {
-                return;
-            }
-            event.preventDefault();
-            event.returnValue = '';
-        });
-    })();
-</script>
+<script src="{% static 'journal/select_search.js' %}"></script>
+<script src="{% static 'journal/workspace_search.js' %}"></script>
+<script src="{% static 'journal/collapse_controls.js' %}"></script>
+<script src="{% static 'journal/form_state.js' %}"></script>
 </body>
 </html>

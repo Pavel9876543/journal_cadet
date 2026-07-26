@@ -9,6 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 
 from .grade_options import (
+    get_grade_form_options,
     get_grade_groups,
     get_grade_students,
     get_grade_subjects,
@@ -229,7 +230,7 @@ class GradeCreateForm(forms.ModelForm):
     group = forms.ModelChoiceField(
         label='Группа',
         queryset=StudyGroup.objects.none(),
-        required=False,
+        required=True,
         empty_label='Выберите группу',
     )
 
@@ -273,10 +274,8 @@ class GradeCreateForm(forms.ModelForm):
         self.dependency_teacher_id = teacher.pk if teacher is not None else ''
         self.dependency_subject_id = subject.pk if subject is not None else ''
         self.dependency_academic_year_id = academic_year.pk if academic_year is not None else ''
-        self.fields['group'].widget.attrs['required'] = True
-        for field_name in ('group', 'student', 'subject', 'teacher'):
-            if field_name in self.fields:
-                self.fields[field_name].widget.attrs['data-searchable-select'] = '1'
+        if group is not None:
+            self.fields['group'].required = False
         self.fields['student'].error_messages['invalid_choice'] = (
             'Выбранный ученик недоступен для этой группы, предмета или учебного года.'
         )
@@ -299,36 +298,20 @@ class GradeCreateForm(forms.ModelForm):
             or initial_group
         )
         selected_subject = subject or self._selected_subject() or initial_subject
-        selected_teacher = teacher or self._selected_teacher()
-
-        group_queryset = get_grade_groups(
+        dependency_options = get_grade_form_options(
+            academic_year=selected_academic_year,
+            group=selected_group,
+            fixed_teacher=teacher,
             student=selected_student,
             subject=selected_subject,
-            teacher=selected_teacher,
-            academic_year=selected_academic_year,
+            students_queryset=students_queryset,
         )
+        group_queryset = dependency_options['groups']
         if group is not None:
             group_queryset = group_queryset.filter(pk=group.pk)
-
-        student_queryset = get_grade_students(
-            group=selected_group,
-            subject=selected_subject,
-            teacher=selected_teacher,
-            academic_year=selected_academic_year,
-            base_queryset=students_queryset,
-        )
-        subject_queryset = get_grade_subjects(
-            group=selected_group,
-            student=selected_student,
-            teacher=selected_teacher,
-            academic_year=selected_academic_year,
-        )
-        teacher_queryset = get_grade_teachers(
-            group=selected_group,
-            student=selected_student,
-            subject=selected_subject,
-            academic_year=selected_academic_year,
-        )
+        student_queryset = dependency_options['students']
+        subject_queryset = dependency_options['subjects']
+        teacher_queryset = dependency_options['teachers']
 
         if subject is not None:
             subject_queryset = subject_queryset.filter(pk=subject.pk)
@@ -351,6 +334,7 @@ class GradeCreateForm(forms.ModelForm):
             'student',
             allowed_submitted_queryset=get_grade_students(
                 group=selected_group,
+                teacher=teacher,
                 academic_year=selected_academic_year,
                 base_queryset=students_queryset,
             ),
@@ -361,7 +345,6 @@ class GradeCreateForm(forms.ModelForm):
             'subject',
             allowed_submitted_queryset=get_grade_subjects(
                 group=selected_group,
-                student=selected_student,
                 academic_year=selected_academic_year,
             ),
         )
@@ -431,12 +414,7 @@ class GradeCreateForm(forms.ModelForm):
         return teacher
 
     def _selected_group(self, selected_student=None, academic_year=None):
-        enrollment = (
-            selected_student.enrollment_for_year(academic_year)
-            if selected_student is not None
-            else None
-        )
-        group = enrollment.group if enrollment is not None else None
+        group = None
         raw_group_id = self.data.get(self.add_prefix('group')) or self.data.get('group')
         if raw_group_id:
             group = _safe_model_choice_value(StudyGroup, raw_group_id) or group
@@ -467,11 +445,6 @@ class GradeCreateForm(forms.ModelForm):
         subject = self.fixed_subject or cleaned_data.get('subject')
         teacher = self.teacher or cleaned_data.get('teacher')
         academic_year = self.fixed_academic_year or cleaned_data.get('academic_year')
-
-        if group is None and student is not None:
-            enrollment = student.enrollment_for_year(academic_year)
-            group = enrollment.group if enrollment is not None else None
-            cleaned_data['group'] = group
 
         if self.context_group is not None:
             cleaned_data['group'] = self.context_group

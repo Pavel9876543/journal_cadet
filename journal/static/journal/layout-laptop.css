@@ -1,0 +1,24 @@
+/* Ноутбук: компактная рабочая область 1024–1439 px. */
+@media (min-width: 1024px) and (max-width: 1439.98px) {
+    .main,
+    .topbar-inner,
+    .wrap {
+        width: 100%;
+        padding-inline: 20px;
+    }
+
+    .filter-form,
+    .grade-form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .filter-form .form-action,
+    .grade-form .form-action {
+        grid-column: 1 / -1;
+    }
+
+    body.change-form .form-row,
+    body.change-form .fieldBox {
+        min-width: 0;
+    }
+}

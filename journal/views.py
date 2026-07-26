@@ -61,6 +61,7 @@ from .forms import (
     get_teacher_subjects,
 )
 from .grade_options import (
+    get_grade_form_options,
     get_grade_groups,
     get_grade_students,
     get_grade_subjects,
@@ -173,6 +174,56 @@ def _grade_options_api_sync(request):
         )
     else:
         teacher = teacher_profile
+
+    if request.GET.get('mode') == 'grade':
+        fixed_teacher = teacher_profile if not can_manage_all_grades else None
+        options = get_grade_form_options(
+            academic_year=academic_year,
+            group=group,
+            fixed_teacher=fixed_teacher,
+            student=student,
+            subject=subject,
+        )
+        if group is not None and not options['groups'].filter(pk=group.pk).exists():
+            group = None
+        if student is not None and not options['students'].filter(pk=student.pk).exists():
+            student = None
+        if subject is not None and not options['subjects'].filter(pk=subject.pk).exists():
+            subject = None
+        options = get_grade_form_options(
+            academic_year=academic_year,
+            group=group,
+            fixed_teacher=fixed_teacher,
+            student=student,
+            subject=subject,
+        )
+        groups = options['groups'].select_related('academic_year')
+        students = options['students']
+        subjects = options['subjects']
+        teachers = options['teachers']
+        return JsonResponse({
+            'groups': [
+                {
+                    'id': item.pk,
+                    'label': item.name,
+                    'academic_year_id': item.academic_year_id,
+                }
+                for item in groups
+            ],
+            'students': [
+                {'id': item.pk, 'label': item.full_name}
+                for item in students
+            ],
+            'subjects': [
+                {'id': item.pk, 'label': item.name}
+                for item in subjects
+            ],
+            'teachers': [
+                {'id': item.pk, 'label': item.full_name}
+                for item in teachers
+            ],
+            'defaults': {},
+        })
 
     changed_field = request.GET.get('changed') or ''
     strict_options = request.GET.get('strict') == '1'
@@ -1941,8 +1992,12 @@ def _handle_grade_form(
         )
         posted_subject = _get_selected_object(subjects, request.POST.get('subject'))
 
+        form_data = request.POST.copy()
+        if posted_group is not None and not form_data.get('group'):
+            form_data['group'] = str(posted_group.pk)
+
         grade_form = GradeCreateForm(
-            request.POST,
+            form_data,
             teacher=teacher,
             initial_group=posted_group,
             academic_year=selected_academic_year,
@@ -1956,7 +2011,6 @@ def _handle_grade_form(
                 academic_year=selected_academic_year,
             )
 
-        messages.error(request, ' '.join(_form_error_messages(grade_form)))
         return grade_form
 
     return GradeCreateForm(
