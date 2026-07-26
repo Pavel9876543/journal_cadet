@@ -110,6 +110,7 @@
             select.replaceChildren(fragment);
             select.value = retained ? previousValue : '';
             select.disabled = items.length === 0;
+            select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
             return Boolean(previousValue && !retained);
         }
 

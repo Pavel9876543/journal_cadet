@@ -1636,6 +1636,10 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertNotIn('teacher', form.fields)
         self.assertNotIn('subject', form.fields)
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
+        self.assertEqual(
+            form.fields['student'].widget.attrs['data-searchable-select'],
+            '1',
+        )
 
     def test_grade_form_with_fixed_teacher_reports_invalid_subject_without_crash(self):
         data = self.create_base_journal()
@@ -1743,6 +1747,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertEqual(list(form.fields['teacher'].queryset), [data['teacher']])
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
         self.assertIn('journal/grade_dependencies.js', GradeAdmin.Media.js)
+        self.assertIn('journal/journal_interface.js', GradeAdmin.Media.js)
 
     def test_grade_edit_form_keeps_existing_date_value(self):
         form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
@@ -2167,6 +2172,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertIsNotNone(response.context['grade_form'])
         self.assertContains(response, 'id="grade-create-form"')
         self.assertContains(response, 'name="academic_year"')
+        self.assertContains(response, 'data-workspace-search')
         self.assertContains(
             response,
             (
@@ -6068,6 +6074,9 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.context['assessment_summary']['passed_count'], 1)
         self.assertContains(response, 'Сводка по сдаче произведений')
         self.assertContains(response, 'Не оценено: 0')
+        self.assertContains(response, 'Свернуть всё')
+        self.assertContains(response, 'Развернуть всё')
+        self.assertContains(response, 'id="teacher-assessment-blocks"')
         self.assertContains(
             response,
             '<details class="table-card collapsible-card" open>',

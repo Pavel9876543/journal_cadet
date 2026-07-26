@@ -281,6 +281,31 @@
             margin: 0;
         }
 
+        .workspace-search-bar {
+            display: grid;
+            grid-template-columns: minmax(260px, 1fr) auto;
+            gap: 12px;
+            align-items: end;
+            margin-bottom: 18px;
+        }
+
+        .select-search-input {
+            margin-bottom: 6px;
+            min-height: 36px;
+            font-size: 0.86rem;
+        }
+
+        .assessment-bulk-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 14px 0;
+        }
+
+        [data-collapsible-group][hidden] {
+            display: none;
+        }
+
         .filter-form {
             grid-template-columns: minmax(170px, 0.8fr) repeat(2, minmax(210px, 1fr)) auto;
             align-items: end;
@@ -875,8 +900,13 @@
 
             .filter-form,
             .grade-form,
-            .summary-grid {
+            .summary-grid,
+            .workspace-search-bar {
                 grid-template-columns: 1fr;
+            }
+
+            .assessment-bulk-actions button {
+                width: 100%;
             }
 
             select,
@@ -1376,7 +1406,7 @@
                 >
                     <div class="field">
                         <label for="academic_year">Учебный год</label>
-                        <select id="academic_year" name="academic_year">
+                        <select id="academic_year" name="academic_year" data-searchable-select data-search-placeholder="Найти учебный год">
                             <option value="">Текущий учебный год</option>
                             {% for academic_year in academic_years %}
                                 <option value="{{ academic_year.id }}" {% if selected_academic_year_id == academic_year.id|stringformat:"s" %}selected{% endif %}>
@@ -1389,7 +1419,7 @@
                     {% if role_mode == 'teacher' or role_mode == 'superuser' %}
                         <div class="field">
                             <label for="group">Группа</label>
-                            <select id="group" name="group">
+                            <select id="group" name="group" data-searchable-select data-search-placeholder="Найти группу">
                                 <option value="">Все группы</option>
                                 {% for group in groups %}
                                     <option value="{{ group.id }}" {% if selected_group_id == group.id|stringformat:"s" %}selected{% endif %}>
@@ -1407,7 +1437,7 @@
 
                     <div class="field">
                         <label for="subject">Предмет</label>
-                        <select id="subject" name="subject">
+                        <select id="subject" name="subject" data-searchable-select data-search-placeholder="Найти предмет">
                             <option value="">Все предметы</option>
                             {% for subject in subjects %}
                                 <option value="{{ subject.id }}" {% if selected_subject_id == subject.id|stringformat:"s" %}selected{% endif %}>
@@ -1429,6 +1459,20 @@
                     </div>
                     <div class="dependency-status" data-grade-options-status role="status" aria-live="polite"></div>
                 </form>
+            </section>
+
+            <section class="workspace-search-bar" aria-label="Быстрый поиск по данным журнала">
+                <div class="field">
+                    <label for="workspace_search">Быстрый поиск</label>
+                    <input
+                        id="workspace_search"
+                        type="search"
+                        data-workspace-search
+                        placeholder="Ученик, преподаватель, группа, предмет, произведение или оценка"
+                        autocomplete="off"
+                    >
+                </div>
+                <div class="dependency-status" data-workspace-search-status role="status" aria-live="polite"></div>
             </section>
 
             <section class="summary-grid" aria-label="Сводка">
@@ -1605,7 +1649,7 @@
                         {% if selected_subject_id %}<input type="hidden" name="subject" value="{{ selected_subject_id }}">{% endif %}
                         <div class="field">
                             <label for="assessment_academic_year">Учебный год</label>
-                            <select id="assessment_academic_year" name="academic_year">
+                            <select id="assessment_academic_year" name="academic_year" data-searchable-select data-search-placeholder="Найти учебный год">
                                 {% for academic_year in assessment_filter_options.academic_years %}
                                     <option value="{{ academic_year.id }}" {% if assessment_selection.academic_year_id == academic_year.id %}selected{% endif %}>{{ academic_year.name }}</option>
                                 {% endfor %}
@@ -1617,7 +1661,7 @@
                                 <input id="assessment_teacher" type="text" value="{{ assessment_fixed_teacher.full_name }}" readonly>
                                 <input type="hidden" name="assessment_teacher" value="{{ assessment_fixed_teacher.id }}">
                             {% else %}
-                                <select id="assessment_teacher" name="assessment_teacher">
+                                <select id="assessment_teacher" name="assessment_teacher" data-searchable-select data-search-placeholder="Найти преподавателя">
                                     <option value="">Все преподаватели</option>
                                     {% for teacher in assessment_filter_options.teachers %}
                                         <option value="{{ teacher.id }}" {% if assessment_selection.teacher_id == teacher.id %}selected{% endif %}>{{ teacher.full_name }}</option>
@@ -1627,7 +1671,7 @@
                         </div>
                         <div class="field">
                             <label for="assessment_subject">Предмет</label>
-                            <select id="assessment_subject" name="assessment_subject">
+                            <select id="assessment_subject" name="assessment_subject" data-searchable-select data-search-placeholder="Найти предмет">
                                 <option value="">Все предметы</option>
                                 {% for subject in assessment_filter_options.subjects %}
                                     <option value="{{ subject.id }}" {% if assessment_selection.subject_id == subject.id %}selected{% endif %}>{{ subject.name }}</option>
@@ -1636,7 +1680,7 @@
                         </div>
                         <div class="field">
                             <label for="assessment_study_group">Учебная группа</label>
-                            <select id="assessment_study_group" name="assessment_study_group">
+                            <select id="assessment_study_group" name="assessment_study_group" data-searchable-select data-search-placeholder="Найти учебную группу">
                                 <option value="">Все группы</option>
                                 {% for group in assessment_filter_options.study_groups %}
                                     <option value="{{ group.id }}" {% if assessment_selection.study_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
@@ -1645,7 +1689,7 @@
                         </div>
                         <div class="field">
                             <label for="assessment_group">Группа произведений</label>
-                            <select id="assessment_group" name="assessment_group">
+                            <select id="assessment_group" name="assessment_group" data-searchable-select data-search-placeholder="Найти группу произведений">
                                 <option value="">Все группы произведений</option>
                                 {% for group in assessment_filter_options.assessment_groups %}
                                     <option value="{{ group.id }}" {% if assessment_selection.assessment_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
@@ -1654,7 +1698,7 @@
                         </div>
                         <div class="field">
                             <label for="assessment_item">Произведение</label>
-                            <select id="assessment_item" name="assessment_item">
+                            <select id="assessment_item" name="assessment_item" data-searchable-select data-search-placeholder="Найти произведение">
                                 <option value="">Все произведения</option>
                                 {% for item in assessment_filter_options.items %}
                                     <option value="{{ item.id }}" {% if assessment_selection.item_id == item.id %}selected{% endif %}>{{ item.title }}</option>
@@ -1663,7 +1707,7 @@
                         </div>
                         <div class="field">
                             <label for="assessment_student">Ученик</label>
-                            <select id="assessment_student" name="assessment_student">
+                            <select id="assessment_student" name="assessment_student" data-searchable-select data-search-placeholder="Найти ученика">
                                 <option value="">Все ученики</option>
                                 {% for student in assessment_filter_options.students %}
                                     <option value="{{ student.id }}" {% if assessment_selection.student_id == student.id %}selected{% endif %}>{{ student.full_name }}</option>
@@ -1682,6 +1726,11 @@
                         </div>
                         <div class="dependency-status" data-assessment-filter-status role="status" aria-live="polite"></div>
                     </form>
+                    <div class="assessment-bulk-actions" aria-label="Управление блоками сдачи произведений">
+                        <button type="button" data-collapse-target="teacher-assessment-blocks" data-collapse-action="collapse">Свернуть всё</button>
+                        <button type="button" class="button button-secondary" data-collapse-target="teacher-assessment-blocks" data-collapse-action="expand" disabled>Развернуть всё</button>
+                    </div>
+                    <div id="teacher-assessment-blocks" data-collapsible-group>
                     <div class="assessment-summary-grid" aria-label="Сводка по сдаче произведений">
                         <div class="assessment-summary-card"><strong>{{ assessment_summary.item_count }}</strong><span>произведений</span></div>
                         <div class="assessment-summary-card"><strong>{{ assessment_summary.student_count }}</strong><span>учеников</span></div>
@@ -1760,6 +1809,7 @@
                     {% empty %}
                         <div class="empty-state">По выбранным фильтрам произведения и ученики не найдены.</div>
                     {% endfor %}
+                    </div>
                 </section>
             {% endif %}
 
@@ -1769,6 +1819,11 @@
                         <h2>Мои произведения</h2>
                         <p>Прогресс сгруппирован по предметам и сформирован из назначенных вам групп произведений.</p>
                     </div>
+                    <div class="assessment-bulk-actions" aria-label="Управление блоками произведений">
+                        <button type="button" data-collapse-target="student-assessment-blocks" data-collapse-action="collapse">Свернуть всё</button>
+                        <button type="button" class="button button-secondary" data-collapse-target="student-assessment-blocks" data-collapse-action="expand" disabled>Развернуть всё</button>
+                    </div>
+                    <div id="student-assessment-blocks" data-collapsible-group>
                     {% for section in assessment_subject_sections %}
                         <details class="table-card assessment-subject-card collapsible-card" open>
                             <summary class="table-card-header">
@@ -1836,6 +1891,7 @@
                             </div>
                         </details>
                     {% endfor %}
+                    </div>
                 </section>
             {% endif %}
 
@@ -2008,6 +2064,7 @@
 
 <script src="{% static 'journal/grade_dependencies.js' %}"></script>
 <script src="{% static 'journal/assessment_filters.js' %}"></script>
+<script src="{% static 'journal/journal_interface.js' %}"></script>
 <script>
     (function () {
         const key = 'journal-scroll-y';

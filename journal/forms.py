@@ -274,6 +274,9 @@ class GradeCreateForm(forms.ModelForm):
         self.dependency_subject_id = subject.pk if subject is not None else ''
         self.dependency_academic_year_id = academic_year.pk if academic_year is not None else ''
         self.fields['group'].widget.attrs['required'] = True
+        for field_name in ('group', 'student', 'subject', 'teacher'):
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs['data-searchable-select'] = '1'
         self.fields['student'].error_messages['invalid_choice'] = (
             'Выбранный ученик недоступен для этой группы, предмета или учебного года.'
         )

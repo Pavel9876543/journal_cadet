@@ -653,7 +653,10 @@ class GradeAdminForm(forms.ModelForm):
         dependency_url = reverse('grade_options_api')
         for field_name in ('group', 'student', 'subject', 'teacher'):
             if field_name in self.fields:
-                self.fields[field_name].widget.attrs['data-grade-options-url'] = dependency_url
+                self.fields[field_name].widget.attrs.update({
+                    'data-grade-options-url': dependency_url,
+                    'data-searchable-select': '1',
+                })
 
     def _include_submitted_choice(self, queryset, model, raw_value):
         if not raw_value:
@@ -769,6 +772,7 @@ class SubjectResultAdminForm(forms.ModelForm):
                 student_id,
             )
             self.fields['student'].widget.attrs['data-grade-options-url'] = reverse('grade_options_api')
+            self.fields['student'].widget.attrs['data-searchable-select'] = '1'
 
         if 'subject' in self.fields:
             self.fields['subject'].queryset = self._include_selected_choice(
@@ -781,6 +785,7 @@ class SubjectResultAdminForm(forms.ModelForm):
             )
             if 'student' not in self.fields:
                 self.fields['subject'].widget.attrs['data-grade-options-url'] = reverse('grade_options_api')
+            self.fields['subject'].widget.attrs['data-searchable-select'] = '1'
 
         if 'academic_year' in self.fields:
             self.fields['academic_year'].queryset = self._include_selected_choice(
@@ -941,7 +946,10 @@ class GroupSubjectAdminForm(forms.ModelForm):
         fields = '__all__'
 
     class Media:
-        js = ('journal/admin_assignment_dependencies.js',)
+        js = (
+            'journal/journal_interface.js',
+            'journal/admin_assignment_dependencies.js',
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -997,6 +1005,7 @@ class GroupSubjectAdminForm(forms.ModelForm):
                 self.fields[field_name].widget.attrs.update({
                     'data-assignment-options-url': url,
                     'data-assignment-type': assignment_type,
+                    'data-searchable-select': '1',
                 })
 
     def clean(self):
@@ -1030,7 +1039,10 @@ class StudentSubjectAdminForm(forms.ModelForm):
         fields = '__all__'
 
     class Media:
-        js = ('journal/admin_assignment_dependencies.js',)
+        js = (
+            'journal/journal_interface.js',
+            'journal/admin_assignment_dependencies.js',
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1090,6 +1102,7 @@ class StudentSubjectAdminForm(forms.ModelForm):
                 self.fields[field_name].widget.attrs.update({
                     'data-assignment-options-url': url,
                     'data-assignment-type': assignment_type,
+                    'data-searchable-select': '1',
                 })
 
     def clean(self):
@@ -1132,7 +1145,10 @@ class AssessmentDependencyFormMixin:
     dependency_fields = ()
 
     class Media:
-        js = ('journal/admin_assessment_dependencies.js',)
+        js = (
+            'journal/journal_interface.js',
+            'journal/admin_assessment_dependencies.js',
+        )
 
     def _raw_value(self, field_name):
         if self.is_bound:
@@ -1186,6 +1202,7 @@ class AssessmentDependencyFormMixin:
                 self.fields[field_name].widget.attrs.update({
                     'data-assessment-options-url': endpoint,
                     'data-assessment-type': self.assessment_type,
+                    'data-searchable-select': '1',
                 })
                 for attribute_name, data_attribute in parent_attrs.items():
                     parent = getattr(self, attribute_name, None)
@@ -1882,7 +1899,10 @@ class GradeInline(SelectedAcademicYearGradeInlineMixin, ArchivedAcademicYearInli
     classes = ('collapse',)
 
     class Media:
-        js = ('journal/grade_dependencies.js',)
+        js = (
+            'journal/journal_interface.js',
+            'journal/grade_dependencies.js',
+        )
 
 class SubjectResultInline(
     SelectedAcademicYearSubjectResultInlineMixin,
@@ -1900,7 +1920,10 @@ class SubjectResultInline(
     verbose_name_plural = 'Итоги по предметам'
 
     class Media:
-        js = ('journal/grade_dependencies.js',)
+        js = (
+            'journal/journal_interface.js',
+            'journal/grade_dependencies.js',
+        )
 
     def get_formset(self, request, obj=None, **kwargs):
         parent_student = obj
@@ -3264,7 +3287,10 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
     )
 
     class Media:
-        js = ('journal/grade_dependencies.js',)
+        js = (
+            'journal/journal_interface.js',
+            'journal/grade_dependencies.js',
+        )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)

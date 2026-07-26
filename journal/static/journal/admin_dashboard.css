@@ -1748,3 +1748,8 @@ body.change-form .inline-group .card-header {
         text-overflow: ellipsis;
     }
 }
+.select-search-input {
+    display: block;
+    width: 100%;
+    margin: 0 0 0.4rem;
+}

@@ -223,6 +223,7 @@
             }
             select.disabled = items.length === 0 && !select.value;
             syncSelectWidget(select);
+            select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
             return valueChanged;
         }
 
