@@ -1986,6 +1986,22 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
             password='Pass12345!',
         )
 
+    def create_alternative_group_assignment(self):
+        group = self.create_group(name='Другая группа', academic_year=self.data['year'])
+        student = self.create_student(
+            full_name='Другой Ученик',
+            group=group,
+            instrument=self.data['student'].instrument,
+            username='other_group_student',
+        )
+        subject = self.create_subject(name='Другой предмет')
+        self.create_group_assignment(
+            group=group,
+            subject=subject,
+            teacher=self.data['other_teacher'],
+        )
+        return group, student, subject
+
     def test_admin_options_narrow_teachers_for_selected_assignment(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
@@ -2011,6 +2027,98 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         )
         self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
         self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
+
+    def test_selecting_group_first_limits_students_and_subjects(self):
+        _, other_student, other_subject = self.create_alternative_group_assignment()
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {'group': self.data['group'].pk, 'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item['id'] for item in payload['students']],
+            [self.data['student'].pk],
+        )
+        self.assertNotIn(other_student.pk, [item['id'] for item in payload['students']])
+        self.assertIn(
+            self.data['solfeggio'].pk,
+            [item['id'] for item in payload['subjects']],
+        )
+        self.assertNotIn(other_subject.pk, [item['id'] for item in payload['subjects']])
+
+    def test_selecting_subject_first_limits_groups_and_students(self):
+        other_group, other_student, other_subject = self.create_alternative_group_assignment()
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {'subject': other_subject.pk, 'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([item['id'] for item in payload['groups']], [other_group.pk])
+        self.assertEqual([item['id'] for item in payload['students']], [other_student.pk])
+
+    def test_selecting_student_first_limits_group_and_subjects(self):
+        other_subject = self.create_subject(
+            name='Индивидуальный предмет',
+            is_specialty=True,
+        )
+        self.create_individual_assignment(
+            student=self.data['student'],
+            subject=other_subject,
+            teacher=self.data['other_teacher'],
+        )
+        unrelated_group = self.create_group(
+            name='Другая группа',
+            academic_year=self.data['year'],
+        )
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {'student': self.data['student'].pk, 'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item['id'] for item in payload['groups']],
+            [self.data['group'].pk],
+        )
+        self.assertNotIn(unrelated_group.pk, [item['id'] for item in payload['groups']])
+        subject_ids = [item['id'] for item in payload['subjects']]
+        self.assertIn(self.data['solfeggio'].pk, subject_ids)
+        self.assertIn(other_subject.pk, subject_ids)
+
+    def test_changing_subject_drops_incompatible_group_and_student(self):
+        other_group, other_student, other_subject = self.create_alternative_group_assignment()
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'group': self.data['group'].pk,
+                'student': self.data['student'].pk,
+                'subject': other_subject.pk,
+                'academic_year': self.data['year'].pk,
+                'changed': 'subject',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn(other_subject.pk, [item['id'] for item in payload['subjects']])
+        self.assertNotIn(self.data['group'].pk, [item['id'] for item in payload['groups']])
+        self.assertNotIn(self.data['student'].pk, [item['id'] for item in payload['students']])
+        self.assertNotIn(other_group.pk, [item['id'] for item in payload['groups']])
+        self.assertNotIn(other_student.pk, [item['id'] for item in payload['students']])
 
     def test_options_keep_currently_selected_values_when_other_field_changes(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')

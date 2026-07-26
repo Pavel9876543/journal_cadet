@@ -2,6 +2,29 @@
     'use strict';
 
     var FIELD_NAMES = ['group', 'student', 'subject', 'teacher'];
+    var FORM_STATES = new WeakMap();
+
+    function formDependencyState(form, scope) {
+        var formState = FORM_STATES.get(form);
+        if (!formState) {
+            formState = {
+                controllers: [],
+                submitControls: Array.prototype.map.call(
+                    form.querySelectorAll(
+                        'button:not([type]), button[type="submit"], input[type="submit"]'
+                    ),
+                    function (control) {
+                        return {control: control, initiallyDisabled: control.disabled};
+                    }
+                )
+            };
+            FORM_STATES.set(form, formState);
+        }
+
+        var controller = {scope: scope, loading: false, error: false};
+        formState.controllers.push(controller);
+        return {form: formState, controller: controller};
+    }
 
     function inlinePrefix(name) {
         var match = String(name || '').match(/^(.*-\d+)-[^-]+$/);
@@ -65,6 +88,7 @@
         var fixedAcademicYear = form.dataset.fixedAcademicYear || '';
         var activeRequest = null;
         var requestSequence = 0;
+        var dependencyState = formDependencyState(form, scope);
 
         function handleChange(name) {
             if (name === 'student') {
@@ -123,9 +147,25 @@
             return url;
         }
 
-        function setLoading(isLoading) {
-            form.setAttribute('aria-busy', isLoading ? 'true' : 'false');
-            var status = form.querySelector('[data-grade-options-status]');
+        function statusElement() {
+            return scope.querySelector('[data-grade-options-status]')
+                || form.querySelector('[data-grade-options-status]');
+        }
+
+        function setLoading(isLoading, hasError) {
+            dependencyState.controller.loading = isLoading;
+            dependencyState.controller.error = Boolean(hasError);
+            var submissionBlocked = dependencyState.form.controllers.some(function (controller) {
+                return controller.loading || controller.error;
+            });
+            var formIsLoading = dependencyState.form.controllers.some(function (controller) {
+                return controller.loading;
+            });
+            dependencyState.form.submitControls.forEach(function (item) {
+                item.control.disabled = item.initiallyDisabled || submissionBlocked;
+            });
+            form.setAttribute('aria-busy', formIsLoading ? 'true' : 'false');
+            var status = statusElement();
             if (!status && source && source.parentNode) {
                 status = document.createElement('span');
                 status.dataset.gradeOptionsStatus = '1';
@@ -289,7 +329,7 @@
                         }
                     });
                     selectionWasCleared = applyDefaults(payload.defaults || {}, changedField) || selectionWasCleared;
-                    setLoading(false);
+                    setLoading(false, false);
                     if (selectionWasCleared) {
                         loadOptions(changedField);
                     }
@@ -298,8 +338,8 @@
                     if (error.name === 'AbortError') {
                         return;
                     }
-                    setLoading(false);
-                    var status = form.querySelector('[data-grade-options-status]');
+                    setLoading(false, true);
+                    var status = statusElement();
                     if (status) {
                         status.textContent = 'Не удалось обновить доступные варианты. Проверьте выбранные значения и попробуйте еще раз.';
                         status.classList.add('journal-admin-field-status--error');
