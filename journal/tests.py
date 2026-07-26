@@ -22,6 +22,12 @@ from django.urls import reverse
 from openpyxl import load_workbook
 
 from journal.academic_year_context import filter_temporary_credentials_for_year
+from journal.assignment_availability import (
+    available_groups,
+    available_students,
+    available_subjects,
+    available_teachers,
+)
 from journal.assessment_services import (
     available_assessment_items_for_student,
     set_assessment_result,
@@ -1917,6 +1923,53 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
         self.assertIn(
             data['group'],
             get_grade_groups(teacher=data['teacher'], academic_year=data['year']),
+        )
+
+    def test_assignment_availability_supports_standard_and_element_modes(self):
+        data = self.create_base_journal()
+        element_subject = Subject.objects.create(
+            name='Оркестровые партии',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+        )
+        GroupSubject.objects.create(
+            group=data['group'],
+            subject=element_subject,
+            teacher=data['teacher'],
+        )
+
+        self.assertEqual(
+            list(available_groups(
+                subject=element_subject,
+                teacher=data['teacher'],
+                academic_year=data['year'],
+            )),
+            [data['group']],
+        )
+        self.assertEqual(
+            list(available_students(
+                group=data['group'],
+                subject=element_subject,
+                teacher=data['teacher'],
+                academic_year=data['year'],
+            )),
+            [data['student']],
+        )
+        self.assertIn(
+            element_subject,
+            available_subjects(teacher=data['teacher'], academic_year=data['year']),
+        )
+        self.assertEqual(
+            list(available_teachers(
+                group=data['group'],
+                student=data['student'],
+                subject=element_subject,
+                academic_year=data['year'],
+            )),
+            [data['teacher']],
+        )
+        self.assertNotIn(
+            element_subject,
+            get_grade_subjects(teacher=data['teacher'], academic_year=data['year']),
         )
 
 
@@ -5760,6 +5813,54 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         )
         self.assertEqual([row['id'] for row in payload['teachers']], [self.teacher.pk])
         self.assertEqual(payload['defaults']['assessed_by_id'], self.teacher.pk)
+
+    def test_assessment_item_options_filter_subjects_by_responsible_teacher(self):
+        other_subject = Subject.objects.create(
+            name='Другая оркестровая дисциплина',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+        )
+        other_teacher = self.create_teacher(
+            full_name='Дирижёр Другой',
+            username='assessment_options_other_teacher',
+        )
+        GroupSubject.objects.create(
+            group=self.group,
+            subject=other_subject,
+            teacher=other_teacher,
+        )
+        self.assertEqual(list(self.teacher.qualified_subjects.all()), [self.subject])
+        self.assertEqual(
+            list(Subject.objects.filter(qualified_teachers=self.teacher)),
+            [self.subject],
+        )
+        superuser = User.objects.create_superuser(
+            username='assessment_item_options_admin',
+            email='item-options-admin@example.com',
+            password='AdminPass123!',
+        )
+        self.client.force_login(superuser)
+
+        response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'item',
+                'academic_year': self.year.pk,
+                'responsible_teacher': self.teacher.pk,
+                'changed': 'responsible_teacher',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [row['id'] for row in payload['subjects']],
+            [self.subject.pk],
+        )
+        self.assertIn(
+            self.teacher.pk,
+            [row['id'] for row in payload['teachers']],
+        )
 
 
     def test_teacher_journal_shows_compact_assessment_summary(self):

@@ -276,6 +276,9 @@ def _assessment_options_api_sync(request):
     if assessment_type not in {'item', 'student_group', 'rule', 'result'}:
         return JsonResponse({'error': 'Не удалось определить тип связанных полей.'}, status=400)
 
+    changed_field = request.GET.get('changed') or ''
+    strict_options = request.GET.get('strict') == '1'
+
     selected_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
     academic_year = _get_selected_object(
         AcademicYear.objects.all(), request.GET.get('academic_year')
@@ -304,18 +307,22 @@ def _assessment_options_api_sync(request):
         StudentEnrollment.objects.select_related('student', 'group', 'academic_year'),
         request.GET.get('enrollment'),
     )
-    assessed_by = _get_selected_object(
-        Teacher.objects.all(), request.GET.get('assessed_by')
+    teacher_field_name = 'responsible_teacher' if assessment_type == 'item' else 'assessed_by'
+    selected_teacher = _get_selected_object(
+        Teacher.objects.all(), request.GET.get(teacher_field_name)
     )
 
-    if item is not None:
+    if item is not None and (assessment_type == 'result' or changed_field == 'item'):
         group = item.group
         subject = item.subject
         academic_year = item.academic_year
 
     if group is not None:
-        subject = group.subject
-        academic_year = group.academic_year
+        group_field_name = 'assessment_group' if assessment_type in {'student_group', 'rule'} else 'group'
+        if changed_field == group_field_name or subject is None:
+            subject = group.subject
+        if changed_field == group_field_name or academic_year is None:
+            academic_year = group.academic_year
 
     years = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
     if academic_year is not None:
@@ -345,6 +352,10 @@ def _assessment_options_api_sync(request):
         groups = groups.filter(subject=subject)
         teachers = teachers.filter(qualified_subjects=subject)
         items = items.filter(subject=subject)
+    if selected_teacher is not None and assessment_type == 'item':
+        subjects = subjects.filter(qualified_teachers=selected_teacher)
+        groups = groups.filter(subject__qualified_teachers=selected_teacher)
+        items = items.filter(responsible_teacher=selected_teacher)
     if group is not None:
         items = items.filter(group=group)
     if assessment_type == 'student_group' and group is not None:
@@ -377,9 +388,9 @@ def _assessment_options_api_sync(request):
             )
             if item.responsible_teacher_id:
                 teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
-                if assessed_by is not None and assessed_by.pk != item.responsible_teacher_id:
+                if selected_teacher is not None and selected_teacher.pk != item.responsible_teacher_id:
                     teachers = Teacher.objects.filter(
-                        Q(pk=item.responsible_teacher_id) | Q(pk=assessed_by.pk)
+                        Q(pk=item.responsible_teacher_id) | Q(pk=selected_teacher.pk)
                     )
         elif academic_year is not None:
             enrollments = StudentEnrollment.objects.filter(
@@ -388,18 +399,29 @@ def _assessment_options_api_sync(request):
                 student__is_active=True,
             ).select_related('student', 'group', 'academic_year')
 
-    groups = _include_selected_option(groups, AssessmentGroup, group).distinct().order_by(
+    if not strict_options or changed_field in {'group', 'assessment_group'}:
+        groups = _include_selected_option(groups, AssessmentGroup, group)
+    if not strict_options or changed_field == 'subject':
+        subjects = _include_selected_option(subjects, Subject, subject)
+    if not strict_options or changed_field == 'student':
+        students = _include_selected_option(students, Student, student)
+    if not strict_options or changed_field == 'item':
+        items = _include_selected_option(items, AssessmentItem, item)
+    if not strict_options or changed_field == teacher_field_name:
+        teachers = _include_selected_option(teachers, Teacher, selected_teacher)
+    if not strict_options or changed_field == 'enrollment':
+        enrollments = _include_selected_option(enrollments, StudentEnrollment, enrollment)
+
+    groups = groups.distinct().order_by(
         'subject__name', 'sort_order', 'name'
     )
-    subjects = _include_selected_option(subjects, Subject, subject).distinct().order_by('name')
-    students = _include_selected_option(students, Student, student).distinct().order_by('full_name')
+    subjects = subjects.distinct().order_by('name')
+    students = students.distinct().order_by('full_name')
     teachers = teachers.distinct().order_by('full_name')
-    items = _include_selected_option(items, AssessmentItem, item).distinct().order_by(
+    items = items.distinct().order_by(
         'subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title'
     )
-    enrollments = _include_selected_option(
-        enrollments, StudentEnrollment, enrollment
-    ).distinct().order_by('full_name', 'pk')
+    enrollments = enrollments.distinct().order_by('full_name', 'pk')
 
     defaults = {}
     if academic_year is not None:
