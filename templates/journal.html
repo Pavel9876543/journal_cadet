@@ -1369,7 +1369,11 @@
             </div>
         {% else %}
             <section class="toolbar" aria-label="Фильтры журнала">
-                <form method="get" class="filter-form">
+                <form
+                    method="get"
+                    class="filter-form"
+                    data-grade-options-url="{% url 'grade_options_api' %}"
+                >
                     <div class="field">
                         <label for="academic_year">Учебный год</label>
                         <select id="academic_year" name="academic_year">
@@ -1423,6 +1427,7 @@
                             <span>Сбросить</span>
                         </a>
                     </div>
+                    <div class="dependency-status" data-grade-options-status role="status" aria-live="polite"></div>
                 </form>
             </section>
 
@@ -1483,6 +1488,17 @@
                         >
                             {% csrf_token %}
                             <input type="hidden" name="action" value="add_grade">
+                            <div class="field">
+                                <label for="id_academic_year">Учебный год</label>
+                                {{ grade_form.academic_year }}
+                                {% if grade_form.academic_year.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.academic_year.errors %}
+                                            <div class="field-error" data-error-for="academic_year">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
                             <div class="field">
                                 <label for="id_group">Группа</label>
                                 {{ grade_form.group }}

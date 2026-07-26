@@ -256,6 +256,8 @@ class GradeCreateForm(forms.ModelForm):
         *args,
         teacher: Optional[Teacher] = None,
         group: Optional[StudyGroup] = None,
+        initial_group: Optional[StudyGroup] = None,
+        initial_subject: Optional[Subject] = None,
         subject: Optional[Subject] = None,
         students_queryset=None,
         academic_year: Optional[AcademicYear] = None,
@@ -264,6 +266,8 @@ class GradeCreateForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.teacher = teacher
         self.context_group = group
+        self.initial_group = initial_group
+        self.initial_subject = initial_subject
         self.fixed_subject = subject
         self.fixed_academic_year = academic_year
         self.dependency_teacher_id = teacher.pk if teacher is not None else ''
@@ -286,11 +290,12 @@ class GradeCreateForm(forms.ModelForm):
 
         selected_student = self._selected_student()
         selected_academic_year = academic_year or self._selected_academic_year()
-        selected_group = group or self._selected_group(
-            selected_student,
-            selected_academic_year,
+        selected_group = (
+            group
+            or self._selected_group(selected_student, selected_academic_year)
+            or initial_group
         )
-        selected_subject = subject or self._selected_subject()
+        selected_subject = subject or self._selected_subject() or initial_subject
         selected_teacher = teacher or self._selected_teacher()
 
         group_queryset = get_grade_groups(
@@ -325,6 +330,8 @@ class GradeCreateForm(forms.ModelForm):
         if subject is not None:
             subject_queryset = subject_queryset.filter(pk=subject.pk)
             self.fields['subject'].initial = subject
+        elif initial_subject is not None:
+            self.fields['subject'].initial = initial_subject
         if teacher is not None:
             teacher_queryset = teacher_queryset.filter(pk=teacher.pk)
             self.fields['teacher'].initial = teacher

@@ -13,7 +13,6 @@
         var sources = container.querySelectorAll(
             'form[data-grade-options-url], [data-grade-options-url]:not(form)'
         );
-        var initializedKeys = new Set();
 
         sources.forEach(function (source) {
             var form = source.matches('form') ? source : source.closest('form');
@@ -23,11 +22,10 @@
 
             var prefix = source.matches('form') ? '' : inlinePrefix(source.getAttribute('name'));
             var scope = prefix ? (source.closest('tr') || source.closest('.dynamic-subject_results') || form) : form;
-            var key = prefix || 'form';
-            if (initializedKeys.has(key)) {
+            if (scope.dataset.gradeOptionsInitialized === '1') {
                 return;
             }
-            initializedKeys.add(key);
+            scope.dataset.gradeOptionsInitialized = '1';
             initializeForm(scope, source.dataset.gradeOptionsUrl || form.dataset.gradeOptionsUrl, prefix, form, source);
         });
     }

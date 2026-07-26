@@ -53,7 +53,6 @@ from .forms import (
     GradeCreateForm,
     get_student_allowed_subjects,
     get_student_subject_teachers,
-    get_students_for_group_subject,
     get_teacher_subjects,
 )
 from .grade_options import (
@@ -1787,31 +1786,18 @@ def _handle_grade_form(
     teacher: Teacher | None = None,
 ):
     if request.method == 'POST' and request.POST.get('action') == 'add_grade':
-        posted_group = selected_group or _get_selected_object(groups, request.POST.get('group'))
-        posted_subject = selected_subject or _get_selected_object(subjects, request.POST.get('subject'))
-
-        if posted_group is None:
-            messages.error(request, 'Выберите группу перед сохранением оценки.')
-            return GradeCreateForm(
-                request.POST,
-                teacher=teacher,
-                academic_year=selected_academic_year,
-            )
-
-        students_queryset = None
-        if posted_subject is not None:
-            students_queryset = get_students_for_group_subject(
-                group=posted_group,
-                subject=posted_subject,
-                teacher=teacher,
-                academic_year=selected_academic_year,
-            )
+        raw_group_id = request.POST.get('group')
+        posted_group = (
+            _get_selected_object(groups, raw_group_id)
+            if raw_group_id
+            else selected_group
+        )
+        posted_subject = _get_selected_object(subjects, request.POST.get('subject'))
 
         grade_form = GradeCreateForm(
             request.POST,
             teacher=teacher,
-            group=posted_group,
-            students_queryset=students_queryset,
+            initial_group=posted_group,
             academic_year=selected_academic_year,
         )
         if grade_form.is_valid():
@@ -1826,23 +1812,11 @@ def _handle_grade_form(
         messages.error(request, ' '.join(_form_error_messages(grade_form)))
         return grade_form
 
-    if selected_group is None:
-        return None
-
-    students_queryset = None
-    if selected_subject is not None:
-        students_queryset = get_students_for_group_subject(
-            group=selected_group,
-            subject=selected_subject,
-            teacher=teacher,
-            academic_year=selected_academic_year,
-        )
-
     return GradeCreateForm(
         None,
         teacher=teacher,
-        group=selected_group,
-        students_queryset=students_queryset,
+        initial_group=selected_group,
+        initial_subject=selected_subject,
         academic_year=selected_academic_year,
     )
 

@@ -2164,6 +2164,9 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['journal_tables'])
+        self.assertIsNotNone(response.context['grade_form'])
+        self.assertContains(response, 'id="grade-create-form"')
+        self.assertContains(response, 'name="academic_year"')
         self.assertContains(
             response,
             (
@@ -2502,6 +2505,44 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 teacher=self.data['teacher'],
                 date=date(2025, 10, 16),
                 value='5',
+            ).exists(),
+        )
+
+    def test_grade_post_uses_form_selection_instead_of_page_subject_filter(self):
+        second_student = self.create_student(
+            full_name='Второй Ученик',
+            group=self.data['group'],
+            instrument=self.data['instrument'],
+            username='student_second_grade_form',
+        )
+        self.client.login(username='admin_test', password='Pass12345!')
+
+        response = self.client.post(
+            (
+                f'{reverse("journal")}?group={self.data["group"].pk}'
+                f'&subject={self.data["specialty"].pk}'
+                f'&academic_year={self.data["year"].pk}'
+            ),
+            data={
+                'action': 'add_grade',
+                'group': self.data['group'].pk,
+                'student': second_student.pk,
+                'subject': self.data['solfeggio'].pk,
+                'teacher': self.data['teacher'].pk,
+                'academic_year': self.data['year'].pk,
+                'date': '2025-10-17',
+                'value': '4+',
+                'comment': '',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Grade.objects.filter(
+                student=second_student,
+                subject=self.data['solfeggio'],
+                teacher=self.data['teacher'],
+                value='4+',
             ).exists(),
         )
 
