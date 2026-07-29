@@ -4764,6 +4764,25 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
             response.content.decode('utf-8'),
         )
 
+    def test_registration_page_shows_friendly_csrf_error(self):
+        csrf_client = Client(enforce_csrf_checks=True, HTTP_HOST='127.0.0.1')
+
+        response = csrf_client.post(
+            reverse('course_registration'),
+            data=self.application_form_payload(),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(response, 'Срок действия формы истёк', status_code=403)
+        self.assertContains(
+            response,
+            'Обновите страницу и повторите действие',
+            status_code=403,
+        )
+        self.assertContains(response, 'Обновить страницу', status_code=403)
+        self.assertNotContains(response, 'CSRF', status_code=403)
+        self.assertFalse(CourseApplication.objects.exists())
+
     def test_duplicate_phone_is_checked_inside_academic_year_only(self):
         first_application = CourseApplication.objects.create(**self.application_payload())
 
@@ -4885,6 +4904,18 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
             )
 
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEqual(
+            response.json(),
+            {
+                'success': False,
+                'code': 'csrf_failed',
+                'message': (
+                    'Не удалось подтвердить отправку формы. '
+                    'Обновите страницу и повторите действие.'
+                ),
+            },
+        )
         self.assertEqual(CourseApplication.objects.count(), 0)
 
     def test_registration_api_rejects_duplicate_phone(self):

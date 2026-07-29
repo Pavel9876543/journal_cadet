@@ -108,6 +108,36 @@ def healthcheck_view(request):
     return JsonResponse({'status': 'ok'})
 
 
+def csrf_failure_view(request, reason=''):
+    message = (
+        'Не удалось подтвердить отправку формы. Обновите страницу и повторите действие.'
+    )
+    accepts_json = 'application/json' in request.headers.get('Accept', '')
+    is_api_request = (
+        request.path.startswith('/api/')
+        or accepts_json
+        or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    )
+    if is_api_request:
+        return JsonResponse(
+            {
+                'success': False,
+                'code': 'csrf_failed',
+                'message': message,
+            },
+            status=403,
+        )
+    return render(
+        request,
+        'errors/csrf_failure.html',
+        {
+            'message': message,
+            'retry_url': request.get_full_path(),
+        },
+        status=403,
+    )
+
+
 # -----------------------------------------------------------------------------
 # Общие helper-функции журнала
 # -----------------------------------------------------------------------------
