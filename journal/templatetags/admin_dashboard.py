@@ -13,6 +13,7 @@ from journal.academic_year_context import (
 )
 from journal.models import (
     AcademicYear,
+    AssessmentResult,
     CourseApplication,
     Grade,
     PasswordRecoveryContact,
@@ -168,6 +169,20 @@ def journal_admin_dashboard(context):
             'journal.view_grade',
         ),
         _stat(
+            'Результаты сдачи',
+            (
+                AssessmentResult.objects
+                .filter(item__academic_year=selected_year)
+                .count()
+                if selected_year
+                else 0
+            ),
+            _admin_url('journal', 'assessmentresult'),
+            'fas fa-tasks',
+            user,
+            'journal.view_assessmentresult',
+        ),
+        _stat(
             'Заявки на курсы',
             CourseApplication.objects.filter(academic_year=selected_year).count() if selected_year else 0,
             _admin_url('journal', 'courseapplication'),
@@ -321,6 +336,52 @@ def journal_admin_dashboard(context):
                     'Список инструментов учеников.',
                     user,
                     'journal.view_instrument',
+                ),
+            ],
+        ),
+        _section(
+            'Сдача произведений',
+            'Произведения, назначения ученикам, результаты сдачи и правила итоговых оценок.',
+            [
+                _item(
+                    'Группы произведений',
+                    _admin_url('journal', 'assessmentgroup'),
+                    'fas fa-layer-group',
+                    'Наборы произведений по предметам и учебным годам.',
+                    user,
+                    'journal.view_assessmentgroup',
+                ),
+                _item(
+                    'Произведения / элементы',
+                    _admin_url('journal', 'assessmentitem'),
+                    'fas fa-music',
+                    'Произведения, обязательность и ответственные преподаватели.',
+                    user,
+                    'journal.view_assessmentitem',
+                ),
+                _item(
+                    'Назначения ученикам',
+                    _admin_url('journal', 'studentassessmentgroup'),
+                    'fas fa-user-check',
+                    'Группы произведений, назначенные конкретным ученикам.',
+                    user,
+                    'journal.view_studentassessmentgroup',
+                ),
+                _item(
+                    'Результаты сдачи',
+                    _admin_url('journal', 'assessmentresult'),
+                    'fas fa-tasks',
+                    'Зачёты и незачёты учеников по произведениям.',
+                    user,
+                    'journal.view_assessmentresult',
+                ),
+                _item(
+                    'Правила итоговых оценок',
+                    _admin_url('journal', 'finalgraderule'),
+                    'fas fa-check-double',
+                    'Автоматический итог по количеству и составу сданных произведений.',
+                    user,
+                    'journal.view_finalgraderule',
                 ),
             ],
         ),

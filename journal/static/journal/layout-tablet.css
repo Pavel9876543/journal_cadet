@@ -15,13 +15,27 @@
 
     .filter-form,
     .grade-form,
+    .workspace-search-bar {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
     .summary-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .toolbar,
+    .quick-entry,
+    .quick-entry-body,
+    .filter-form,
+    .grade-form,
+    .filter-form > *,
+    .grade-form > *,
+    .field,
     .form-action,
     .dependency-status {
-        min-width: 0;
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100%;
     }
 
     .table-scroll,
@@ -38,7 +52,19 @@
     input,
     select,
     textarea {
-        max-width: 100%;
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        box-sizing: border-box;
+    }
+
+    .field > .select2,
+    .field > .select2-container,
+    .field > .select-search-input {
+        display: block;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
     }
 
     body.change-form .form-row,

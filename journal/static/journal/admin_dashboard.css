@@ -116,6 +116,18 @@ body:not(.login-page) .app-main {
     color: #ffffff;
 }
 
+/* Separate workflow groups in the long sidebar list without adding noise. */
+#jazzy-navigation .nav-link[href$="/admin/journal/grade/"],
+#jazzy-navigation .nav-link[href$="/admin/journal/assessmentgroup/"],
+#jazzy-navigation .nav-link[href$="/admin/journal/groupsubject/"],
+#jazzy-navigation .nav-link[href$="/admin/journal/courseapplication/"] {
+    min-height: 48px;
+    margin-top: 8px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(225, 235, 247, 0.2);
+    border-radius: 0 0 6px 6px;
+}
+
 .app-content-header {
     padding: 16px 0 8px;
 }
@@ -1599,6 +1611,16 @@ body.journal-admin-popup .breadcrumb {
         overflow-x: clip;
     }
 
+    body.change-form .field-city_church,
+    body.change-form .city-church-field,
+    body.change-form .field-city_church input,
+    body.change-form .field-city_church textarea,
+    body.change-form td.field-city_church input {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+
     body.change-form .related-widget-wrapper > select,
     body.change-form .related-widget-wrapper > input,
     body.change-form .related-widget-wrapper > .select2,
@@ -1610,8 +1632,11 @@ body.journal-admin-popup .breadcrumb {
     body.change-form .form-row,
     body.change-form fieldset .row,
     body.change-form .fieldBox,
-    body.change-form .checkbox-row {
+    body.change-form .checkbox-row,
+    body.change-form .form-group,
+    body.change-form .form-group [class*="col-"] {
         width: 100%;
+        min-width: 0 !important;
         max-width: 100%;
     }
 
@@ -1757,4 +1782,54 @@ body.change-form .inline-group .card-header {
     display: block;
     width: 100%;
     margin: 0 0 0.4rem;
+}
+
+/* At 820px the admin layout still uses tablet breakpoints; keep fields inside the viewport. */
+@media (min-width: 768px) and (max-width: 1023.98px) {
+    body.change-form .form-group .row {
+        gap: 6px;
+    }
+
+    body.change-form .form-group label,
+    body.change-form .form-group .fieldBox,
+    body.change-form .form-group [class*="col-sm-"],
+    body.change-form .form-group [class*="col-auto"],
+    body.change-form .form-group [class*="col-md-"] {
+        flex: 0 0 100%;
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100%;
+    }
+
+    body.change-form .field-city_church,
+    body.change-form .city-church-field,
+    body.change-form .field-city_church input,
+    body.change-form .field-city_church textarea,
+    body.change-form td.field-city_church input,
+    body.change-form input,
+    body.change-form select,
+    body.change-form textarea,
+    body.change-form .select2,
+    body.change-form .select2-container {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        box-sizing: border-box;
+    }
+
+    body.change-form .related-widget-wrapper {
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100%;
+    }
+
+    body.change-form .related-widget-wrapper > select,
+    body.change-form .related-widget-wrapper > input,
+    body.change-form .related-widget-wrapper > .select2,
+    body.change-form .related-widget-wrapper > .select2-container {
+        flex: 1 1 calc(100% - 140px);
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
 }

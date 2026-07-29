@@ -40,15 +40,31 @@ def get_grade_form_options(
     """Return options for the one-way grade form dependency graph.
 
     The group list is controlled only by the selected academic year (and by a
-    fixed teacher in the teacher workspace). Students and subjects are then
-    controlled only by that year/group pair. A selected student or subject may
-    narrow the teacher list, but can never change an upstream field.
+    fixed teacher in the teacher workspace). Until a group is selected, show
+    all students and subjects available in that year; after selection, narrow
+    both lists to the group. A selected student or subject may narrow the
+    teacher list, but can never change an upstream field.
     """
     groups = get_grade_groups(
         teacher=fixed_teacher,
         academic_year=academic_year,
     )
-    if group is None or academic_year is None or group.academic_year_id != academic_year.pk:
+    if academic_year is None:
+        students = get_grade_students().none()
+        subjects = get_grade_subjects().none()
+        teachers = get_grade_teachers().none()
+    elif group is None:
+        students = get_grade_students(
+            teacher=fixed_teacher,
+            academic_year=academic_year,
+            base_queryset=students_queryset,
+        )
+        subjects = get_grade_subjects(
+            teacher=fixed_teacher,
+            academic_year=academic_year,
+        )
+        teachers = get_grade_teachers().none()
+    elif group.academic_year_id != academic_year.pk:
         students = get_grade_students().none()
         subjects = get_grade_subjects().none()
         teachers = get_grade_teachers().none()

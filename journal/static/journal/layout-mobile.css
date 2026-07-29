@@ -55,6 +55,18 @@
         max-width: 100%;
     }
 
+    .toolbar,
+    .quick-entry,
+    .quick-entry-body,
+    .filter-form,
+    .grade-form,
+    .filter-form > *,
+    .grade-form > * {
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100%;
+    }
+
     input,
     select,
     textarea,
@@ -63,9 +75,21 @@
     .btn {
         width: 100%;
         max-width: 100%;
+        min-width: 0 !important;
         min-height: 44px;
+        box-sizing: border-box;
         white-space: normal;
         overflow-wrap: anywhere;
+    }
+
+    .field > .select2,
+    .field > .select2-container,
+    .field > .select-search-input {
+        display: block;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        box-sizing: border-box;
     }
 
     input,

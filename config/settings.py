@@ -150,26 +150,32 @@ JAZZMIN_SETTINGS = {
     ],
     'order_with_respect_to': [
         'journal',
+        # Основные справочники и ежедневная работа.
         'journal.StudyGroup',
         'journal.Student',
         'journal.Teacher',
+        'journal.Subject',
+        'journal.AcademicYear',
+        'journal.Instrument',
+        # Обычный журнал и итоги.
         'journal.Grade',
         'journal.SubjectResult',
+        # Сдача произведений: настройка -> назначение -> результат -> итог.
         'journal.AssessmentGroup',
         'journal.AssessmentItem',
         'journal.StudentAssessmentGroup',
         'journal.AssessmentResult',
         'journal.FinalGradeRule',
+        # Учебные назначения.
         'journal.GroupSubject',
         'journal.StudentSubject',
         'journal.TeacherSubject',
+        # Курсы и доступы.
         'journal.CourseApplication',
-        'journal.TemporaryCredential',
         'journal.CourseRegistrationSettings',
+        'journal.TemporaryCredential',
         'journal.PasswordRecoveryContact',
-        'journal.AcademicYear',
-        'journal.Subject',
-        'journal.Instrument',
+        # Сервисные действия.
         'Запуск тестовых данных',
         'Выгрузить все данные в Excel',
         'Инструменты данных',

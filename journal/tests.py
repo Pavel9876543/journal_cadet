@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest import skipUnless
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
@@ -1749,7 +1750,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIn('journal/grade_dependencies.js', GradeAdmin.Media.js)
         self.assertNotIn('journal/select_search.js', GradeAdmin.Media.js)
 
-    def test_grade_dependency_options_are_strictly_year_then_group(self):
+    def test_grade_dependency_options_show_year_values_before_group_selection(self):
         data = self.create_base_journal()
         other_year = self.create_academic_year(name='2026/2027')
         other_group = self.create_group(name='Группа другого года', academic_year=other_year)
@@ -1768,8 +1769,11 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertEqual(list(without_group['groups']), [data['group']])
-        self.assertFalse(without_group['students'].exists())
-        self.assertFalse(without_group['subjects'].exists())
+        self.assertEqual(list(without_group['students']), [data['student']])
+        self.assertEqual(
+            set(without_group['subjects']),
+            {data['solfeggio'], data['literature'], data['specialty']},
+        )
         self.assertEqual(list(with_group['students']), [data['student']])
         self.assertEqual(
             set(with_group['subjects']),
@@ -3306,8 +3310,20 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         javascript = Path('journal/static/journal/admin_responsive.js').read_text(encoding='utf-8')
         self.assertIn('@media (max-width: 767.98px)', css)
         self.assertIn('responsive-admin-modal', css)
+        self.assertIn('body.change-form .field-city_church', css)
+        self.assertIn('min-width: 0 !important;', css)
         self.assertIn('window.open', javascript)
         self.assertIn('matchMedia', javascript)
+
+        mobile_css = Path('journal/static/journal/layout-mobile.css').read_text(encoding='utf-8')
+        self.assertIn('.filter-form > *', mobile_css)
+        self.assertIn('.grade-form > *', mobile_css)
+        self.assertIn('.field > .select-search-input', mobile_css)
+
+        tablet_css = Path('journal/static/journal/layout-tablet.css').read_text(encoding='utf-8')
+        self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)
+        self.assertIn('grid-template-columns: minmax(0, 1fr) !important;', tablet_css)
+        self.assertIn('.filter-form > *', tablet_css)
 
     def test_archived_admin_lists_use_assignment_snapshots(self):
         old_year = self.create_academic_year(name='2025/2026')
@@ -3521,6 +3537,95 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, reverse('admin:journal_teachersubject_changelist'))
         self.assertContains(response, 'Инструкция')
         self.assertContains(response, reverse('admin_guide'))
+
+    def test_admin_dashboard_shows_assessment_data_and_selected_year_result_count(self):
+        data = self.create_base_journal()
+        assessment_subject = Subject.objects.create(
+            name='Оркестр',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        GroupSubject.objects.create(
+            group=data['group'],
+            subject=assessment_subject,
+            teacher=data['teacher'],
+        )
+        assessment_group = AssessmentGroup.objects.create(
+            name='Оркестровые партии',
+            subject=assessment_subject,
+            academic_year=data['year'],
+        )
+        item = AssessmentItem.objects.create(
+            title='Первая партия',
+            subject=assessment_subject,
+            academic_year=data['year'],
+            group=assessment_group,
+            responsible_teacher=data['teacher'],
+        )
+        assignment = StudentAssessmentGroup.objects.create(
+            student=data['student'],
+            assessment_group=assessment_group,
+            academic_year=data['year'],
+        )
+        AssessmentResult.objects.create(
+            enrollment=assignment.enrollment,
+            item=item,
+            status=AssessmentResult.STATUS_PASSED,
+            assessed_by=data['teacher'],
+        )
+        request = RequestFactory().get('/admin/')
+        request.user = self.admin_user
+        request.session = {'journal_admin_academic_year_id': data['year'].pk}
+
+        dashboard = journal_admin_dashboard({'request': request})
+        result_stat = next(
+            stat for stat in dashboard['stats']
+            if stat['label'] == 'Результаты сдачи'
+        )
+
+        self.assertEqual(result_stat['value'], 1)
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse('admin:index'))
+        self.assertContains(response, 'Сдача произведений')
+        self.assertContains(response, reverse('admin:journal_assessmentgroup_changelist'))
+        self.assertContains(response, reverse('admin:journal_assessmentitem_changelist'))
+        self.assertContains(response, reverse('admin:journal_studentassessmentgroup_changelist'))
+        self.assertContains(response, reverse('admin:journal_assessmentresult_changelist'))
+        self.assertContains(response, reverse('admin:journal_finalgraderule_changelist'))
+
+    def test_admin_sidebar_orders_tables_by_workflow(self):
+        ordering = settings.JAZZMIN_SETTINGS['order_with_respect_to']
+        journal_models = [
+            item
+            for item in ordering
+            if item.startswith('journal.')
+        ]
+
+        self.assertEqual(
+            journal_models,
+            [
+                'journal.StudyGroup',
+                'journal.Student',
+                'journal.Teacher',
+                'journal.Subject',
+                'journal.AcademicYear',
+                'journal.Instrument',
+                'journal.Grade',
+                'journal.SubjectResult',
+                'journal.AssessmentGroup',
+                'journal.AssessmentItem',
+                'journal.StudentAssessmentGroup',
+                'journal.AssessmentResult',
+                'journal.FinalGradeRule',
+                'journal.GroupSubject',
+                'journal.StudentSubject',
+                'journal.TeacherSubject',
+                'journal.CourseApplication',
+                'journal.CourseRegistrationSettings',
+                'journal.TemporaryCredential',
+                'journal.PasswordRecoveryContact',
+            ],
+        )
 
     def test_admin_guide_is_visible_only_for_superuser(self):
         User.objects.create_user(
