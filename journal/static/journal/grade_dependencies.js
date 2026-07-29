@@ -189,9 +189,11 @@
             if (changedField === 'academic_year') {
                 ['group', 'student', 'subject', 'teacher'].forEach(clearField);
             } else if (changedField === 'group') {
-                ['student', 'subject', 'teacher'].forEach(clearField);
-            } else if (changedField === 'student' || changedField === 'subject') {
-                clearField('teacher');
+                ['student', 'subject'].forEach(clearField);
+            } else if (changedField === 'student') {
+                clearField('subject');
+            } else if (changedField === 'teacher') {
+                ['student', 'subject'].forEach(clearField);
             }
         }
 
@@ -256,9 +258,6 @@
                     } else {
                         form.submit();
                     }
-                    return;
-                }
-                if (mode === 'grade' && name === 'teacher') {
                     return;
                 }
                 clearDescendants(name);

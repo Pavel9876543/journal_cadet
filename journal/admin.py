@@ -536,8 +536,8 @@ class GradeAdminForm(forms.ModelForm):
     group = forms.ModelChoiceField(
         label='Группа',
         queryset=StudyGroup.objects.none(),
-        required=True,
-        empty_label='Выберите группу',
+        required=False,
+        empty_label='Без группы / индивидуальный предмет',
     )
 
     class Meta:
@@ -554,6 +554,7 @@ class GradeAdminForm(forms.ModelForm):
         instance = self.instance if self.instance and self.instance.pk else None
         student = getattr(instance, 'student', None)
         subject = getattr(instance, 'subject', None)
+        teacher = getattr(instance, 'teacher', None)
         academic_year = fixed_academic_year or getattr(instance, 'academic_year', None)
 
         group_id = self.data.get('group')
@@ -578,6 +579,12 @@ class GradeAdminForm(forms.ModelForm):
             except (Subject.DoesNotExist, ValueError, TypeError):
                 subject = None
 
+        if teacher_id:
+            try:
+                teacher = Teacher.objects.get(pk=teacher_id)
+            except (Teacher.DoesNotExist, ValueError, TypeError):
+                teacher = None
+
         if academic_year_id:
             try:
                 academic_year = AcademicYear.objects.get(pk=academic_year_id)
@@ -599,6 +606,7 @@ class GradeAdminForm(forms.ModelForm):
         dependency_options = get_grade_form_options(
             academic_year=academic_year,
             group=group,
+            teacher=teacher,
             student=student,
             subject=subject,
         )
@@ -610,7 +618,6 @@ class GradeAdminForm(forms.ModelForm):
                 group_id,
             )
             self.fields['group'].initial = group
-            self.fields['group'].widget.attrs['required'] = True
         if 'student' in self.fields:
             self.fields['student'].queryset = self._include_submitted_choice(
                 dependency_options['students'],
@@ -680,9 +687,6 @@ class GradeAdminForm(forms.ModelForm):
             academic_year = group.academic_year
             cleaned_data['academic_year'] = academic_year
 
-        if group is None:
-            self._add_available_error('group', 'Выберите группу или ученика с указанной группой.')
-
         if group and student:
             enrollment = student.enrollment_for_year(academic_year)
             if enrollment is None or enrollment.group_id != group.pk:
@@ -721,7 +725,7 @@ class GradeAdminForm(forms.ModelForm):
                     'У этого ученика уже есть оценка по выбранному предмету за эту дату.',
                 )
 
-        if group and student and subject and teacher:
+        if student and subject and teacher:
             teacher_is_allowed = get_grade_teachers(
                 group=group,
                 student=student,

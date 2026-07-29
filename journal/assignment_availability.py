@@ -195,6 +195,8 @@ def available_subjects(
             group=selected_group,
         ).values('student_id')
         individual_assignments = individual_assignments.filter(student_id__in=group_student_ids)
+    elif student is not None:
+        group_assignments = group_assignments.none()
     if student is not None:
         individual_assignments = individual_assignments.filter(student=student)
     if teacher is not None:
@@ -238,6 +240,8 @@ def available_teachers(
             group=selected_group,
         ).values('student_id')
         individual_assignments = individual_assignments.filter(student_id__in=group_student_ids)
+    elif student is not None:
+        group_assignments = group_assignments.none()
     if student is not None:
         individual_assignments = individual_assignments.filter(student=student)
     if subject is not None:
@@ -251,4 +255,3 @@ def available_teachers(
     if academic_year_is_active(year):
         teachers = teachers.filter(is_active=True)
     return teachers.distinct().order_by('full_name')
-

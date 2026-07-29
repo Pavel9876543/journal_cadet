@@ -181,6 +181,7 @@ def _grade_options_api_sync(request):
             academic_year=academic_year,
             group=group,
             fixed_teacher=fixed_teacher,
+            teacher=teacher,
             student=student,
             subject=subject,
         )
@@ -194,6 +195,7 @@ def _grade_options_api_sync(request):
             academic_year=academic_year,
             group=group,
             fixed_teacher=fixed_teacher,
+            teacher=teacher,
             student=student,
             subject=subject,
         )

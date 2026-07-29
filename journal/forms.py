@@ -230,8 +230,8 @@ class GradeCreateForm(forms.ModelForm):
     group = forms.ModelChoiceField(
         label='Группа',
         queryset=StudyGroup.objects.none(),
-        required=True,
-        empty_label='Выберите группу',
+        required=False,
+        empty_label='Без группы / индивидуальный предмет',
     )
 
     class Meta:
@@ -274,8 +274,6 @@ class GradeCreateForm(forms.ModelForm):
         self.dependency_teacher_id = teacher.pk if teacher is not None else ''
         self.dependency_subject_id = subject.pk if subject is not None else ''
         self.dependency_academic_year_id = academic_year.pk if academic_year is not None else ''
-        if group is not None:
-            self.fields['group'].required = False
         self.fields['student'].error_messages['invalid_choice'] = (
             'Выбранный ученик недоступен для этой группы, предмета или учебного года.'
         )
@@ -298,10 +296,12 @@ class GradeCreateForm(forms.ModelForm):
             or initial_group
         )
         selected_subject = subject or self._selected_subject() or initial_subject
+        selected_teacher = teacher or self._selected_teacher()
         dependency_options = get_grade_form_options(
             academic_year=selected_academic_year,
             group=selected_group,
             fixed_teacher=teacher,
+            teacher=selected_teacher,
             student=selected_student,
             subject=selected_subject,
             students_queryset=students_queryset,
@@ -334,7 +334,6 @@ class GradeCreateForm(forms.ModelForm):
             'student',
             allowed_submitted_queryset=get_grade_students(
                 group=selected_group,
-                teacher=teacher,
                 academic_year=selected_academic_year,
                 base_queryset=students_queryset,
             ),
@@ -345,6 +344,7 @@ class GradeCreateForm(forms.ModelForm):
             'subject',
             allowed_submitted_queryset=get_grade_subjects(
                 group=selected_group,
+                student=selected_student,
                 academic_year=selected_academic_year,
             ),
         )
@@ -480,7 +480,7 @@ class GradeCreateForm(forms.ModelForm):
                 ),
             )
 
-        if group and student and subject:
+        if student and subject:
             if not get_grade_subjects(
                 group=group,
                 student=student,
@@ -491,7 +491,7 @@ class GradeCreateForm(forms.ModelForm):
                     'и не назначен ему индивидуально.'
                 )
 
-        if group and student and subject and teacher:
+        if student and subject and teacher:
             teacher_is_allowed = get_grade_teachers(
                 group=group,
                 student=student,

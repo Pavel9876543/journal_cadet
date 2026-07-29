@@ -33,18 +33,19 @@ def get_grade_form_options(
     academic_year,
     group=None,
     fixed_teacher=None,
+    teacher=None,
     student=None,
     subject=None,
     students_queryset=None,
 ):
-    """Return options for the one-way grade form dependency graph.
+    """Return mutually compatible options for the grade form.
 
-    The group list is controlled only by the selected academic year (and by a
-    fixed teacher in the teacher workspace). Until a group is selected, show
-    all students and subjects available in that year; after selection, narrow
-    both lists to the group. A selected student or subject may narrow the
-    teacher list, but can never change an upstream field.
+    Groups remain an optional year-level filter. Students are narrowed by the
+    group, subject and teacher when those values are selected. Subjects are
+    narrowed by the group, student and teacher. This also keeps individual
+    assignments usable when the student has no study group.
     """
+    effective_teacher = fixed_teacher or teacher
     groups = get_grade_groups(
         teacher=fixed_teacher,
         academic_year=academic_year,
@@ -53,31 +54,22 @@ def get_grade_form_options(
         students = get_grade_students().none()
         subjects = get_grade_subjects().none()
         teachers = get_grade_teachers().none()
-    elif group is None:
-        students = get_grade_students(
-            teacher=fixed_teacher,
-            academic_year=academic_year,
-            base_queryset=students_queryset,
-        )
-        subjects = get_grade_subjects(
-            teacher=fixed_teacher,
-            academic_year=academic_year,
-        )
-        teachers = get_grade_teachers().none()
-    elif group.academic_year_id != academic_year.pk:
+    elif group is not None and group.academic_year_id != academic_year.pk:
         students = get_grade_students().none()
         subjects = get_grade_subjects().none()
         teachers = get_grade_teachers().none()
     else:
         students = get_grade_students(
             group=group,
-            teacher=fixed_teacher,
+            subject=subject,
+            teacher=effective_teacher,
             academic_year=academic_year,
             base_queryset=students_queryset,
         )
         subjects = get_grade_subjects(
             group=group,
-            teacher=fixed_teacher,
+            student=student,
+            teacher=effective_teacher,
             academic_year=academic_year,
         )
         teachers = get_grade_teachers(

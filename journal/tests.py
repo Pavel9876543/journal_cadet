@@ -857,6 +857,27 @@ class GradeModelTests(JournalTestDataMixin, TestCase):
         self.assertTrue(grade.is_individual_subject)
         self.assertFalse(grade.is_group_subject)
 
+    def test_individual_subject_grade_does_not_require_student_group(self):
+        data = self.create_base_journal()
+        data['student'].group = None
+        data['student'].save(update_fields=['group'])
+
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['specialty'],
+            teacher=data['other_teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 3),
+            value='5',
+        )
+
+        self.assertIsNone(grade.enrollment.group)
+        self.assertTrue(grade.is_individual_subject)
+        self.assertEqual(
+            list(get_grade_subjects(student=data['student'], academic_year=data['year'])),
+            [data['specialty']],
+        )
+
     def test_unassigned_teacher_cannot_create_grade(self):
         data = self.create_base_journal()
 
@@ -1627,6 +1648,28 @@ class FormTests(JournalTestDataMixin, TestCase):
             str(invalid_form.errors),
         )
 
+    def test_grade_form_accepts_individual_subject_without_group(self):
+        data = self.create_base_journal()
+        data['student'].group = None
+        data['student'].save(update_fields=['group'])
+
+        form = GradeCreateForm(
+            data={
+                'group': '',
+                'student': data['student'].pk,
+                'subject': data['specialty'].pk,
+                'teacher': data['other_teacher'].pk,
+                'academic_year': data['year'].pk,
+                'date': '2025-10-10',
+                'value': '5',
+                'comment': '',
+            },
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        grade = form.save()
+        self.assertIsNone(grade.enrollment.group)
+
     def test_grade_form_with_fixed_teacher_removes_teacher_field(self):
         data = self.create_base_journal()
 
@@ -1747,8 +1790,13 @@ class FormTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(list(form.fields['teacher'].queryset), [data['teacher']])
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
+        self.assertFalse(form.fields['group'].required)
         self.assertIn('journal/grade_dependencies.js', GradeAdmin.Media.js)
         self.assertNotIn('journal/select_search.js', GradeAdmin.Media.js)
+        dependency_script = Path(
+            'journal/static/journal/grade_dependencies.js'
+        ).read_text(encoding='utf-8')
+        self.assertIn("changedField === 'teacher'", dependency_script)
 
     def test_grade_dependency_options_show_year_values_before_group_selection(self):
         data = self.create_base_journal()
@@ -1779,6 +1827,36 @@ class FormTests(JournalTestDataMixin, TestCase):
             set(with_group['subjects']),
             {data['solfeggio'], data['literature'], data['specialty']},
         )
+
+    def test_grade_dependency_options_cross_filter_student_subject_and_teacher(self):
+        data = self.create_base_journal()
+
+        teacher_options = get_grade_form_options(
+            academic_year=data['year'],
+            teacher=data['other_teacher'],
+        )
+        student_options = get_grade_form_options(
+            academic_year=data['year'],
+            subject=data['specialty'],
+            teacher=data['other_teacher'],
+        )
+        subject_options = get_grade_form_options(
+            academic_year=data['year'],
+            student=data['student'],
+            teacher=data['teacher'],
+        )
+
+        self.assertEqual(list(teacher_options['students']), [data['student']])
+        self.assertEqual(
+            set(teacher_options['subjects']),
+            {data['literature'], data['specialty']},
+        )
+        self.assertEqual(list(student_options['students']), [data['student']])
+        self.assertEqual(
+            set(subject_options['subjects']),
+            {data['solfeggio']},
+        )
+        self.assertNotIn(data['specialty'], subject_options['subjects'])
 
     def test_grade_admin_uses_and_locks_year_selected_in_page_filter(self):
         data = self.create_base_journal()
@@ -2076,6 +2154,29 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         )
         self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
         self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
+
+    def test_admin_selected_teacher_filters_students_and_subjects_without_group(self):
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'mode': 'grade',
+                'teacher': self.data['other_teacher'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item['id'] for item in payload['students']],
+            [self.data['student'].pk],
+        )
+        self.assertEqual(
+            {item['id'] for item in payload['subjects']},
+            {self.data['literature'].pk, self.data['specialty'].pk},
+        )
 
     def test_selecting_group_first_limits_students_and_subjects(self):
         _, other_student, other_subject = self.create_alternative_group_assignment()
