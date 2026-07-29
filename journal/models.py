@@ -2362,6 +2362,15 @@ class FinalGradeRule(models.Model):
 
 
 class CourseRegistrationSettings(models.Model):
+    REGISTRATION_MODE_OPEN = 'open'
+    REGISTRATION_MODE_AUTOMATIC = 'automatic'
+    REGISTRATION_MODE_CLOSED = 'closed'
+    REGISTRATION_MODE_CHOICES = (
+        (REGISTRATION_MODE_OPEN, 'Открыта вручную (лимит не учитывается)'),
+        (REGISTRATION_MODE_AUTOMATIC, 'Автоматически до достижения лимита'),
+        (REGISTRATION_MODE_CLOSED, 'Завершена вручную'),
+    )
+
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     telegram_group_url = models.URLField(
         'Ссылка на Telegram-группу',
@@ -2372,6 +2381,22 @@ class CourseRegistrationSettings(models.Model):
         'Минимальный возраст для регистрации',
         default=14,
         help_text='Допускаются ученики, которым в год начала курсов исполнится указанный возраст.',
+    )
+    registration_mode = models.CharField(
+        'Режим регистрации',
+        max_length=16,
+        choices=REGISTRATION_MODE_CHOICES,
+        default=REGISTRATION_MODE_OPEN,
+        help_text=(
+            'Ручное открытие и завершение имеют приоритет над лимитом. '
+            'В автоматическом режиме регистрация завершится при достижении лимита.'
+        ),
+    )
+    application_limit = models.PositiveIntegerField(
+        'Лимит зарегистрированных учеников',
+        null=True,
+        blank=True,
+        help_text='Отклонённые заявки в лимите не учитываются.',
     )
     updated_at = models.DateTimeField('Дата изменения', auto_now=True)
 
@@ -2399,12 +2424,43 @@ class CourseRegistrationSettings(models.Model):
         elif self.minimum_registration_age > 120:
             errors['minimum_registration_age'] = 'Минимальный возраст не должен быть больше 120 лет.'
 
+        if self.application_limit is not None and self.application_limit < 1:
+            errors['application_limit'] = 'Лимит должен быть не меньше одного ученика.'
+        elif (
+            self.registration_mode == self.REGISTRATION_MODE_AUTOMATIC
+            and self.application_limit is None
+        ):
+            errors['application_limit'] = 'Укажите лимит для автоматического режима.'
+
         if errors:
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def registered_applications_count(self, academic_year=None) -> int:
+        academic_year = academic_year or AcademicYear.get_active()
+        if academic_year is None:
+            return 0
+        return (
+            CourseApplication.objects
+            .filter(academic_year=academic_year)
+            .exclude(status=CourseApplication.STATUS_REJECTED)
+            .count()
+        )
+
+    def registration_is_open(self, academic_year=None) -> bool:
+        academic_year = academic_year or AcademicYear.get_active()
+        if academic_year is None:
+            return False
+        if self.registration_mode == self.REGISTRATION_MODE_CLOSED:
+            return False
+        if self.registration_mode == self.REGISTRATION_MODE_OPEN:
+            return True
+        if self.application_limit is None:
+            return False
+        return self.registered_applications_count(academic_year) < self.application_limit
 
 
 class PasswordRecoveryContact(models.Model):

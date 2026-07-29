@@ -111,6 +111,22 @@
             background: linear-gradient(180deg, var(--success-bg), #ffffff);
             border: 1px solid rgba(22, 101, 52, 0.18);
         }
+        .closed-card {
+            display: grid;
+            gap: 12px;
+            padding: 24px;
+            border: 1px solid rgba(180, 83, 9, 0.25);
+            border-radius: 18px;
+            background: linear-gradient(180deg, #fffbeb, #ffffff);
+        }
+        .closed-card h2,
+        .closed-card p {
+            margin: 0;
+        }
+        .closed-card p {
+            color: var(--muted);
+            line-height: 1.6;
+        }
         .success-card h2 {
             margin: 0;
             font-size: 1.5rem;
@@ -437,13 +453,26 @@
         <div class="panel__hero">
             <span class="badge">Музыкальные курсы</span>
             <div>
-                <strong>Заявка сохраняется в базе данных автоматически.</strong>
-                <p class="hint">После успешной отправки вы получите логин и временный пароль для входа.</p>
+                {% if registration_open or submitted %}
+                    <strong>Заявка сохраняется в базе данных автоматически.</strong>
+                    <p class="hint">После успешной отправки вы получите логин и временный пароль для входа.</p>
+                {% else %}
+                    <strong>Приём новых заявок завершён.</strong>
+                    <p class="hint">Информация о возобновлении регистрации появится на этой странице.</p>
+                {% endif %}
             </div>
         </div>
 
         <div class="content">
-            {% if submitted %}
+            {% if not registration_open and not submitted %}
+                <div class="closed-card" role="status">
+                    <h2>Регистрация завершена</h2>
+                    <p>{{ registration_closed_message }}</p>
+                    <div class="actions">
+                        <a class="secondary-link" href="{% url 'login' %}">Войти в кабинет</a>
+                    </div>
+                </div>
+            {% elif submitted %}
                 <div class="success-card">
                     <h2>Заявка успешно отправлена.</h2>
                     {% if credential %}
@@ -566,7 +595,7 @@
     </section>
 </div>
 
-{% if not submitted %}
+{% if not submitted and registration_open %}
 <script>
     document.addEventListener('DOMContentLoaded', function () {
         var form = document.getElementById('course-registration-form');

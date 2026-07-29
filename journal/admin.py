@@ -3762,26 +3762,40 @@ class TemporaryCredentialAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescr
 @admin.register(CourseRegistrationSettings)
 class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
-        'Единые настройки публичной регистрации: минимальный возраст и ссылка на Telegram-группу. '
-        'Даты регистрации всегда берутся из активного учебного года.'
+        'Единые настройки публичной регистрации: ручное управление, автоматический лимит, '
+        'минимальный возраст и ссылка на Telegram-группу.'
     )
     form = CourseRegistrationSettingsForm
     list_display = (
         'telegram_group_url',
         'minimum_registration_age',
+        'registration_mode',
+        'application_limit',
+        'registration_status_display',
+        'registered_applications_display',
         'active_academic_year_display',
         'updated_at',
     )
-    readonly_fields = ('active_academic_year_display', 'updated_at')
+    readonly_fields = (
+        'registration_status_display',
+        'registered_applications_display',
+        'active_academic_year_display',
+        'updated_at',
+    )
     fieldsets = (
         ('Регистрация на курсы', {
             'fields': (
                 'telegram_group_url',
                 'minimum_registration_age',
+                'registration_mode',
+                'application_limit',
+                'registration_status_display',
+                'registered_applications_display',
                 'active_academic_year_display',
                 'updated_at',
             ),
             'description': (
+                'Ручной режим позволяет открыть или завершить регистрацию независимо от лимита. '
                 'Минимальный возраст и ссылка общие для всех учебных лет. '
                 'Даты начала и окончания курсов задаются только в таблице «Учебные годы».'
             ),
@@ -3797,6 +3811,19 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
             f'{academic_year.name}: '
             f'{academic_year.starts_on:%d.%m.%Y} — {academic_year.ends_on:%d.%m.%Y}'
         )
+
+    @admin.display(description='Текущее состояние')
+    def registration_status_display(self, obj=None):
+        settings_obj = obj or CourseRegistrationSettings.load()
+        return 'Регистрация открыта' if settings_obj.registration_is_open() else 'Регистрация завершена'
+
+    @admin.display(description='Зарегистрировано (без отклонённых)')
+    def registered_applications_display(self, obj=None):
+        settings_obj = obj or CourseRegistrationSettings.load()
+        count = settings_obj.registered_applications_count()
+        if settings_obj.application_limit is None:
+            return str(count)
+        return f'{count} из {settings_obj.application_limit}'
 
     def has_add_permission(self, request):
         return not CourseRegistrationSettings.objects.exists()

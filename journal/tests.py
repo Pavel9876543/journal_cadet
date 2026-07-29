@@ -1586,6 +1586,8 @@ class FormTests(JournalTestDataMixin, TestCase):
             data={
                 'telegram_group_url': ' https://t.me/test_group ',
                 'minimum_registration_age': 16,
+                'registration_mode': CourseRegistrationSettings.REGISTRATION_MODE_OPEN,
+                'application_limit': '',
             },
         )
 
@@ -1602,6 +1604,8 @@ class FormTests(JournalTestDataMixin, TestCase):
             data={
                 'telegram_group_url': 'https://t.me/test_group',
                 'minimum_registration_age': 14,
+                'registration_mode': CourseRegistrationSettings.REGISTRATION_MODE_OPEN,
+                'application_limit': '',
                 'course_starts_on': '2026-08-31',
                 'course_ends_on': '2025-09-01',
             },
@@ -1610,6 +1614,19 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertNotIn('course_starts_on', form.fields)
         self.assertNotIn('course_ends_on', form.fields)
+
+    def test_automatic_registration_mode_requires_positive_limit(self):
+        form = CourseRegistrationSettingsForm(
+            data={
+                'telegram_group_url': 'https://t.me/test_group',
+                'minimum_registration_age': 14,
+                'registration_mode': CourseRegistrationSettings.REGISTRATION_MODE_AUTOMATIC,
+                'application_limit': '',
+            },
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('application_limit', form.errors)
 
     def test_grade_form_accepts_only_assigned_teacher_for_student_subject(self):
         data = self.create_base_journal()
@@ -4674,6 +4691,58 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Иванов Иван')
         self.assertContains(response, 'Temp12345!')
 
+    def test_manual_registration_close_hides_form_and_rejects_new_application(self):
+        registration_settings = CourseRegistrationSettings.load()
+        registration_settings.registration_mode = (
+            CourseRegistrationSettings.REGISTRATION_MODE_CLOSED
+        )
+        registration_settings.save()
+
+        get_response = self.client.get(reverse('course_registration'))
+        post_response = self.client.post(
+            reverse('course_registration'),
+            data=self.application_form_payload(),
+        )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertContains(get_response, 'Регистрация завершена')
+        self.assertNotContains(get_response, 'id="course-registration-form"')
+        self.assertEqual(post_response.status_code, 409)
+        self.assertContains(post_response, 'Новые заявки сейчас не принимаются', status_code=409)
+        self.assertFalse(CourseApplication.objects.exists())
+
+    def test_automatic_limit_ignores_rejected_applications(self):
+        registration_settings = CourseRegistrationSettings.load()
+        registration_settings.registration_mode = (
+            CourseRegistrationSettings.REGISTRATION_MODE_AUTOMATIC
+        )
+        registration_settings.application_limit = 1
+        registration_settings.save()
+        self.assertTrue(registration_settings.registration_is_open())
+
+        application = CourseApplication.objects.create(**self.application_payload())
+        self.assertFalse(registration_settings.registration_is_open())
+
+        application.status = CourseApplication.STATUS_REJECTED
+        application.save()
+
+        self.assertEqual(registration_settings.registered_applications_count(), 0)
+        self.assertTrue(registration_settings.registration_is_open())
+
+    def test_manual_open_overrides_reached_application_limit(self):
+        CourseApplication.objects.create(**self.application_payload())
+        registration_settings = CourseRegistrationSettings.load()
+        registration_settings.application_limit = 1
+        registration_settings.registration_mode = (
+            CourseRegistrationSettings.REGISTRATION_MODE_OPEN
+        )
+        registration_settings.save()
+
+        response = self.client.get(reverse('course_registration'))
+
+        self.assertTrue(registration_settings.registration_is_open())
+        self.assertContains(response, 'id="course-registration-form"')
+
     def test_registration_page_rejects_duplicate_phone_without_second_application(
         self,
     ):
@@ -4746,6 +4815,34 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertTrue(payload['credentials_created'])
         self.assertNotIn('login', payload)
         self.assertNotIn('temporary_password', payload)
+
+    def test_registration_api_stops_accepting_applications_at_automatic_limit(self):
+        registration_settings = CourseRegistrationSettings.load()
+        registration_settings.registration_mode = (
+            CourseRegistrationSettings.REGISTRATION_MODE_AUTOMATIC
+        )
+        registration_settings.application_limit = 1
+        registration_settings.save()
+
+        first_response = self.client.post(
+            reverse('course_registration_api'),
+            data=self.application_form_payload(),
+        )
+        second_response = self.client.post(
+            reverse('course_registration_api'),
+            data=self.application_form_payload(
+                last_name='Петров',
+                student_phone='+7 (999) 765-43-21',
+            ),
+        )
+
+        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(second_response.status_code, 409)
+        self.assertEqual(
+            second_response.json()['message'],
+            'Регистрация завершена. Новые заявки сейчас не принимаются.',
+        )
+        self.assertEqual(CourseApplication.objects.count(), 1)
 
     def test_registration_api_rejects_non_object_json_payload(self):
         response = self.client.post(

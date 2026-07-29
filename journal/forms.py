@@ -830,6 +830,8 @@ class CourseRegistrationSettingsForm(forms.ModelForm):
         fields = [
             'telegram_group_url',
             'minimum_registration_age',
+            'registration_mode',
+            'application_limit',
         ]
         widgets = {
             'telegram_group_url': forms.URLInput(attrs={
@@ -838,6 +840,11 @@ class CourseRegistrationSettingsForm(forms.ModelForm):
             'minimum_registration_age': forms.NumberInput(attrs={
                 'min': 0,
                 'max': 120,
+            }),
+            'application_limit': forms.NumberInput(attrs={
+                'min': 1,
+                'step': 1,
+                'placeholder': 'Например: 100',
             }),
         }
 

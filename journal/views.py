@@ -2133,6 +2133,31 @@ def _get_telegram_redirect_url(settings_obj: CourseRegistrationSettings | None =
     return settings_obj.telegram_group_url.strip()
 
 
+COURSE_REGISTRATION_CLOSED_MESSAGE = (
+    'Регистрация завершена. Новые заявки сейчас не принимаются.'
+)
+
+
+def _course_registration_context(
+    registration_settings,
+    *,
+    form=None,
+    submitted=False,
+    application=None,
+    credential=None,
+):
+    registration_open = registration_settings.registration_is_open()
+    return {
+        'form': form,
+        'submitted': submitted,
+        'application': application,
+        'credential': credential,
+        'redirect_url': _get_telegram_redirect_url(registration_settings),
+        'registration_open': registration_open,
+        'registration_closed_message': COURSE_REGISTRATION_CLOSED_MESSAGE,
+    }
+
+
 def _get_application_credential(application: CourseApplication):
     if application is None or not application.pk:
         return None
@@ -2198,11 +2223,19 @@ def _course_registration_view_sync(request):
         return HttpResponseNotAllowed(['GET', 'POST'])
 
     registration_settings = _get_registration_settings()
+    registration_open = registration_settings.registration_is_open()
+    if not registration_open:
+        return render(
+            request,
+            'journal/course_registration.html',
+            _course_registration_context(registration_settings),
+            status=409 if request.method == 'POST' else 200,
+        )
+
     form = CourseApplicationPublicForm(
         request.POST or None,
         registration_settings=registration_settings,
     )
-    redirect_url = _get_telegram_redirect_url(registration_settings)
 
     if request.method == 'POST' and _registration_is_throttled(request):
         form.add_error(
@@ -2212,17 +2245,26 @@ def _course_registration_view_sync(request):
         return render(
             request,
             'journal/course_registration.html',
-            {
-                'form': form,
-                'submitted': False,
-                'redirect_url': redirect_url,
-            },
+            _course_registration_context(registration_settings, form=form),
             status=429,
         )
 
     if request.method == 'POST' and form.is_valid():
         try:
-            application = form.save()
+            with transaction.atomic():
+                locked_settings = (
+                    CourseRegistrationSettings.objects
+                    .select_for_update()
+                    .get(pk=registration_settings.pk)
+                )
+                if not locked_settings.registration_is_open():
+                    return render(
+                        request,
+                        'journal/course_registration.html',
+                        _course_registration_context(locked_settings),
+                        status=409,
+                    )
+                application = form.save()
         except (ValidationError, IntegrityError) as exc:
             if not _is_duplicate_course_application_phone_error(exc):
                 raise
@@ -2230,33 +2272,25 @@ def _course_registration_view_sync(request):
             return render(
                 request,
                 'journal/course_registration.html',
-                {
-                    'form': form,
-                    'submitted': False,
-                    'redirect_url': redirect_url,
-                },
+                _course_registration_context(registration_settings, form=form),
                 status=409,
             )
         credential = _get_application_credential(application)
         return render(
             request,
             'journal/course_registration.html',
-            {
-                'submitted': True,
-                'application': application,
-                'credential': credential,
-                'redirect_url': redirect_url,
-            },
+            _course_registration_context(
+                registration_settings,
+                submitted=True,
+                application=application,
+                credential=credential,
+            ),
         )
 
     return render(
         request,
         'journal/course_registration.html',
-        {
-            'form': form,
-            'submitted': False,
-            'redirect_url': redirect_url,
-        },
+        _course_registration_context(registration_settings, form=form),
     )
 
 
@@ -2267,6 +2301,16 @@ async def course_registration_api(request):
 def _course_registration_api_sync(request):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
+
+    registration_settings = _get_registration_settings()
+    if not registration_settings.registration_is_open():
+        return JsonResponse(
+            {
+                'success': False,
+                'message': COURSE_REGISTRATION_CLOSED_MESSAGE,
+            },
+            status=409,
+        )
 
     if _registration_is_throttled(request):
         return JsonResponse(
@@ -2281,13 +2325,26 @@ def _course_registration_api_sync(request):
     if payload is None:
         return JsonResponse({'success': False, 'message': 'Неверный формат запроса.'}, status=400)
 
-    registration_settings = _get_registration_settings()
     form = CourseApplicationPublicForm(payload, registration_settings=registration_settings)
     redirect_url = _get_telegram_redirect_url(registration_settings)
 
     if form.is_valid():
         try:
-            application = form.save()
+            with transaction.atomic():
+                locked_settings = (
+                    CourseRegistrationSettings.objects
+                    .select_for_update()
+                    .get(pk=registration_settings.pk)
+                )
+                if not locked_settings.registration_is_open():
+                    return JsonResponse(
+                        {
+                            'success': False,
+                            'message': COURSE_REGISTRATION_CLOSED_MESSAGE,
+                        },
+                        status=409,
+                    )
+                application = form.save()
         except (ValidationError, IntegrityError) as exc:
             if not _is_duplicate_course_application_phone_error(exc):
                 raise
