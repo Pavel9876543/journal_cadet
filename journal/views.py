@@ -45,6 +45,7 @@ from .academic_year_context import (
     filter_temporary_credentials_for_year,
     get_selected_admin_academic_year,
 )
+from .account_utils import user_has_temporary_credential
 from .assignment_options import (
     active_group_queryset,
     active_student_queryset,
@@ -1489,6 +1490,12 @@ async def journal_view(request):
 
 
 def _journal_view_sync(request):
+    if (
+        not request.user.is_superuser
+        and user_has_temporary_credential(request.user)
+    ):
+        return redirect('password_change')
+
     selected_group_id = request.GET.get('group')
     selected_subject_id = request.GET.get('subject')
     selected_year_id = request.GET.get('academic_year') or request.GET.get('year')

@@ -45,12 +45,16 @@ from journal.account_utils import (
 )
 from journal.admin import (
     AcademicYearAdmin,
+    AssessmentItemAdminForm,
+    AssessmentResultAdminForm,
     CourseRegistrationSettingsAdmin,
+    FinalGradeRuleAdminForm,
     GradeAdmin,
     GradeAdminForm,
     GroupSubjectAdminForm,
     StudentAdmin,
     StudentAdminForm,
+    StudentAssessmentGroupAdminForm,
     StudentAssessmentGroupInline,
     StudentInline,
     StudentSubjectAdminForm,
@@ -2524,7 +2528,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Мои оценки')
         self.assertContains(response, 'Нет данных по выбранным фильтрам.')
 
-    def test_user_with_temporary_password_can_open_journal_without_warning(self):
+    def test_user_with_temporary_password_is_redirected_without_warning(self):
         TemporaryCredential.objects.create(
             user=self.data['teacher'].user,
             login=self.data['teacher'].user.username,
@@ -2535,9 +2539,12 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.client.login(username='teacher_ivanov', password='Pass12345!')
         self.client.force_login(self.data['teacher'].user)
 
-        response = self.client.get(reverse('journal'))
+        response = self.client.get(reverse('journal'), follow=True)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.redirect_chain,
+            [(reverse('password_change'), 302)],
+        )
         self.assertNotContains(response, 'Смените временный пароль')
 
     def test_academic_year_filter_limits_admin_groups(self):
@@ -2923,6 +2930,11 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 user=self.data['teacher'].user,
             ).exists(),
         )
+
+        journal_response = self.client.get(reverse('journal'))
+
+        self.assertEqual(journal_response.status_code, 200)
+        self.assertNotContains(journal_response, 'Смените временный пароль')
 
         self.client.logout()
 
@@ -3569,6 +3581,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'journal/select_search.js')
+        self.assertNotContains(response, 'data-searchable-select')
         self.assertLessEqual(
             len(captured_queries),
             85,
@@ -4073,6 +4087,23 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertIn('journal/admin_assignment_dependencies.js', StudentSubjectAdminForm.Media.js)
         self.assertIn(data['specialty'], student_form.fields['subject'].queryset)
         self.assertNotIn(data['solfeggio'], student_form.fields['subject'].queryset)
+
+    def test_admin_table_forms_do_not_add_per_field_search_inputs(self):
+        forms_to_check = (
+            SubjectResultAdminForm(),
+            GroupSubjectAdminForm(),
+            StudentSubjectAdminForm(),
+            AssessmentItemAdminForm(),
+            StudentAssessmentGroupAdminForm(),
+            AssessmentResultAdminForm(),
+            FinalGradeRuleAdminForm(),
+        )
+
+        for form in forms_to_check:
+            with self.subTest(form=form.__class__.__name__):
+                self.assertNotIn('journal/select_search.js', form.media._js)
+                for field in form.fields.values():
+                    self.assertNotIn('data-searchable-select', field.widget.attrs)
 
     def test_student_subject_admin_form_uses_subject_classification_without_duplicate_flag(self):
         data = self.create_base_journal()
