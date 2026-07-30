@@ -178,10 +178,14 @@ class DetailedPasswordChangeForm(SetPasswordForm):
         self.fields['new_password2'].label = 'Повторите новый пароль'
         self.fields['new_password1'].widget.attrs.update({
             'autocomplete': 'new-password',
+            'autocapitalize': 'none',
+            'spellcheck': 'false',
             'placeholder': 'Введите новый пароль',
         })
         self.fields['new_password2'].widget.attrs.update({
             'autocomplete': 'new-password',
+            'autocapitalize': 'none',
+            'spellcheck': 'false',
             'placeholder': 'Повторите новый пароль',
         })
 

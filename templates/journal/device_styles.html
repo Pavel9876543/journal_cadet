@@ -1,5 +1,7 @@
 {% load static %}
-<link rel="stylesheet" href="{% static 'journal/layout-desktop.css' %}" media="(min-width: 1440px)">
-<link rel="stylesheet" href="{% static 'journal/layout-laptop.css' %}" media="(min-width: 1024px) and (max-width: 1439.98px)">
-<link rel="stylesheet" href="{% static 'journal/layout-tablet.css' %}" media="(min-width: 768px) and (max-width: 1023.98px)">
-<link rel="stylesheet" href="{% static 'journal/layout-mobile.css' %}" media="(max-width: 767.98px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse)">
+{# Файлы загружаются сразу, а режим выбирают их внутренние media-блоки. #}
+{# Так поворот телефона не ждёт отложенной загрузки нового stylesheet. #}
+<link rel="stylesheet" href="{% static 'journal/layout-desktop.css' %}?v=20260730-1" data-layout-styles="desktop">
+<link rel="stylesheet" href="{% static 'journal/layout-laptop.css' %}?v=20260730-1" data-layout-styles="laptop">
+<link rel="stylesheet" href="{% static 'journal/layout-tablet.css' %}?v=20260730-1" data-layout-styles="tablet">
+<link rel="stylesheet" href="{% static 'journal/layout-mobile.css' %}?v=20260730-1" data-layout-styles="mobile">

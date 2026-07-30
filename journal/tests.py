@@ -2020,6 +2020,14 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertNotIn('old_password', form.fields)
+        self.assertEqual(
+            form.fields['new_password1'].widget.attrs.get('autocomplete'),
+            'new-password',
+        )
+        self.assertEqual(
+            form.fields['new_password2'].widget.attrs.get('autocomplete'),
+            'new-password',
+        )
         self.assertTrue(form.is_valid(), form.errors)
 
         form.save()
@@ -3160,6 +3168,11 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(get_response.status_code, 200)
         self.assertNotContains(get_response, 'name="old_password"')
+        self.assertContains(get_response, 'name="username"')
+        self.assertContains(get_response, 'value="teacher_renamed"')
+        self.assertContains(get_response, 'autocomplete="username"')
+        self.assertContains(get_response, 'autocomplete="new-password"', count=2)
+        self.assertContains(get_response, 'Текущий логин:')
         self.assertContains(get_response, 'name="new_password1"')
         self.assertContains(get_response, 'name="new_password2"')
 
@@ -3697,6 +3710,12 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('.filter-form > *', mobile_css)
         self.assertIn('.grade-form > *', mobile_css)
         self.assertIn('.field > .select-search-input', mobile_css)
+        self.assertIn('min-height: 100dvh;', mobile_css)
+
+        device_styles = Path('templates/journal/device_styles.html').read_text(encoding='utf-8')
+        self.assertNotIn(' media="', device_styles)
+        self.assertEqual(device_styles.count('data-layout-styles='), 4)
+        self.assertEqual(device_styles.count('?v=20260730-1'), 4)
 
         tablet_css = Path('journal/static/journal/layout-tablet.css').read_text(encoding='utf-8')
         self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)
