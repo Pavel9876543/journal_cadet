@@ -582,7 +582,7 @@
                                     {{ field }}
                                 {% endif %}
                                 {% if field.name == 'birth_date' %}
-                                    <p class="hint age-note" id="age-note">Возраст будет рассчитан после выбора даты рождения.</p>
+                                    <p class="hint age-note" id="age-note" hidden></p>
                                 {% endif %}
                                 {% if field.help_text %}
                                     <p class="help">{{ field.help_text }}</p>
@@ -732,12 +732,15 @@
             var age = ageReachedInCourseYear(birthInput.value);
             var valid = age === null || !ageLimit || age >= ageLimit;
             if (age === null) {
-                ageNote.textContent = 'Возраст будет рассчитан после выбора даты рождения.';
+                ageNote.textContent = '';
+                ageNote.hidden = true;
                 ageNote.classList.remove('invalid');
             } else if (ageLimit && age < ageLimit) {
+                ageNote.hidden = false;
                 ageNote.textContent = ageErrorMessage;
                 ageNote.classList.add('invalid');
             } else {
+                ageNote.hidden = false;
                 ageNote.textContent = 'В ' + ageReferenceYear + ' году исполнится ' + age + ' лет.';
                 ageNote.classList.remove('invalid');
             }

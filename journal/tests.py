@@ -5397,6 +5397,15 @@ class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Иванов Иван')
         self.assertContains(response, 'Temp12345!')
 
+    def test_registration_page_has_no_initial_age_calculation_prompt(self):
+        response = self.client.get(reverse('course_registration'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(
+            response,
+            'Возраст будет рассчитан после выбора даты рождения.',
+        )
+
     def test_manual_registration_close_hides_form_and_rejects_new_application(self):
         registration_settings = CourseRegistrationSettings.load()
         registration_settings.registration_mode = (
