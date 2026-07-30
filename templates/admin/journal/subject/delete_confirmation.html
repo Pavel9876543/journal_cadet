@@ -1,0 +1,95 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static jazzmin %}
+{% get_jazzmin_ui_tweaks as jazzmin_ui %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media }}
+    <script src="{% static 'admin/js/cancel.js' %}"></script>
+{% endblock %}
+
+{% block bodyclass %}{{ block.super }} app-{{ opts.app_label }} model-{{ opts.model_name }} delete-confirmation{% endblock %}
+
+{% block breadcrumbs %}
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{% url 'admin:index' %}">{% trans 'Home' %}</a></li>
+        <li class="breadcrumb-item"><a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a></li>
+        <li class="breadcrumb-item"><a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a></li>
+        <li class="breadcrumb-item"><a href="{% url opts|admin_urlname:'change' object.pk|admin_urlquote %}">{{ object|truncatewords:"18" }}</a></li>
+        <li class="breadcrumb-item active">Удаление</li>
+    </ol>
+{% endblock %}
+
+{% block content_title %}Удаление предмета{% endblock %}
+
+{% block content %}
+    <div class="col-12">
+        <div class="card card-danger card-outline">
+            <div class="card-header with-border">
+                <h4 class="card-title">Удаление предмета «{{ object }}»</h4>
+            </div>
+            <div class="card-body">
+                {% if perms_lacking %}
+                    <p>Недостаточно прав для удаления связанных объектов:</p>
+                    <ol>
+                        {% for item in perms_lacking %}<li>{{ item }}</li>{% endfor %}
+                    </ol>
+                {% elif protected %}
+                    <p>
+                        Предмет уже используется в учебных данных, поэтому удалить его физически
+                        без потери истории нельзя. Деактивация скроет предмет из рабочих списков,
+                        сохранив назначения, оценки и итоги.
+                    </p>
+                    <p><strong>Связанные защищённые данные:</strong></p>
+                    <ol id="deleted-objects">{{ protected|unordered_list }}</ol>
+                    {% if subject_can_deactivate %}
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="deactivate" value="yes">
+                            <div class="row">
+                                <div class="col-12 col-sm-5 col-md-4">
+                                    <button type="submit" class="btn {{ jazzmin_ui.button_classes.danger }} form-control">
+                                        Деактивировать предмет
+                                    </button>
+                                </div>
+                                <div class="col-12 col-sm-5 col-md-4 mt-2 mt-sm-0">
+                                    <a href="#" class="btn {{ jazzmin_ui.button_classes.secondary }} cancel-link form-control">
+                                        Отмена
+                                    </a>
+                                </div>
+                            </div>
+                        </form>
+                    {% else %}
+                        <p><strong>Предмет уже деактивирован; исторические данные сохранены.</strong></p>
+                        <a href="{% url opts|admin_urlname:'changelist' %}" class="btn {{ jazzmin_ui.button_classes.secondary }}">
+                            Вернуться к предметам
+                        </a>
+                    {% endif %}
+                {% else %}
+                    <p>Предмет нигде не используется. Удалить его безвозвратно?</p>
+                    {% include "admin/includes/object_delete_summary.html" %}
+                    <h4>Удаляемые объекты</h4>
+                    <ol id="deleted-objects">{{ deleted_objects|unordered_list }}</ol>
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="post" value="yes">
+                        {% if is_popup %}<input type="hidden" name="_popup" value="1">{% endif %}
+                        {% if to_field %}<input type="hidden" name="_to_field" value="{{ to_field }}">{% endif %}
+                        <div class="row">
+                            <div class="col-12 col-sm-5 col-md-4">
+                                <button type="submit" class="btn {{ jazzmin_ui.button_classes.danger }} form-control">
+                                    Да, удалить
+                                </button>
+                            </div>
+                            <div class="col-12 col-sm-5 col-md-4 mt-2 mt-sm-0">
+                                <a href="#" class="btn {{ jazzmin_ui.button_classes.secondary }} cancel-link form-control">
+                                    Отмена
+                                </a>
+                            </div>
+                        </div>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+{% endblock %}

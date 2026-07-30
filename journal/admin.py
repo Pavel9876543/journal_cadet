@@ -2,6 +2,7 @@ from urllib.parse import urlencode
 
 from django import forms
 from django.contrib import admin
+from django.contrib import messages
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
 from django.contrib.admin.widgets import RelatedFieldWidgetWrapper
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
@@ -9,6 +10,7 @@ from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.db.models.deletion import ProtectedError
+from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html
 
@@ -2406,6 +2408,7 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     )
     ordering = ('name',)
     list_per_page = 50
+    delete_confirmation_template = 'admin/journal/subject/delete_confirmation.html'
     fieldsets = (
         ('Предмет', {
             'fields': ('name', 'assessment_mode', 'final_grade_type', 'is_specialty', 'is_active'),
@@ -2459,6 +2462,47 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
                 distinct=True,
             ),
         )
+
+    def delete_view(self, request, object_id, extra_context=None):
+        subject = self.get_object(request, object_id)
+        protected = []
+        if subject is not None:
+            protected = super().get_deleted_objects([subject], request)[3]
+
+        if (
+            subject is not None
+            and protected
+            and request.method == 'POST'
+            and request.POST.get('deactivate') == 'yes'
+        ):
+            if not self.has_delete_permission(request, subject):
+                raise PermissionDenied
+            if subject.is_active:
+                subject.is_active = False
+                subject.save(update_fields=['is_active'])
+                self.log_change(
+                    request,
+                    subject,
+                    'Предмет деактивирован вместо удаления: связанные учебные данные сохранены.',
+                )
+                self.message_user(
+                    request,
+                    f'Предмет «{subject}» деактивирован. Связанные назначения и оценки сохранены.',
+                    level=messages.SUCCESS,
+                )
+            else:
+                self.message_user(
+                    request,
+                    f'Предмет «{subject}» уже деактивирован.',
+                    level=messages.INFO,
+                )
+            return HttpResponseRedirect(reverse('admin:journal_subject_changelist'))
+
+        context = dict(extra_context or {})
+        context['subject_can_deactivate'] = bool(
+            subject is not None and protected and subject.is_active
+        )
+        return super().delete_view(request, object_id, extra_context=context)
 
     @admin.display(description='Групп')
     def groups_count(self, obj):

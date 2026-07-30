@@ -4166,6 +4166,46 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(individual_response, 'Индивидуальные ученики по этому предмету')
         self.assertNotContains(individual_response, 'Группы, где есть этот предмет')
 
+    def test_used_subject_delete_page_offers_safe_deactivation(self):
+        data = self.create_base_journal()
+        subject = data['solfeggio']
+        assignment = GroupSubject.objects.get(
+            group=data['group'],
+            subject=subject,
+        )
+        self.client.force_login(self.admin_user)
+        delete_url = reverse('admin:journal_subject_delete', args=[subject.pk])
+
+        confirmation = self.client.get(delete_url)
+
+        self.assertEqual(confirmation.status_code, 200)
+        self.assertContains(confirmation, 'Деактивировать предмет')
+        self.assertContains(confirmation, 'сохранив назначения, оценки и итоги')
+        self.assertContains(confirmation, 'name="deactivate"')
+
+        response = self.client.post(delete_url, {'deactivate': 'yes'})
+
+        self.assertEqual(response.status_code, 302)
+        subject.refresh_from_db()
+        self.assertFalse(subject.is_active)
+        self.assertTrue(GroupSubject.objects.filter(pk=assignment.pk).exists())
+
+    def test_unused_subject_can_still_be_deleted_permanently(self):
+        subject = self.create_subject(name='Неиспользуемый предмет')
+        self.client.force_login(self.admin_user)
+        delete_url = reverse('admin:journal_subject_delete', args=[subject.pk])
+
+        confirmation = self.client.get(delete_url)
+
+        self.assertEqual(confirmation.status_code, 200)
+        self.assertContains(confirmation, 'Предмет нигде не используется')
+        self.assertContains(confirmation, 'name="post" value="yes"')
+
+        response = self.client.post(delete_url, {'post': 'yes'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Subject.objects.filter(pk=subject.pk).exists())
+
     def test_subject_admin_autocomplete_filters_subjects_by_assignment_type(self):
         group_subject = self.create_subject(name='Групповой предмет')
         individual_subject = self.create_subject(name='Индивидуальный предмет', is_specialty=True)
