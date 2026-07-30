@@ -2008,7 +2008,12 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <input type="text" maxlength="64" name="exam__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.exam_grade }}" aria-label="{{ row.student_name }}: экзамен" placeholder="4+, 5- или Н">
+                                                        <select name="exam__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student_name }}: экзамен">
+                                                            <option value="">—</option>
+                                                            {% for option in table.final_grade_options %}
+                                                                <option value="{{ option }}"{% if option == row.exam_grade %} selected{% endif %}>{{ option }}</option>
+                                                            {% endfor %}
+                                                        </select>
                                                     {% else %}
                                                         {% if row.exam_grade %}
                                                             {{ row.exam_grade }}
@@ -2019,7 +2024,12 @@
                                                 </td>
                                                 <td class="result-cell">
                                                     {% if can_edit_journal %}
-                                                        <input type="text" maxlength="64" name="final__{{ table.subject.id }}__{{ row.student.id }}" value="{{ row.final_grade }}" aria-label="{{ row.student_name }}: итоговая оценка" placeholder="4+, 5- или Н">
+                                                        <select name="final__{{ table.subject.id }}__{{ row.student.id }}" aria-label="{{ row.student_name }}: итоговая оценка">
+                                                            <option value="">—</option>
+                                                            {% for option in table.final_grade_options %}
+                                                                <option value="{{ option }}"{% if option == row.final_grade %} selected{% endif %}>{{ option }}</option>
+                                                            {% endfor %}
+                                                        </select>
                                                     {% else %}
                                                         {% if row.final_grade %}
                                                             {{ row.final_grade }}

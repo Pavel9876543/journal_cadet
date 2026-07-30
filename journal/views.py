@@ -1163,7 +1163,7 @@ def _table_assignment_maps(
 
 def _final_grade_options(final_grade_type: str) -> list[str]:
     if final_grade_type == Subject.FINAL_GRADE_TYPE_PASS_FAIL:
-        return ['Зачет', 'Незачет']
+        return ['Зачет', 'Незачет', 'Не аттестован']
     return [
         value
         for number in range(1, 6)

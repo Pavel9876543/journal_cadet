@@ -3086,6 +3086,67 @@ class ViewTests(JournalTestDataMixin, TestCase):
             f'name="final__{self.data["solfeggio"].pk}__{self.data["student"].pk}"',
         )
 
+    def test_pass_fail_subject_uses_matching_exam_and_final_grade_options(self):
+        pass_fail_subject = self.create_subject(
+            name='Зачетный предмет',
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        GroupSubject.objects.create(
+            group=self.data['group'],
+            subject=pass_fail_subject,
+            teacher=self.data['teacher'],
+        )
+        self.client.force_login(self.admin_user)
+        journal_url = (
+            f'{reverse("journal")}?group={self.data["group"].pk}'
+            f'&subject={pass_fail_subject.pk}'
+            f'&academic_year={self.data["year"].pk}'
+        )
+
+        response = self.client.get(journal_url)
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        exam_name = f'exam__{pass_fail_subject.pk}__{self.data["student"].pk}'
+        final_name = f'final__{pass_fail_subject.pk}__{self.data["student"].pk}'
+        exam_start = html.index(f'<select name="{exam_name}"')
+        exam_end = html.index('</select>', exam_start)
+        exam_control = html[exam_start:exam_end]
+        final_start = html.index(f'<select name="{final_name}"')
+        final_end = html.index('</select>', final_start)
+        final_control = html[final_start:final_end]
+
+        for control in (exam_control, final_control):
+            self.assertIn('<option value="Зачет">', control)
+            self.assertIn('<option value="Незачет">', control)
+            self.assertIn('<option value="Не аттестован">', control)
+            self.assertNotIn('<option value="5">', control)
+
+        invalid_response = self.client.post(journal_url, {
+            'action': 'inline_edit',
+            exam_name: '5',
+        })
+        self.assertEqual(invalid_response.status_code, 200)
+        self.assertFalse(
+            SubjectResult.objects.filter(
+                student=self.data['student'],
+                subject=pass_fail_subject,
+                academic_year=self.data['year'],
+            ).exists(),
+        )
+
+        valid_response = self.client.post(journal_url, {
+            'action': 'inline_edit',
+            exam_name: 'Зачет',
+        })
+        self.assertEqual(valid_response.status_code, 302)
+        result = SubjectResult.objects.get(
+            student=self.data['student'],
+            subject=pass_fail_subject,
+            academic_year=self.data['year'],
+        )
+        self.assertEqual(result.exam_grade, 'Зачет')
+
     def test_archived_academic_year_is_read_only_in_journal(self):
         grade = Grade.objects.create(
             student=self.data['student'],
