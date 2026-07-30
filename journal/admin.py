@@ -591,12 +591,15 @@ class GradeAdminForm(forms.ModelForm):
             except (AcademicYear.DoesNotExist, ValueError, TypeError):
                 academic_year = None
 
+        group_was_submitted = self.is_bound and 'group' in self.data
         enrollment = (
             student.enrollment_for_year(academic_year)
             if student is not None and academic_year is not None
             else None
         )
-        group = enrollment.group if enrollment is not None else None
+        group = None if group_was_submitted else (
+            enrollment.group if enrollment is not None else None
+        )
         if group_id:
             try:
                 group = StudyGroup.objects.get(pk=group_id)
@@ -609,6 +612,7 @@ class GradeAdminForm(forms.ModelForm):
             teacher=teacher,
             student=student,
             subject=subject,
+            individual_only=group is None,
         )
 
         if 'group' in self.fields:

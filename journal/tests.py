@@ -1822,6 +1822,33 @@ class FormTests(JournalTestDataMixin, TestCase):
             "changedField === 'student') {\n                clearField('subject')",
             dependency_script,
         )
+        self.assertIn(
+            "mode === 'grade' && fields.group && !fields.group.value",
+            dependency_script,
+        )
+
+    def test_blank_group_forms_render_only_individual_assignments(self):
+        data = self.create_base_journal()
+
+        journal_form = GradeCreateForm(
+            teacher=data['other_teacher'],
+            academic_year=data['year'],
+        )
+        admin_form = GradeAdminForm(
+            fixed_academic_year=data['year'],
+        )
+
+        self.assertEqual(
+            list(journal_form.fields['subject'].queryset),
+            [data['specialty']],
+        )
+        self.assertEqual(
+            list(journal_form.fields['student'].queryset),
+            [data['student']],
+        )
+        self.assertIn(data['specialty'], admin_form.fields['subject'].queryset)
+        self.assertNotIn(data['solfeggio'], admin_form.fields['subject'].queryset)
+        self.assertNotIn(data['literature'], admin_form.fields['subject'].queryset)
 
     def test_grade_dependency_options_show_year_values_before_group_selection(self):
         data = self.create_base_journal()
@@ -2315,6 +2342,30 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertEqual(
             [item['id'] for item in payload['students']],
             [self.data['student'].pk],
+        )
+
+    def test_blank_group_defaults_to_individual_mode_server_side(self):
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'mode': 'grade',
+                'group': '',
+                'teacher': self.data['other_teacher'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [item['id'] for item in payload['subjects']],
+            [self.data['specialty'].pk],
+        )
+        self.assertNotIn(
+            self.data['literature'].pk,
+            [item['id'] for item in payload['subjects']],
         )
 
     def test_changing_subject_drops_incompatible_group_and_student(self):

@@ -290,11 +290,15 @@ class GradeCreateForm(forms.ModelForm):
 
         selected_student = self._selected_student()
         selected_academic_year = academic_year or self._selected_academic_year()
-        selected_group = (
-            group
-            or self._selected_group(selected_student, selected_academic_year)
-            or initial_group
+        group_was_submitted = self.is_bound and (
+            self.add_prefix('group') in self.data or 'group' in self.data
         )
+        selected_group = group or self._selected_group(
+            selected_student,
+            selected_academic_year,
+        )
+        if selected_group is None and not group_was_submitted:
+            selected_group = initial_group
         selected_subject = subject or self._selected_subject() or initial_subject
         selected_teacher = teacher or self._selected_teacher()
         dependency_options = get_grade_form_options(
@@ -305,6 +309,7 @@ class GradeCreateForm(forms.ModelForm):
             student=selected_student,
             subject=selected_subject,
             students_queryset=students_queryset,
+            individual_only=selected_group is None,
         )
         group_queryset = dependency_options['groups']
         if group is not None:

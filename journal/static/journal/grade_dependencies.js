@@ -69,7 +69,9 @@
         var yearFilter = yearFilterSelector ? document.querySelector(yearFilterSelector) : null;
         var requestSequence = 0;
         var activeRequest = null;
-        var individualMode = false;
+        var individualMode = Boolean(
+            mode === 'grade' && fields.group && !fields.group.value
+        );
 
         function setStatus(message, isError) {
             var status = scope.querySelector('[data-grade-options-status]')

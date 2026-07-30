@@ -207,7 +207,7 @@ def _grade_options_api_sync(request):
 
     if request.GET.get('mode') == 'grade':
         fixed_teacher = teacher_profile if not can_manage_all_grades else None
-        individual_only = request.GET.get('individual') == '1' and group is None
+        individual_only = group is None
         options = get_grade_form_options(
             academic_year=academic_year,
             group=group,
