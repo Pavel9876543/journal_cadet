@@ -9,6 +9,7 @@ from .views import (
     grade_options_api,
     healthcheck_view,
     journal_view,
+    orchestra_part_options_api,
 )
 
 urlpatterns = [
@@ -16,6 +17,11 @@ urlpatterns = [
     path('', journal_view, name='journal'),
     path('registration/', course_registration_view, name='course_registration'),
     path('api/course-registration/', course_registration_api, name='course_registration_api'),
+    path(
+        'api/orchestra-parts/',
+        orchestra_part_options_api,
+        name='orchestra_part_options_api',
+    ),
     path('api/grade-options/', grade_options_api, name='grade_options_api'),
     path('api/assignment-options/', assignment_options_api, name='assignment_options_api'),
     path('api/assessment-options/', assessment_options_api, name='assessment_options_api'),

@@ -157,6 +157,7 @@ JAZZMIN_SETTINGS = {
         'journal.Subject',
         'journal.AcademicYear',
         'journal.Instrument',
+        'journal.OrchestraPart',
         # Обычный журнал и итоги.
         'journal.Grade',
         'journal.SubjectResult',
@@ -190,6 +191,7 @@ JAZZMIN_SETTINGS = {
         'journal': 'fas fa-book-open',
         'journal.academicyear': 'fas fa-calendar-alt',
         'journal.instrument': 'fas fa-guitar',
+        'journal.orchestrapart': 'fas fa-music',
         'journal.subject': 'fas fa-book',
         'journal.studygroup': 'fas fa-layer-group',
         'journal.teacher': 'fas fa-chalkboard-teacher',

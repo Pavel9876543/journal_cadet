@@ -7,6 +7,7 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 from django.core.exceptions import ValidationError
 from django.db.models import Q
+from django.urls import reverse
 
 from .grade_options import (
     get_grade_form_options,
@@ -21,6 +22,7 @@ from .models import (
     CourseRegistrationSettings,
     Grade,
     Instrument,
+    OrchestraPart,
     Student,
     StudyGroup,
     Subject,
@@ -44,6 +46,52 @@ def html_date_input(attrs=None):
     if attrs:
         widget_attrs.update(attrs)
     return forms.DateInput(format=HTML_DATE_INPUT_FORMAT, attrs=widget_attrs)
+
+
+def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
+    """Limit an optional orchestra-part field to the selected instrument."""
+    if 'orchestra_part' not in form.fields or instrument_field_name not in form.fields:
+        return
+
+    instrument_id = None
+    custom_instrument = ''
+    selected_part_id = None
+    if form.is_bound:
+        instrument_id = form.data.get(form.add_prefix(instrument_field_name))
+        custom_instrument = (
+            form.data.get(form.add_prefix('custom_instrument'), '') or ''
+        ).strip()
+        selected_part_id = form.data.get(form.add_prefix('orchestra_part'))
+    elif form.instance and form.instance.pk:
+        instrument_id = getattr(form.instance, f'{instrument_field_name}_id', None)
+        custom_instrument = (form.instance.custom_instrument or '').strip()
+        selected_part_id = form.instance.orchestra_part_id
+
+    queryset = OrchestraPart.objects.none()
+    if instrument_id and not custom_instrument:
+        try:
+            queryset = OrchestraPart.objects.filter(
+                instrument_id=instrument_id,
+            ).filter(
+                Q(is_active=True) | Q(pk=selected_part_id),
+            ).order_by('name')
+        except (TypeError, ValueError):
+            pass
+
+    field = form.fields['orchestra_part']
+    field.required = False
+    field.queryset = queryset
+    field.empty_label = 'Не выбрана'
+    field.disabled = bool(custom_instrument or not instrument_id)
+    field.help_text = (
+        'Выберите партию для указанного инструмента или оставьте поле пустым, '
+        'если ученик едет на курсы впервые.'
+    )
+    field.widget.attrs.update({
+        'data-orchestra-part': '1',
+        'data-orchestra-parts-url': reverse('orchestra_part_options_api'),
+        'data-instrument-field': instrument_field_name,
+    })
 
 
 # -----------------------------------------------------------------------------
@@ -678,14 +726,7 @@ class BaseCourseApplicationForm(forms.ModelForm):
                 'data-custom-instrument': '1',
             })
         if 'orchestra_part' in self.fields:
-            self.fields['orchestra_part'].required = False
-            self.fields['orchestra_part'].help_text = (
-                'Укажите, какую партию ученик играет в оркестре. '
-                'Если он едет на курсы впервые, оставьте поле пустым.'
-            )
-            self.fields['orchestra_part'].widget.attrs.update({
-                'placeholder': 'Например, партия второго альта',
-            })
+            configure_orchestra_part_field(self, 'instrument_reference')
         if 'music_education' in self.fields:
             self.fields['music_education'].widget = forms.Select(
                 choices=CourseApplication.MUSIC_EDUCATION_CHOICES,
@@ -773,6 +814,7 @@ class BaseCourseApplicationForm(forms.ModelForm):
         cleaned_data = super().clean()
         reference = cleaned_data.get('instrument_reference')
         custom = (cleaned_data.get('custom_instrument') or '').strip()
+        orchestra_part = cleaned_data.get('orchestra_part')
         cleaned_data['custom_instrument'] = custom
         if reference and custom:
             self.add_error(
@@ -786,6 +828,13 @@ class BaseCourseApplicationForm(forms.ModelForm):
             )
         if reference:
             cleaned_data['custom_instrument'] = ''
+        if custom:
+            cleaned_data['orchestra_part'] = None
+        elif orchestra_part and reference and orchestra_part.instrument_id != reference.pk:
+            self.add_error(
+                'orchestra_part',
+                'Выбранная партия не относится к выбранному инструменту.',
+            )
         return cleaned_data
 
     def clean_student_phone(self):
@@ -820,6 +869,9 @@ class CourseApplicationPublicForm(BaseCourseApplicationForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, age_limit=True, include_status=False, **kwargs)
 
+    class Media:
+        js = ('journal/orchestra_part_dependencies.js',)
+
 
 class CourseApplicationAdminForm(BaseCourseApplicationForm):
     """
@@ -829,6 +881,9 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, age_limit=False, include_status=True, **kwargs)
+
+    class Media:
+        js = ('journal/orchestra_part_dependencies.js',)
 
 
 # -----------------------------------------------------------------------------

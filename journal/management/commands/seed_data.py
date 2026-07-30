@@ -31,6 +31,7 @@ from journal.models import (
     Grade,
     GroupSubject,
     Instrument,
+    OrchestraPart,
     PasswordRecoveryContact,
     Student,
     StudentAssessmentGroup,
@@ -111,6 +112,7 @@ class Command(BaseCommand):
             },
         )
         instruments = self._create_instruments()
+        self._create_orchestra_parts(instruments)
         subjects = self._create_subjects()
         groups = self._create_groups(academic_year)
 
@@ -233,6 +235,7 @@ class Command(BaseCommand):
         # Очищаем справочники.
         StudyGroup.objects.all().delete()
         Subject.objects.all().delete()
+        OrchestraPart.objects.all().delete()
         Instrument.objects.all().delete()
         AcademicYear.objects.all().delete()
 
@@ -348,6 +351,18 @@ class Command(BaseCommand):
             name: Instrument.objects.create(name=name)
             for name in instrument_names
         }
+
+    def _create_orchestra_parts(self, instruments: dict[str, Instrument]) -> None:
+        parts_by_instrument = {
+            'Домра': ('Малая первая', 'Малая вторая', 'Альтовая первая', 'Альтовая вторая'),
+            'Балалайка': ('Прима', 'Альт', 'Секунда'),
+            'Баян': ('Первый', 'Второй', 'Третий'),
+        }
+        OrchestraPart.objects.bulk_create(
+            OrchestraPart(instrument=instruments[instrument_name], name=part_name)
+            for instrument_name, part_names in parts_by_instrument.items()
+            for part_name in part_names
+        )
 
     def _create_subjects(self) -> dict[str, Subject]:
         subject_specs = [

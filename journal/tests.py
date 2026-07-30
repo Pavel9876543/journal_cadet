@@ -109,6 +109,7 @@ from journal.models import (
     GroupSubject,
     FinalGradeRule,
     Instrument,
+    OrchestraPart,
     PasswordRecoveryContact,
     Student,
     StudentAssessmentGroup,
@@ -329,6 +330,85 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
 
         self.assertFalse(first.is_active)
         self.assertTrue(second.is_active)
+
+    def test_orchestra_parts_belong_to_one_instrument(self):
+        domra = self.create_instrument(name='Домра')
+        bayan = self.create_instrument(name='Баян')
+        domra_part = OrchestraPart.objects.create(
+            instrument=domra,
+            name='Малая первая',
+        )
+        bayan_part = OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый',
+        )
+
+        self.assertEqual(list(domra.orchestra_parts.all()), [domra_part])
+        self.assertEqual(list(bayan.orchestra_parts.all()), [bayan_part])
+        with self.assertRaises(ValidationError):
+            OrchestraPart.objects.create(
+                instrument=domra,
+                name='Малая первая',
+            )
+
+    def test_student_rejects_part_from_another_instrument(self):
+        year = self.create_academic_year()
+        group = self.create_group(academic_year=year)
+        domra = self.create_instrument(name='Домра')
+        bayan = self.create_instrument(name='Баян')
+        wrong_part = OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый',
+        )
+        student = self.create_student(
+            group=group,
+            instrument=domra,
+            username='orchestra_mismatch_student',
+        )
+        student.orchestra_part = wrong_part
+
+        with self.assertRaises(ValidationError) as error:
+            student.save()
+
+        self.assertIn('orchestra_part', error.exception.message_dict)
+
+    def test_custom_instrument_clears_orchestra_part(self):
+        instrument = self.create_instrument(name='Домра')
+        part = OrchestraPart.objects.create(
+            instrument=instrument,
+            name='Малая вторая',
+        )
+        student = self.create_student(
+            instrument=instrument,
+            username='custom_instrument_part_student',
+        )
+        student.orchestra_part = part
+        student.instrument = None
+        student.custom_instrument = 'Скрипка'
+
+        student.save()
+        student.refresh_from_db()
+
+        self.assertIsNone(student.orchestra_part)
+
+    def test_database_rejects_part_without_reference_instrument(self):
+        instrument = self.create_instrument(name='Домра')
+        part = OrchestraPart.objects.create(
+            instrument=instrument,
+            name='Альтовая первая',
+        )
+        student = self.create_student(
+            instrument=instrument,
+            username='orchestra_constraint_student',
+        )
+
+        with transaction.atomic():
+            with self.assertRaises(IntegrityError):
+                Student.objects.filter(pk=student.pk).update(
+                    instrument=None,
+                    custom_instrument='Собственный инструмент',
+                    orchestra_part=part,
+                )
 
     def test_newest_academic_year_becomes_active_even_when_created_inactive(self):
         first = self.create_academic_year(name='2025/2026', is_active=True)
@@ -1496,22 +1576,97 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertFalse(Instrument.objects.filter(name='Домра малая II').exists())
 
     def test_course_application_form_stores_optional_orchestra_part(self):
+        instrument = self.create_instrument(name='Альт')
+        orchestra_part = OrchestraPart.objects.create(
+            instrument=instrument,
+            name='Партия второго альта',
+        )
         form = CourseApplicationPublicForm(
             data=self.application_form_payload(
-                orchestra_part='  Партия второго альта  ',
+                instrument_reference=instrument,
+                orchestra_part=orchestra_part.pk,
             ),
         )
 
         self.assertTrue(form.is_valid(), form.errors)
         application = form.save()
-        self.assertEqual(application.orchestra_part, 'Партия второго альта')
-        self.assertEqual(application.student.orchestra_part, 'Партия второго альта')
+        self.assertEqual(application.orchestra_part, orchestra_part)
+        self.assertEqual(application.student.orchestra_part, orchestra_part)
         self.assertEqual(
             application.student.enrollment_for_year(application.academic_year).orchestra_part,
             'Партия второго альта',
         )
         self.assertFalse(form.fields['orchestra_part'].required)
         self.assertIn('едет на курсы впервые', form.fields['orchestra_part'].help_text)
+
+    def test_course_application_form_filters_parts_by_instrument(self):
+        domra = self.create_instrument(name='Домра')
+        bayan = self.create_instrument(name='Баян')
+        domra_part = OrchestraPart.objects.create(
+            instrument=domra,
+            name='Малая первая',
+        )
+        bayan_part = OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый',
+        )
+        inactive_part = OrchestraPart.objects.create(
+            instrument=domra,
+            name='Старая партия',
+            is_active=False,
+        )
+
+        form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                instrument_reference=domra,
+                orchestra_part=domra_part.pk,
+            ),
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(
+            list(form.fields['orchestra_part'].queryset),
+            [domra_part],
+        )
+        self.assertNotIn(bayan_part, form.fields['orchestra_part'].queryset)
+        self.assertNotIn(inactive_part, form.fields['orchestra_part'].queryset)
+
+    def test_course_application_form_rejects_part_from_another_instrument(self):
+        domra = self.create_instrument(name='Домра')
+        bayan = self.create_instrument(name='Баян')
+        bayan_part = OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый',
+        )
+
+        form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                instrument_reference=domra,
+                orchestra_part=bayan_part.pk,
+            ),
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('orchestra_part', form.errors)
+
+    def test_custom_instrument_disables_and_clears_orchestra_part(self):
+        instrument = self.create_instrument(name='Домра')
+        part = OrchestraPart.objects.create(
+            instrument=instrument,
+            name='Малая первая',
+        )
+
+        form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                instrument_reference=None,
+                custom_instrument='Скрипка',
+                orchestra_part=part.pk,
+            ),
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.fields['orchestra_part'].disabled)
+        self.assertIsNone(form.cleaned_data['orchestra_part'])
 
     def test_parent_contacts_accepts_dash_from_form_placeholder(self):
         normalized_contacts = normalize_parent_contacts(
@@ -2663,6 +2818,41 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Сольфеджио')
         self.assertNotContains(response, 'Регистрация на курсы')
+
+    def test_orchestra_part_options_api_returns_only_active_instrument_parts(self):
+        domra = self.create_instrument(name='Домра')
+        bayan = self.data['instrument']
+        domra_part = OrchestraPart.objects.create(
+            instrument=domra,
+            name='Малая первая',
+        )
+        OrchestraPart.objects.create(
+            instrument=domra,
+            name='Старая партия',
+            is_active=False,
+        )
+        OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый',
+        )
+
+        response = self.client.get(
+            reverse('orchestra_part_options_api'),
+            {'instrument': domra.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {'parts': [{'id': domra_part.pk, 'name': 'Малая первая'}]},
+        )
+
+    def test_registration_page_loads_orchestra_part_dependency_script(self):
+        response = self.client.get(reverse('course_registration'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'journal/orchestra_part_dependencies.js')
+        self.assertContains(response, 'data-orchestra-part="1"')
 
     def test_grade_options_api_keeps_upstream_groups_independent_of_children(self):
         second_group = self.create_group(name='Вторая группа', academic_year=self.data['year'])
@@ -4049,6 +4239,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'journal.Subject',
                 'journal.AcademicYear',
                 'journal.Instrument',
+                'journal.OrchestraPart',
                 'journal.Grade',
                 'journal.SubjectResult',
                 'journal.AssessmentGroup',
@@ -4101,6 +4292,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             Group,
             AcademicYear,
             Instrument,
+            OrchestraPart,
             Subject,
             StudyGroup,
             Teacher,
@@ -4148,6 +4340,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             [inline.model for inline in django_admin.site._registry[Teacher].inlines],
             [GroupSubject, StudentSubject, AssessmentItem],
         )
+        self.assertEqual(
+            [inline.model for inline in django_admin.site._registry[Instrument].inlines],
+            [OrchestraPart],
+        )
 
     def test_subject_admin_shows_assignment_inline_for_subject_type(self):
         group_subject = self.create_subject(name='Групповой предмет')
@@ -4165,6 +4361,33 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(individual_response, 'Индивидуальный предмет')
         self.assertContains(individual_response, 'Индивидуальные ученики по этому предмету')
         self.assertNotContains(individual_response, 'Группы, где есть этот предмет')
+
+    def test_student_admin_form_filters_orchestra_parts_by_instrument(self):
+        domra = self.create_instrument(name='Домра')
+        bayan = self.create_instrument(name='Баян')
+        domra_part = OrchestraPart.objects.create(
+            instrument=domra,
+            name='Малая первая',
+        )
+        OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый',
+        )
+
+        form = StudentAdminForm(data={
+            'instrument': domra.pk,
+            'custom_instrument': '',
+            'orchestra_part': domra_part.pk,
+        })
+
+        self.assertEqual(
+            list(form.fields['orchestra_part'].queryset),
+            [domra_part],
+        )
+        self.assertIn(
+            'journal/orchestra_part_dependencies.js',
+            StudentAdminForm.Media.js,
+        )
 
     def test_used_subject_delete_page_offers_safe_deactivation(self):
         data = self.create_base_journal()
@@ -6232,6 +6455,13 @@ class SeedDataCommandTests(TestCase):
             ).exists(),
         )
         self.assertTrue(Instrument.objects.exists())
+        self.assertEqual(OrchestraPart.objects.count(), 10)
+        self.assertTrue(
+            OrchestraPart.objects.filter(
+                instrument__name='Домра',
+                name='Малая первая',
+            ).exists(),
+        )
         self.assertTrue(StudyGroup.objects.exists())
         self.assertTrue(Subject.objects.exists())
         self.assertTrue(Teacher.objects.exists())
@@ -7170,10 +7400,18 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
             group=group,
             username='orchestra_export_student',
         )
-        student.orchestra_part = 'Партия первого тенора'
+        archive_part = OrchestraPart.objects.create(
+            instrument=student.instrument,
+            name='Партия первого тенора',
+        )
+        current_part = OrchestraPart.objects.create(
+            instrument=student.instrument,
+            name='Текущая партия',
+        )
+        student.orchestra_part = archive_part
         student.save()
         self.create_academic_year(name='2026/2027')
-        Student.objects.filter(pk=student.pk).update(orchestra_part='Текущая партия')
+        Student.objects.filter(pk=student.pk).update(orchestra_part=current_part)
 
         workbook = build_full_export_workbook(old_year)
         students_sheet = workbook['Ученики']

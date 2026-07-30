@@ -89,6 +89,7 @@ def _admin_guide_view_sync(request: HttpRequest) -> HttpResponse:
         'groups_url': reverse('admin:journal_studygroup_changelist'),
         'teachers_url': reverse('admin:journal_teacher_changelist'),
         'subjects_url': reverse('admin:journal_subject_changelist'),
+        'orchestra_parts_url': reverse('admin:journal_orchestrapart_changelist'),
         'grades_url': reverse('admin:journal_grade_changelist'),
         'results_url': reverse('admin:journal_subjectresult_changelist'),
         'applications_url': reverse('admin:journal_courseapplication_changelist'),

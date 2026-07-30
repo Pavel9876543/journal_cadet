@@ -75,6 +75,7 @@ from .models import (
     CourseRegistrationSettings,
     Grade,
     GroupSubject,
+    OrchestraPart,
     PasswordRecoveryContact,
     Student,
     StudentEnrollment,
@@ -106,6 +107,23 @@ def healthcheck_view(request):
     except DatabaseError:
         return JsonResponse({'status': 'unavailable'}, status=503)
     return JsonResponse({'status': 'ok'})
+
+
+@require_GET
+def orchestra_part_options_api(request):
+    instrument_id = request.GET.get('instrument')
+    try:
+        instrument_id = int(instrument_id)
+    except (TypeError, ValueError):
+        return JsonResponse({'parts': []})
+
+    parts = list(
+        OrchestraPart.objects.filter(
+            instrument_id=instrument_id,
+            is_active=True,
+        ).order_by('name').values('id', 'name')
+    )
+    return JsonResponse({'parts': parts})
 
 
 def csrf_failure_view(request, reason=''):

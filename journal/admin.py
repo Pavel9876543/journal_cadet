@@ -39,7 +39,12 @@ from .assessment_services import (
     enrollments_for_assessment_item,
     students_eligible_for_assessment_group,
 )
-from .forms import CourseApplicationAdminForm, CourseRegistrationSettingsForm, html_date_input
+from .forms import (
+    CourseApplicationAdminForm,
+    CourseRegistrationSettingsForm,
+    configure_orchestra_part_field,
+    html_date_input,
+)
 from .grade_options import (
     get_grade_form_options,
     get_grade_groups,
@@ -59,6 +64,7 @@ from .models import (
     GroupSubject,
     FinalGradeRule,
     Instrument,
+    OrchestraPart,
     PasswordRecoveryContact,
     Student,
     StudentAssessmentGroup,
@@ -932,14 +938,19 @@ class StudentAdminForm(forms.ModelForm):
                 'data-custom-instrument': '1',
                 'placeholder': 'Название собственного инструмента',
             })
+        configure_orchestra_part_field(self, 'instrument')
 
     class Media:
-        js = ('journal/admin_responsive.js',)
+        js = (
+            'journal/admin_responsive.js',
+            'journal/orchestra_part_dependencies.js',
+        )
 
     def clean(self):
         cleaned_data = super().clean()
         instrument = cleaned_data.get('instrument')
         custom = (cleaned_data.get('custom_instrument') or '').strip()
+        orchestra_part = cleaned_data.get('orchestra_part')
         cleaned_data['custom_instrument'] = custom
         if instrument and custom:
             self.add_error('custom_instrument', 'Оставьте только один способ указания инструмента.')
@@ -947,6 +958,13 @@ class StudentAdminForm(forms.ModelForm):
             self.add_error('custom_instrument', 'Выберите инструмент или укажите собственный.')
         if instrument:
             cleaned_data['custom_instrument'] = ''
+        if custom:
+            cleaned_data['orchestra_part'] = None
+        elif orchestra_part and instrument and orchestra_part.instrument_id != instrument.pk:
+            self.add_error(
+                'orchestra_part',
+                'Выбранная партия не относится к выбранному инструменту.',
+            )
         return cleaned_data
 
 
@@ -2345,14 +2363,23 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
         )
 
 
+class OrchestraPartInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
+    model = OrchestraPart
+    fields = ('name', 'is_active')
+    extra = 1
+    ordering = ('name',)
+    can_delete = False
+
+
 @admin.register(Instrument)
 class InstrumentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     changelist_description = (
         'Справочник инструментов и партий. Значение выбирается в карточке ученика '
         'и используется для поиска и отчетов.'
     )
-    list_display = ('name', 'students_count')
+    list_display = ('name', 'orchestra_parts_count', 'students_count')
     search_fields = ('name',)
+    inlines = (OrchestraPartInline,)
     ordering = ('name',)
     list_per_page = 50
 
@@ -2360,12 +2387,21 @@ class InstrumentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
         academic_year = self.selected_academic_year(request)
         qs = super().get_queryset(request)
         return qs.annotate(
+            _orchestra_parts_count=Count(
+                'orchestra_parts',
+                filter=Q(orchestra_parts__is_active=True),
+                distinct=True,
+            ),
             _students_count=Count(
                 'students',
                 filter=Q(students__enrollments__academic_year=academic_year),
                 distinct=True,
             ),
         )
+
+    @admin.display(description='Партий')
+    def orchestra_parts_count(self, obj):
+        return obj._orchestra_parts_count
 
     @admin.display(description='Учеников')
     def students_count(self, obj):
@@ -2374,6 +2410,31 @@ class InstrumentAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMix
             admin_changelist_url('student', {'instrument__id__exact': obj.pk}),
             obj._students_count,
         )
+
+
+@admin.register(OrchestraPart)
+class OrchestraPartAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Партии оркестра привязаны к инструментам. В карточке ученика отображаются '
+        'только активные партии выбранного инструмента. Используемую партию '
+        'деактивируйте, чтобы сохранить историю.'
+    )
+    list_display = ('name', 'instrument', 'is_active', 'students_count')
+    list_filter = ('instrument', 'is_active')
+    search_fields = ('name', 'instrument__name')
+    autocomplete_fields = ('instrument',)
+    ordering = ('instrument__name', 'name')
+    list_select_related = ('instrument',)
+    list_per_page = 50
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _students_count=Count('students', distinct=True),
+        )
+
+    @admin.display(description='Учеников')
+    def students_count(self, obj):
+        return obj._students_count
 
 
 @admin.register(Subject)
@@ -2900,7 +2961,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'group__name',
         'instrument__name',
         'custom_instrument',
-        'orchestra_part',
+        'orchestra_part__name',
         'individual_subjects__teacher__full_name',
         'individual_subjects__teacher_name_snapshot',
         'individual_subjects__subject__name',
@@ -2913,7 +2974,13 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         SubjectResultInline,
     )
     ordering = ('full_name',)
-    list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
+    list_select_related = (
+        'user',
+        'group',
+        'group__academic_year',
+        'instrument',
+        'orchestra_part',
+    )
     list_per_page = 40
     show_full_result_count = False
     readonly_fields = ('age_display', 'course_application_link')
@@ -3549,7 +3616,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         'instrument',
         'instrument_reference__name',
         'custom_instrument',
-        'orchestra_part',
+        'orchestra_part__name',
         'generated_login',
         'user__username',
         'student__full_name',
@@ -3567,7 +3634,13 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         'journal_removed_at',
     )
     date_hierarchy = 'registration_date'
-    list_select_related = ('student', 'user', 'academic_year', 'instrument_reference')
+    list_select_related = (
+        'student',
+        'user',
+        'academic_year',
+        'instrument_reference',
+        'orchestra_part',
+    )
     actions = ('confirm_applications', 'reject_applications')
     list_per_page = 40
     show_full_result_count = False

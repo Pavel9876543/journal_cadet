@@ -306,6 +306,46 @@ class Instrument(models.Model):
         super().save(*args, **kwargs)
 
 
+class OrchestraPart(models.Model):
+    instrument = models.ForeignKey(
+        Instrument,
+        on_delete=models.PROTECT,
+        related_name='orchestra_parts',
+        verbose_name='Инструмент',
+    )
+    name = models.CharField('Название партии', max_length=255)
+    is_active = models.BooleanField('Активна', default=True)
+
+    class Meta:
+        verbose_name = 'Партия оркестра'
+        verbose_name_plural = 'Партии оркестра'
+        ordering = ['instrument__name', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['instrument', 'name'],
+                name='unique_orchestra_part_instrument_name',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['instrument', 'is_active', 'name'],
+                name='orch_part_instrument_idx',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self) -> None:
+        super().clean()
+        if self.name:
+            self.name = self.name.strip()
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
 class Subject(models.Model):
     ASSESSMENT_MODE_STANDARD = 'standard'
     ASSESSMENT_MODE_ELEMENTS = 'elements'
@@ -766,7 +806,14 @@ class Student(models.Model):
         blank=True,
         help_text='Заполняется только когда подходящего инструмента нет в справочнике.',
     )
-    orchestra_part = models.CharField('Партия в оркестре', max_length=255, blank=True)
+    orchestra_part = models.ForeignKey(
+        OrchestraPart,
+        on_delete=models.PROTECT,
+        related_name='students',
+        verbose_name='Партия в оркестре',
+        null=True,
+        blank=True,
+    )
     is_active = models.BooleanField('Активен', default=True)
 
     class Meta:
@@ -788,6 +835,13 @@ class Student(models.Model):
                 ),
                 name='student_exactly_one_instrument_source',
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(orchestra_part__isnull=True)
+                    | Q(instrument__isnull=False, custom_instrument='')
+                ),
+                name='student_part_requires_reference_instrument',
+            ),
         ]
 
     def __str__(self) -> str:
@@ -806,11 +860,19 @@ class Student(models.Model):
         if self.comments:
             self.comments = self.comments.strip()
         self.custom_instrument = (self.custom_instrument or '').strip()
-        self.orchestra_part = (self.orchestra_part or '').strip()
         if bool(self.instrument_id) == bool(self.custom_instrument):
             raise ValidationError({
                 'instrument': 'Выберите инструмент из справочника или укажите собственный, но не оба варианта.',
                 'custom_instrument': 'Укажите собственный инструмент только при пустом справочном значении.',
+            })
+        if self.custom_instrument:
+            self.orchestra_part = None
+        elif self.orchestra_part_id and not OrchestraPart.objects.filter(
+            pk=self.orchestra_part_id,
+            instrument_id=self.instrument_id,
+        ).exists():
+            raise ValidationError({
+                'orchestra_part': 'Выбранная партия не относится к инструменту ученика.',
             })
         if self.full_name and self.birth_date:
             identity_name = normalize_student_identity_name(self.full_name)
@@ -928,6 +990,10 @@ class Student(models.Model):
         return self.custom_instrument or 'Не указан'
 
     @property
+    def orchestra_part_display(self) -> str:
+        return self.orchestra_part.name if self.orchestra_part_id else ''
+
+    @property
     def specialty_teacher(self):
         assignment = self.specialty_assignment
         return assignment.teacher if assignment else None
@@ -1029,7 +1095,7 @@ class StudentEnrollment(models.Model):
             'birth_date': student.birth_date,
             'city_church': student.city_church,
             'instrument_name': student.instrument_display,
-            'orchestra_part': student.orchestra_part,
+            'orchestra_part': student.orchestra_part_display,
             'music_education': student.music_education,
             'student_phone': student.student_phone,
             'parent_contacts': student.parent_contacts,
@@ -2669,7 +2735,14 @@ class CourseApplication(models.Model):
         blank=True,
     )
     custom_instrument = models.CharField('Собственный инструмент', max_length=255, blank=True)
-    orchestra_part = models.CharField('Партия в оркестре', max_length=255, blank=True)
+    orchestra_part = models.ForeignKey(
+        OrchestraPart,
+        on_delete=models.PROTECT,
+        related_name='course_applications',
+        verbose_name='Партия в оркестре',
+        null=True,
+        blank=True,
+    )
     music_education = models.CharField(
         'Музыкальное образование',
         max_length=20,
@@ -2760,6 +2833,13 @@ class CourseApplication(models.Model):
                 ),
                 name='course_app_exactly_one_instrument_source',
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(orchestra_part__isnull=True)
+                    | Q(instrument_reference__isnull=False, custom_instrument='')
+                ),
+                name='course_app_part_requires_reference',
+            ),
         ]
 
     def __str__(self) -> str:
@@ -2809,7 +2889,6 @@ class CourseApplication(models.Model):
             'first_name',
             'middle_name',
             'city_church',
-            'orchestra_part',
         ):
             value = getattr(self, field_name, '')
 
@@ -2838,6 +2917,16 @@ class CourseApplication(models.Model):
             raise ValidationError({
                 'instrument_reference': message,
                 'custom_instrument': message,
+            })
+
+        if has_custom:
+            self.orchestra_part = None
+        elif self.orchestra_part_id and not OrchestraPart.objects.filter(
+            pk=self.orchestra_part_id,
+            instrument_id=self.instrument_reference_id,
+        ).exists():
+            raise ValidationError({
+                'orchestra_part': 'Выбранная партия не относится к выбранному инструменту.',
             })
 
         self.sync_instrument_display()
@@ -3267,7 +3356,7 @@ def finalize_academic_year_snapshots(academic_year_id: int) -> None:
     enrollments = list(
         StudentEnrollment.objects
         .filter(academic_year_id=academic_year_id)
-        .select_related('student__instrument')
+        .select_related('student__instrument', 'student__orchestra_part')
     )
     for enrollment in enrollments:
         enrollment.copy_from_student(enrollment.student)

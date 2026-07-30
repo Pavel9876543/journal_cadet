@@ -22,6 +22,7 @@ from journal.models import (
     Grade,
     GroupSubject,
     Instrument,
+    OrchestraPart,
     StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
@@ -169,6 +170,18 @@ def write_reference_sheets(workbook: Workbook, academic_year: AcademicYear | Non
         'Инструменты',
         Instrument.objects.order_by('name'),
         [('Название инструмента', lambda item: item.name)],
+    )
+    write_custom_sheet(
+        workbook,
+        'Партии оркестра',
+        OrchestraPart.objects.select_related('instrument').order_by(
+            'instrument__name', 'name',
+        ),
+        [
+            ('Инструмент', lambda item: item.instrument.name),
+            ('Партия', lambda item: item.name),
+            ('Активна', lambda item: item.is_active),
+        ],
     )
     write_custom_sheet(
         workbook,
@@ -465,7 +478,7 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
 def write_applications_sheet(workbook: Workbook, academic_year: AcademicYear | None) -> None:
     applications = (
         CourseApplication.objects.filter(academic_year=academic_year)
-        .select_related('academic_year', 'instrument_reference')
+        .select_related('academic_year', 'instrument_reference', 'orchestra_part')
         .order_by('last_name', 'first_name', 'middle_name')
         if academic_year else CourseApplication.objects.none()
     )
@@ -479,7 +492,10 @@ def write_applications_sheet(workbook: Workbook, academic_year: AcademicYear | N
             ('Дата рождения', lambda item: item.birth_date),
             ('Город / Церковь', lambda item: item.city_church),
             ('Инструмент', lambda item: item.instrument),
-            ('Партия в оркестре', lambda item: item.orchestra_part),
+            (
+                'Партия в оркестре',
+                lambda item: item.orchestra_part.name if item.orchestra_part_id else '',
+            ),
             ('Музыкальное образование', lambda item: item.get_music_education_display()),
             ('Телефон ученика', lambda item: item.student_phone),
             ('Телефон родителей', lambda item: item.parent_contacts),
