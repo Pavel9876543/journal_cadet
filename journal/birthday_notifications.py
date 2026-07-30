@@ -40,9 +40,6 @@ def _candidate_birth_dates(target_dates: tuple[date, ...]) -> set[date]:
 def birthday_notifications_for_user(user, *, today: date | None = None) -> list[dict]:
     if not getattr(user, 'is_authenticated', False):
         return []
-    is_teacher = getattr(user, 'teacher_profile', None) is not None
-    if not (user.is_staff or is_teacher):
-        return []
 
     today = today or timezone.localdate()
     tomorrow = today + timedelta(days=1)

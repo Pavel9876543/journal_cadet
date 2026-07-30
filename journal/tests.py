@@ -2608,26 +2608,39 @@ class BirthdayNotificationTests(JournalTestDataMixin, TestCase):
             self.assertIn(expected, admin_messages)
             self.assertIn(expected, teacher_messages)
 
-    def test_student_does_not_receive_staff_birthday_notifications(self):
-        self.assertEqual(
-            birthday_notifications_for_user(
+    def test_student_receives_all_birthday_notifications(self):
+        messages = [
+            item['message']
+            for item in birthday_notifications_for_user(
                 self.data['student'].user,
                 today=date(2026, 7, 30),
-            ),
-            [],
+            )
+        ]
+
+        self.assertIn(
+            'Сегодня день рождения: Сидоров Семён Семёнович (ученик) — исполнилось 18 лет.',
+            messages,
+        )
+        self.assertIn(
+            'Завтра день рождения: Иванов Иван Иванович (преподаватель) — исполнится 46 лет.',
+            messages,
         )
 
-    def test_birthday_notifications_render_in_admin_and_teacher_journal(self):
+    def test_birthday_notifications_render_for_admin_teacher_and_student(self):
         with patch('journal.birthday_notifications.timezone.localdate', return_value=date(2026, 7, 30)):
             self.client.force_login(self.admin_user)
             admin_response = self.client.get(reverse('admin:index'))
             self.client.force_login(self.data['teacher'].user)
             teacher_response = self.client.get(reverse('journal'))
+            self.client.force_login(self.data['student'].user)
+            student_response = self.client.get(reverse('journal'))
 
         self.assertContains(admin_response, 'Сидоров Семён Семёнович')
         self.assertContains(admin_response, 'исполнилось 18 лет')
         self.assertContains(teacher_response, 'Иванов Иван Иванович')
         self.assertContains(teacher_response, 'исполнится 46 лет')
+        self.assertContains(student_response, 'Администраторова Анна')
+        self.assertContains(student_response, 'исполнилось 36 лет')
 
 
 class ViewTests(JournalTestDataMixin, TestCase):
@@ -4929,6 +4942,55 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         data['student'].refresh_from_db()
         self.assertEqual(data['student'].birth_date, date(2011, 2, 2))
+
+
+class CaseInsensitiveAuthenticationTests(TestCase):
+    def test_login_ignores_ascii_username_case(self):
+        user = User.objects.create_user(
+            username='Teacher.Mixed',
+            password='Pass12345!',
+        )
+
+        login_page = self.client.get(reverse('login'))
+
+        response = self.client.post(
+            reverse('login'),
+            data={
+                'username': 'teacher.mIXED',
+                'password': 'Pass12345!',
+            },
+        )
+
+        self.assertContains(login_page, 'Регистр букв в логине не важен.')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(int(self.client.session['_auth_user_id']), user.pk)
+
+    def test_login_ignores_cyrillic_username_case(self):
+        user = User.objects.create_user(
+            username='Иванов Иван',
+            password='Pass12345!',
+        )
+
+        authenticated = self.client.login(
+            username='ивАНОВ иВАН',
+            password='Pass12345!',
+        )
+
+        self.assertTrue(authenticated)
+        self.assertEqual(int(self.client.session['_auth_user_id']), user.pk)
+
+    def test_login_still_rejects_an_incorrect_password(self):
+        User.objects.create_user(
+            username='CaseSensitivePassword',
+            password='Pass12345!',
+        )
+
+        self.assertFalse(
+            self.client.login(
+                username='casesensitivepassword',
+                password='pass12345!',
+            ),
+        )
 
 
 class PasswordRecoveryViewTests(TestCase):
