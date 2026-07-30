@@ -207,6 +207,7 @@ def _grade_options_api_sync(request):
 
     if request.GET.get('mode') == 'grade':
         fixed_teacher = teacher_profile if not can_manage_all_grades else None
+        individual_only = request.GET.get('individual') == '1' and group is None
         options = get_grade_form_options(
             academic_year=academic_year,
             group=group,
@@ -214,6 +215,7 @@ def _grade_options_api_sync(request):
             teacher=teacher,
             student=student,
             subject=subject,
+            individual_only=individual_only,
         )
         if group is not None and not options['groups'].filter(pk=group.pk).exists():
             group = None
@@ -228,6 +230,7 @@ def _grade_options_api_sync(request):
             teacher=teacher,
             student=student,
             subject=subject,
+            individual_only=individual_only,
         )
         groups = options['groups'].select_related('academic_year')
         students = options['students']
@@ -247,7 +250,11 @@ def _grade_options_api_sync(request):
                 for item in students
             ],
             'subjects': [
-                {'id': item.pk, 'label': item.name}
+                {
+                    'id': item.pk,
+                    'label': item.name,
+                    'is_individual': item.is_specialty,
+                }
                 for item in subjects
             ],
             'teachers': [
@@ -2016,15 +2023,14 @@ def _handle_grade_form(
 ):
     if request.method == 'POST' and request.POST.get('action') == 'add_grade':
         raw_group_id = request.POST.get('group')
-        posted_group = (
-            _get_selected_object(groups, raw_group_id)
-            if raw_group_id
-            else selected_group
-        )
+        if 'group' in request.POST:
+            posted_group = _get_selected_object(groups, raw_group_id) if raw_group_id else None
+        else:
+            posted_group = selected_group
         posted_subject = _get_selected_object(subjects, request.POST.get('subject'))
 
         form_data = request.POST.copy()
-        if posted_group is not None and not form_data.get('group'):
+        if posted_group is not None and 'group' not in form_data:
             form_data['group'] = str(posted_group.pk)
 
         grade_form = GradeCreateForm(

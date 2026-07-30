@@ -69,6 +69,7 @@
         var yearFilter = yearFilterSelector ? document.querySelector(yearFilterSelector) : null;
         var requestSequence = 0;
         var activeRequest = null;
+        var individualMode = false;
 
         function setStatus(message, isError) {
             var status = scope.querySelector('[data-grade-options-status]')
@@ -124,6 +125,9 @@
             if (!fields.academic_year && fixedYear) {
                 url.searchParams.set('academic_year', fixedYear);
             }
+            if (individualMode && (!fields.group || !fields.group.value)) {
+                url.searchParams.set('individual', '1');
+            }
             url.searchParams.set('mode', mode);
             if (changedField) {
                 url.searchParams.set('changed', changedField);
@@ -154,6 +158,9 @@
                 }
                 if (item.academic_year_id) {
                     option.dataset.academicYearId = String(item.academic_year_id);
+                }
+                if (name === 'subject') {
+                    option.dataset.individual = item.is_individual ? '1' : '0';
                 }
                 fragment.appendChild(option);
                 retained = retained || value === oldValue;
@@ -257,6 +264,19 @@
                         form.submit();
                     }
                     return;
+                }
+                if (name === 'group') {
+                    individualMode = !fields[name].value;
+                } else if (
+                    name === 'subject'
+                    && (!fields.group || !fields.group.value)
+                ) {
+                    var selectedOption = fields[name].selectedIndex >= 0
+                        ? fields[name].options[fields[name].selectedIndex]
+                        : null;
+                    individualMode = Boolean(
+                        selectedOption && selectedOption.dataset.individual === '1'
+                    );
                 }
                 clearDescendants(name);
                 loadOptions(name);

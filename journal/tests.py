@@ -2068,6 +2068,20 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
             [data['other_teacher']],
         )
 
+    def test_individual_grade_mode_excludes_group_assignments(self):
+        data = self.create_base_journal()
+
+        options = get_grade_form_options(
+            academic_year=data['year'],
+            fixed_teacher=data['other_teacher'],
+            individual_only=True,
+        )
+
+        self.assertEqual(list(options['students']), [data['student']])
+        self.assertEqual(list(options['subjects']), [data['specialty']])
+        self.assertEqual(list(options['teachers']), [data['other_teacher']])
+        self.assertNotIn(data['literature'], options['subjects'])
+
     def test_grade_option_helpers_hide_archived_year_by_default_but_allow_explicit_view(self):
         data = self.create_base_journal()
         AcademicYear.objects.create(
@@ -2271,15 +2285,17 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertIn(self.data['solfeggio'].pk, subject_ids)
         self.assertIn(other_subject.pk, subject_ids)
 
-    def test_selecting_student_after_subject_keeps_compatible_subject(self):
+    def test_selecting_student_after_individual_subject_keeps_subject(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
         response = self.client.get(
             reverse('grade_options_api'),
             {
                 'mode': 'grade',
+                'individual': '1',
                 'student': self.data['student'].pk,
-                'subject': self.data['solfeggio'].pk,
+                'subject': self.data['specialty'].pk,
+                'teacher': self.data['other_teacher'].pk,
                 'academic_year': self.data['year'].pk,
                 'changed': 'student',
                 'strict': '1',
@@ -2287,9 +2303,18 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        payload = response.json()
         self.assertIn(
-            self.data['solfeggio'].pk,
-            [item['id'] for item in response.json()['subjects']],
+            self.data['specialty'].pk,
+            [item['id'] for item in payload['subjects']],
+        )
+        self.assertNotIn(
+            self.data['literature'].pk,
+            [item['id'] for item in payload['subjects']],
+        )
+        self.assertEqual(
+            [item['id'] for item in payload['students']],
+            [self.data['student'].pk],
         )
 
     def test_changing_subject_drops_incompatible_group_and_student(self):
@@ -2855,6 +2880,48 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 teacher=self.data['teacher'],
                 date=date(2025, 10, 16),
                 value='5',
+            ).exists(),
+        )
+
+    def test_blank_group_keeps_individual_grade_outside_filtered_group(self):
+        other_group = self.create_group(
+            name='Другая группа',
+            academic_year=self.data['year'],
+        )
+        other_student = self.create_student(
+            full_name='Индивидуальный Ученик',
+            group=other_group,
+            instrument=self.data['instrument'],
+            username='individual_grade_student',
+        )
+        StudentSubject.objects.create(
+            student=other_student,
+            subject=self.data['specialty'],
+            teacher=self.data['other_teacher'],
+        )
+        self.client.login(username='admin_test', password='Pass12345!')
+
+        response = self.client.post(
+            f'{reverse("journal")}?group={self.data["group"].pk}',
+            data={
+                'action': 'add_grade',
+                'group': '',
+                'student': other_student.pk,
+                'subject': self.data['specialty'].pk,
+                'teacher': self.data['other_teacher'].pk,
+                'academic_year': self.data['year'].pk,
+                'date': '2025-10-18',
+                'value': '5',
+                'comment': '',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            Grade.objects.filter(
+                student=other_student,
+                subject=self.data['specialty'],
+                teacher=self.data['other_teacher'],
             ).exists(),
         )
 

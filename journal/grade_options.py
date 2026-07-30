@@ -37,6 +37,7 @@ def get_grade_form_options(
     student=None,
     subject=None,
     students_queryset=None,
+    individual_only=False,
 ):
     """Return mutually compatible options for the grade form.
 
@@ -65,18 +66,21 @@ def get_grade_form_options(
             teacher=effective_teacher,
             academic_year=academic_year,
             base_queryset=students_queryset,
+            individual_only=individual_only,
         )
         subjects = get_grade_subjects(
             group=group,
             student=student,
             teacher=effective_teacher,
             academic_year=academic_year,
+            individual_only=individual_only,
         )
         teachers = get_grade_teachers(
             group=group,
             student=student,
             subject=subject,
             academic_year=academic_year,
+            individual_only=individual_only,
         )
         if fixed_teacher is not None:
             teachers = teachers.filter(pk=fixed_teacher.pk)

@@ -115,6 +115,7 @@ def available_students(
     academic_year: AcademicYear | None = None,
     assessment_modes: Iterable[str] | str | None = None,
     base_queryset=None,
+    individual_only: bool = False,
 ):
     year, group_assignments, individual_assignments = _assignment_querysets(
         academic_year,
@@ -124,6 +125,8 @@ def available_students(
         return Student.objects.none()
     if group is not None and group.academic_year_id != year.pk:
         return Student.objects.none()
+    if individual_only:
+        group_assignments = group_assignments.none()
 
     group_enrollments = StudentEnrollment.objects.filter(academic_year=year)
     if group is not None:
@@ -174,6 +177,7 @@ def available_subjects(
     teacher: Teacher | None = None,
     academic_year: AcademicYear | None = None,
     assessment_modes: Iterable[str] | str | None = None,
+    individual_only: bool = False,
 ):
     year, group_assignments, individual_assignments = _assignment_querysets(
         academic_year,
@@ -183,11 +187,13 @@ def available_subjects(
         return Subject.objects.none()
     if group is not None and group.academic_year_id != year.pk:
         return Subject.objects.none()
+    if individual_only:
+        group_assignments = group_assignments.none()
 
     enrollment = _student_enrollment(student, year)
     if student is not None and enrollment is None:
         return Subject.objects.none()
-    selected_group = group or (enrollment.group if enrollment else None)
+    selected_group = None if individual_only else group or (enrollment.group if enrollment else None)
     if selected_group is not None:
         group_assignments = group_assignments.filter(group=selected_group)
         group_student_ids = StudentEnrollment.objects.filter(
@@ -219,6 +225,7 @@ def available_teachers(
     subject: Subject | None = None,
     academic_year: AcademicYear | None = None,
     assessment_modes: Iterable[str] | str | None = None,
+    individual_only: bool = False,
 ):
     year, group_assignments, individual_assignments = _assignment_querysets(
         academic_year,
@@ -228,11 +235,13 @@ def available_teachers(
         return Teacher.objects.none()
     if group is not None and group.academic_year_id != year.pk:
         return Teacher.objects.none()
+    if individual_only:
+        group_assignments = group_assignments.none()
 
     enrollment = _student_enrollment(student, year)
     if student is not None and enrollment is None:
         return Teacher.objects.none()
-    selected_group = group or (enrollment.group if enrollment else None)
+    selected_group = None if individual_only else group or (enrollment.group if enrollment else None)
     if selected_group is not None:
         group_assignments = group_assignments.filter(group=selected_group)
         group_student_ids = StudentEnrollment.objects.filter(
