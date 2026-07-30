@@ -211,6 +211,72 @@
         initialiseInstrumentFields(scope || document);
     }
 
+    var adminFormStateKey = 'journal-admin-form-state';
+
+    function saveAdminFormState(event) {
+        var submitterName = event && event.submitter ? event.submitter.name : '';
+        if (submitterName === '_addanother' || submitterName === '_saveasnew') {
+            sessionStorage.removeItem(adminFormStateKey);
+            return;
+        }
+        var activeTab = document.querySelector('.nav-tabs .nav-link.active, [role="tab"].active');
+        var scrollers = [];
+        document.querySelectorAll('.journal-responsive-table, .inline-group, .tabular').forEach(function (element, index) {
+            if (element.scrollTop || element.scrollLeft) {
+                scrollers.push({index: index, top: element.scrollTop, left: element.scrollLeft});
+            }
+        });
+        sessionStorage.setItem(adminFormStateKey, JSON.stringify({
+            path: window.location.pathname,
+            scrollY: window.scrollY || 0,
+            activeTab: activeTab ? activeTab.getAttribute('href') : '',
+            scrollers: scrollers
+        }));
+    }
+
+    function restoreAdminFormState() {
+        var rawState = sessionStorage.getItem(adminFormStateKey);
+        if (!rawState) {
+            return;
+        }
+        sessionStorage.removeItem(adminFormStateKey);
+        var state;
+        try {
+            state = JSON.parse(rawState);
+        } catch (_error) {
+            return;
+        }
+        if (state.path && state.path !== window.location.pathname) {
+            return;
+        }
+        if (state.activeTab) {
+            var tab = document.querySelector('.nav-tabs .nav-link[href="' + state.activeTab + '"]');
+            if (tab) {
+                tab.click();
+            }
+        }
+        window.requestAnimationFrame(function () {
+            window.scrollTo(0, Number(state.scrollY) || 0);
+            var elements = document.querySelectorAll('.journal-responsive-table, .inline-group, .tabular');
+            (state.scrollers || []).forEach(function (position) {
+                var element = elements[position.index];
+                if (element) {
+                    element.scrollTop = Number(position.top) || 0;
+                    element.scrollLeft = Number(position.left) || 0;
+                }
+            });
+        });
+    }
+
+    function initialiseAdminFormState() {
+        var changeForm = document.querySelector('body.change-form #content-main form[method="post"]');
+        if (!changeForm) {
+            return;
+        }
+        restoreAdminFormState();
+        changeForm.addEventListener('submit', saveAdminFormState);
+    }
+
     var resizeTimer = null;
     window.addEventListener('resize', function () {
         window.clearTimeout(resizeTimer);
@@ -253,10 +319,12 @@
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () {
             initialise(document);
+            initialiseAdminFormState();
             observer.observe(document.body, {childList: true, subtree: true});
         });
     } else {
         initialise(document);
+        initialiseAdminFormState();
         observer.observe(document.body, {childList: true, subtree: true});
     }
 }());

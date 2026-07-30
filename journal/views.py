@@ -392,7 +392,9 @@ async def assessment_filter_options_api(request):
 def _assessment_filter_options_api_sync(request):
     fixed_teacher = getattr(request.user, 'teacher_profile', None)
     if request.user.is_superuser:
-        academic_years = AcademicYear.objects.all()
+        academic_years = AcademicYear.objects.filter(
+            pk__in=academic_year_ids_for_user(request.user),
+        )
     elif fixed_teacher is not None:
         academic_years = AcademicYear.objects.filter(
             pk__in=academic_year_ids_for_user(request.user),
@@ -1526,12 +1528,9 @@ def _journal_view_sync(request):
     selected_year_id = request.GET.get('academic_year') or request.GET.get('year')
 
     all_academic_years = AcademicYear.objects.all().order_by('-starts_on', '-ends_on', '-pk')
-    if request.user.is_superuser:
-        academic_years = all_academic_years
-    else:
-        academic_years = all_academic_years.filter(
-            pk__in=academic_year_ids_for_user(request.user),
-        )
+    academic_years = all_academic_years.filter(
+        pk__in=academic_year_ids_for_user(request.user),
+    )
 
     selected_academic_year = (
         _get_selected_object(academic_years, selected_year_id)

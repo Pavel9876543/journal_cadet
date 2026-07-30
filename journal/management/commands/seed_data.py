@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from random import Random
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.conf import settings
@@ -44,6 +45,7 @@ from journal.models import (
     TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
+    UserAcademicYearMembership,
 )
 
 
@@ -104,6 +106,7 @@ class Command(BaseCommand):
             PasswordRecoveryContact.objects.create(**contact_data)
 
         academic_year = self._create_current_academic_year()
+        self._assign_existing_admins_to_academic_year(academic_year)
         CourseRegistrationSettings.objects.update_or_create(
             academic_year=academic_year,
             defaults={
@@ -206,6 +209,7 @@ class Command(BaseCommand):
         TeacherSubject.objects.all().delete()
         StudentEnrollment.objects.all().delete()
         TeacherEnrollment.objects.all().delete()
+        UserAcademicYearMembership.objects.all().delete()
 
         # Запоминаем пользователей учеников и преподавателей,
         # чтобы удалить только неадминские аккаунты.
@@ -283,6 +287,17 @@ class Command(BaseCommand):
 
         for user in admin_users.distinct():
             user.groups.add(admin_group)
+
+    def _assign_existing_admins_to_academic_year(self, academic_year: AcademicYear) -> None:
+        memberships = [
+            UserAcademicYearMembership(
+                user=user,
+                academic_year=academic_year,
+                is_active=True,
+            )
+            for user in self.UserModel.objects.filter(is_staff=True, is_active=True)
+        ]
+        UserAcademicYearMembership.objects.bulk_create(memberships, ignore_conflicts=True)
 
     def _ensure_temporary_credentials_for_all_users(self) -> None:
         exported_logins = {row['login'] for row in self.credentials}
@@ -656,6 +671,15 @@ class Command(BaseCommand):
             ('Лидия Кузьмина', Student.GENDER_FEMALE, 'Старший ансамбль', 'Хоровая партия', 'Ольга Захарова'),
             ('Степан Захаров', Student.GENDER_MALE, 'Старший ансамбль', 'Балалайка', 'Сергей Аксёнов'),
         ]
+        students_per_group: dict[str, int] = {}
+        reduced_student_specs = []
+        for student_spec in student_specs:
+            group_name = student_spec[2]
+            if students_per_group.get(group_name, 0) >= 3:
+                continue
+            students_per_group[group_name] = students_per_group.get(group_name, 0) + 1
+            reduced_student_specs.append(student_spec)
+        student_specs = reduced_student_specs
 
         students: list[Student] = []
         specialty_subject = subjects['Специальность']
@@ -848,7 +872,7 @@ class Command(BaseCommand):
                     continue
                 grade_offset = (student.pk + subject_index) % len(grade_values_source)
                 grade_values = grade_values_source[grade_offset:] + grade_values_source[:grade_offset]
-                for index, grade_value in enumerate(grade_values):
+                for index, grade_value in enumerate(grade_values[:3]):
                     grade_date = first_grade_date + timedelta(
                         days=index * 18 + subject_index,
                     )
@@ -1258,6 +1282,22 @@ class Command(BaseCommand):
                 errors.append(f'Итог без назначения: #{result_id}.')
                 break
 
+        for model in apps.get_app_config('journal').get_models():
+            for field in model._meta.concrete_fields:
+                if field.primary_key or field.null or field.blank:
+                    continue
+                if field.get_internal_type() not in {
+                    'CharField', 'TextField', 'EmailField', 'SlugField', 'URLField',
+                }:
+                    continue
+                if model.objects.filter(**{field.name: ''}).exists():
+                    errors.append(
+                        f'Пустое обязательное поле {model._meta.label}.{field.name}.'
+                    )
+                    break
+
+        if self.UserModel.objects.filter(username='').exists():
+            errors.append('В тестовых данных есть пользователь без логина.')
 
         if errors:
             raise CommandError('Тестовые данные созданы с противоречиями: ' + ' '.join(errors))
@@ -1405,6 +1445,7 @@ class Command(BaseCommand):
                 'status': CourseApplication.STATUS_REJECTED,
             },
         ]
+        application_specs = [application_specs[0], application_specs[1], application_specs[-1]]
 
         for application_data in application_specs:
             application_data = dict(application_data)

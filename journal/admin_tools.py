@@ -51,6 +51,7 @@ from .models import (
     TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
+    UserAcademicYearMembership,
 )
 
 
@@ -290,6 +291,7 @@ def clear_database_data() -> dict[str, int]:
         # Зачисления удаляются раньше учеников, преподавателей и годов.
         StudentEnrollment,
         TeacherEnrollment,
+        UserAcademicYearMembership,
 
         # Основные профили.
         Student,

@@ -21,20 +21,25 @@ def get_selected_admin_academic_year(request):
     if cached is not None:
         return cached
 
+    available_years = AcademicYear.objects.all()
+    user = getattr(request, 'user', None)
+    if getattr(user, 'is_authenticated', False):
+        available_years = available_years.filter(pk__in=academic_year_ids_for_user(user))
+
     query_params = getattr(request, 'GET', {})
     session = getattr(request, 'session', None)
     requested_value = query_params.get(ADMIN_ACADEMIC_YEAR_PARAM)
     if requested_value:
         selected = None
         if requested_value == 'active':
-            selected = AcademicYear.get_active()
+            selected = available_years.filter(is_active=True).first()
         else:
             try:
                 requested_id = int(requested_value)
             except (TypeError, ValueError):
                 requested_id = None
             if requested_id is not None:
-                selected = AcademicYear.objects.filter(pk=requested_id).first()
+                selected = available_years.filter(pk=requested_id).first()
         if selected is not None:
             if session is not None:
                 session[ADMIN_ACADEMIC_YEAR_SESSION_KEY] = selected.pk
@@ -43,13 +48,15 @@ def get_selected_admin_academic_year(request):
 
     selected_id = session.get(ADMIN_ACADEMIC_YEAR_SESSION_KEY) if session is not None else None
     if selected_id:
-        selected = AcademicYear.objects.filter(pk=selected_id).first()
+        selected = available_years.filter(pk=selected_id).first()
         if selected is not None:
             setattr(request, ADMIN_ACADEMIC_YEAR_REQUEST_CACHE, selected)
             return selected
         session.pop(ADMIN_ACADEMIC_YEAR_SESSION_KEY, None)
 
-    selected = AcademicYear.get_active() or AcademicYear.latest()
+    selected = available_years.filter(is_active=True).first() or available_years.order_by(
+        '-starts_on', '-ends_on', '-pk'
+    ).first()
     if selected is not None and session is not None:
         session[ADMIN_ACADEMIC_YEAR_SESSION_KEY] = selected.pk
     if selected is not None:
@@ -61,8 +68,11 @@ def get_admin_academic_year_context(request) -> dict:
     from .models import AcademicYear
 
     selected = get_selected_admin_academic_year(request)
+    available_years = AcademicYear.objects.filter(
+        pk__in=academic_year_ids_for_user(getattr(request, 'user', None)),
+    ).order_by('-starts_on', '-ends_on', '-pk')
     return {
-        'admin_academic_years': AcademicYear.objects.order_by('-starts_on', '-ends_on', '-pk'),
+        'admin_academic_years': available_years,
         'admin_selected_academic_year': selected,
         'admin_selected_year_is_archived': bool(selected and not selected.is_active),
         'admin_academic_year_param': ADMIN_ACADEMIC_YEAR_PARAM,
@@ -75,10 +85,9 @@ def academic_year_ids_for_user(user) -> Iterable[int]:
 
     if not getattr(user, 'is_authenticated', False):
         return ()
-    if user.is_superuser:
-        return AcademicYear.objects.values_list('pk', flat=True)
-
-    year_ids: set[int] = set()
+    year_ids: set[int] = set(
+        user.journal_year_memberships.values_list('academic_year_id', flat=True),
+    )
     try:
         student = user.student_profile
     except ObjectDoesNotExist:
@@ -96,6 +105,12 @@ def academic_year_ids_for_user(user) -> Iterable[int]:
         year_ids.update(
             teacher.academic_year_memberships.values_list('academic_year_id', flat=True),
         )
+
+    # Existing installations may have a bootstrap administrator without an
+    # explicit membership yet. Keep all years available only until the first
+    # manual assignment is created for that account.
+    if (user.is_superuser or user.is_staff) and not year_ids:
+        return AcademicYear.objects.values_list('pk', flat=True)
 
     return year_ids
 
@@ -125,12 +140,19 @@ def filter_temporary_credentials_for_year(queryset, academic_year):
         Q(course_application__academic_year=academic_year)
         | Q(
             course_application__isnull=True,
+            user__journal_year_memberships__academic_year=academic_year,
+        )
+        | Q(
+            course_application__isnull=True,
             _first_profile_year_id=academic_year.pk,
         )
     )
-    # Staff accounts are global rather than academic records. Show them only
-    # in the active context; an archived year must never acquire a copy of a
-    # yearless administrator credential.
+    # Keep compatibility for a bootstrap staff account only until explicit
+    # academic-year memberships have been configured for it.
     if AcademicYear.objects.filter(pk=academic_year.pk, is_active=True).exists():
-        year_filter |= Q(user__is_staff=True, course_application__isnull=True)
+        year_filter |= Q(
+            user__is_staff=True,
+            user__journal_year_memberships__isnull=True,
+            course_application__isnull=True,
+        )
     return queryset.filter(year_filter).distinct()

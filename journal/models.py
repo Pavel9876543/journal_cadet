@@ -70,6 +70,8 @@ def academic_year_for_object(obj):
         return None
     if isinstance(obj, AcademicYear):
         return obj
+    if isinstance(obj, UserAcademicYearMembership):
+        return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, StudyGroup):
         return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, Student):
@@ -277,6 +279,61 @@ class AcademicYear(models.Model):
         if not date:
             return None
         return cls.objects.filter(starts_on__lte=date, ends_on__gte=date).first()
+
+
+class UserAcademicYearMembership(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='journal_year_memberships',
+        verbose_name='Пользователь',
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='user_memberships',
+        verbose_name='Учебный год',
+    )
+    is_active = models.BooleanField('Активен в учебном году', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Участие пользователя в учебном году'
+        verbose_name_plural = 'Участие пользователей в учебных годах'
+        ordering = ['-academic_year__starts_on', 'user__username']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'academic_year'],
+                name='unique_user_academic_year_membership',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['academic_year', 'user'], name='user_year_membership_idx'),
+            models.Index(fields=['user', 'is_active'], name='user_year_active_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.user} — {self.academic_year}'
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+def ensure_user_academic_year_membership(
+    user_id: int | None,
+    academic_year_id: int | None,
+    *,
+    is_active: bool = True,
+) -> None:
+    if not user_id or not academic_year_id:
+        return
+    UserAcademicYearMembership.objects.update_or_create(
+        user_id=user_id,
+        academic_year_id=academic_year_id,
+        defaults={'is_active': is_active},
+    )
 
 
 class Instrument(models.Model):
@@ -675,7 +732,13 @@ class TeacherEnrollment(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
-        return super().save(*args, **kwargs)
+        result = super().save(*args, **kwargs)
+        ensure_user_academic_year_membership(
+            self.teacher.user_id,
+            self.academic_year_id,
+            is_active=self.is_active,
+        )
+        return result
 
     def delete(self, *args, **kwargs):
         teacher_id = self.teacher_id
@@ -1105,7 +1168,13 @@ class StudentEnrollment(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
-        return super().save(*args, **kwargs)
+        result = super().save(*args, **kwargs)
+        ensure_user_academic_year_membership(
+            self.student.user_id,
+            self.academic_year_id,
+            is_active=self.is_active,
+        )
+        return result
 
     def delete(self, *args, **kwargs):
         student_id = self.student_id

@@ -30,6 +30,7 @@ from journal.models import (
     SubjectResult,
     TeacherEnrollment,
     TemporaryCredential,
+    UserAcademicYearMembership,
 )
 
 
@@ -98,9 +99,11 @@ def write_users_sheet(workbook: Workbook, academic_year: AcademicYear | None) ->
             .exclude(teacher__user__isnull=True)
             .values_list('teacher__user_id', flat=True)
         )
+        user_ids.update(
+            UserAcademicYearMembership.objects.filter(academic_year=academic_year)
+            .values_list('user_id', flat=True)
+        )
     user_filter = Q(pk__in=user_ids)
-    if academic_year is not None and academic_year.is_active:
-        user_filter |= Q(is_staff=True)
     users = (
         User.objects.filter(user_filter)
         .select_related('teacher_profile', 'student_profile')

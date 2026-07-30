@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest import skipUnless
 from unittest.mock import patch
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
@@ -22,7 +23,11 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from journal.academic_year_context import filter_temporary_credentials_for_year
+from journal.academic_year_context import (
+    academic_year_ids_for_user,
+    filter_temporary_credentials_for_year,
+    get_admin_academic_year_context,
+)
 from journal.assignment_availability import (
     available_groups,
     available_students,
@@ -123,6 +128,7 @@ from journal.models import (
     TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
+    UserAcademicYearMembership,
 )
 
 
@@ -3761,6 +3767,71 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         request.session = {}
         return request
 
+    def test_administrator_can_be_assigned_to_multiple_academic_years(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        new_year = self.create_academic_year(name='2026/2027')
+        UserAcademicYearMembership.objects.bulk_create([
+            UserAcademicYearMembership(user=self.superuser, academic_year=old_year),
+            UserAcademicYearMembership(user=self.superuser, academic_year=new_year),
+        ])
+
+        self.assertEqual(
+            set(academic_year_ids_for_user(self.superuser)),
+            {old_year.pk, new_year.pk},
+        )
+
+    def test_administrator_sees_only_manually_assigned_academic_years(self):
+        assigned_year = self.create_academic_year(name='2025/2026')
+        hidden_year = self.create_academic_year(name='2026/2027')
+        UserAcademicYearMembership.objects.create(
+            user=self.superuser,
+            academic_year=assigned_year,
+        )
+        request = self.admin_request(hidden_year)
+
+        context = get_admin_academic_year_context(request)
+
+        self.assertEqual(context['admin_selected_academic_year'], assigned_year)
+        self.assertEqual(list(context['admin_academic_years']), [assigned_year])
+
+    def test_teacher_enrollments_create_memberships_for_every_academic_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        teacher = self.create_teacher(username='multi_year_teacher')
+        self.assertTrue(
+            TeacherEnrollment.objects.filter(teacher=teacher, academic_year=old_year).exists()
+        )
+        new_year = self.create_academic_year(name='2026/2027')
+        TeacherEnrollment.objects.create(teacher=teacher, academic_year=new_year)
+
+        self.assertEqual(
+            set(academic_year_ids_for_user(teacher.user)),
+            {old_year.pk, new_year.pk},
+        )
+
+    def test_admin_save_keeps_the_same_change_page(self):
+        self.create_academic_year()
+        contact = PasswordRecoveryContact.objects.create(
+            name='Администратор',
+            phone='+7 (999) 123-45-67',
+            messengers='Telegram',
+        )
+        self.client.force_login(self.superuser)
+        change_url = reverse(
+            'admin:journal_passwordrecoverycontact_change',
+            args=[contact.pk],
+        )
+
+        response = self.client.post(change_url, data={
+            'name': 'Администратор',
+            'phone': '+7 (999) 123-45-67',
+            'messengers': 'Telegram, MAX',
+            'is_active': 'on',
+            'display_order': '0',
+            '_save': 'Сохранить',
+        })
+
+        self.assertRedirects(response, change_url, fetch_redirect_response=False)
+
     def test_student_queryset_contains_only_people_from_selected_year(self):
         old_year = self.create_academic_year(name='2025/2026')
         old_group = self.create_group(name='Старая группа', academic_year=old_year)
@@ -4008,6 +4079,10 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('min-width: 0 !important;', css)
         self.assertIn('window.open', javascript)
         self.assertIn('matchMedia', javascript)
+        self.assertIn('journal-admin-form-state', javascript)
+        self.assertIn('scrollY', javascript)
+        self.assertIn('scrollLeft', javascript)
+        self.assertIn('activeTab', javascript)
 
         mobile_css = Path('journal/static/journal/layout-mobile.css').read_text(encoding='utf-8')
         self.assertIn('.filter-form > *', mobile_css)
@@ -6788,15 +6863,17 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(Student.objects.exists())
         self.assertTrue(Teacher.objects.exists())
 
-    def test_seed_data_populates_maximum_demo_profiles(self):
+    def test_seed_data_populates_compact_demo_profiles(self):
         self.assertGreaterEqual(Instrument.objects.count(), 14)
         self.assertGreaterEqual(Subject.objects.count(), 21)
         self.assertGreaterEqual(StudyGroup.objects.count(), 7)
         self.assertGreaterEqual(Teacher.objects.count(), 9)
-        self.assertGreaterEqual(Student.objects.count(), 35)
+        self.assertGreaterEqual(Student.objects.count(), 15)
+        self.assertLessEqual(Student.objects.count(), 20)
         self.assertGreaterEqual(GroupSubject.objects.count(), 34)
-        self.assertGreaterEqual(StudentSubject.objects.count(), 70)
-        self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 70)
+        self.assertGreaterEqual(StudentSubject.objects.count(), 30)
+        self.assertLessEqual(StudentSubject.objects.count(), 45)
+        self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 30)
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
         expected_grade_count = 0
@@ -6817,7 +6894,7 @@ class SeedDataCommandTests(TestCase):
                     subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
                 ).values_list('subject_id', flat=True)
             )
-            expected_grade_count += len(subject_ids) * 6
+            expected_grade_count += len(subject_ids) * 3
 
         self.assertEqual(Grade.objects.count(), expected_grade_count)
 
@@ -6839,6 +6916,21 @@ class SeedDataCommandTests(TestCase):
                 Q(date__lt=date(2025, 9, 1)) | Q(date__gt=date(2026, 8, 31)),
             ).exists(),
         )
+        self.assertEqual(CourseApplication.objects.count(), 3)
+
+        for model in apps.get_app_config('journal').get_models():
+            for field in model._meta.concrete_fields:
+                if (
+                    field.primary_key
+                    or field.null
+                    or field.blank
+                    or field.get_internal_type() not in {
+                        'CharField', 'TextField', 'EmailField', 'SlugField', 'URLField',
+                    }
+                ):
+                    continue
+                with self.subTest(model=model._meta.label, field=field.name):
+                    self.assertFalse(model.objects.filter(**{field.name: ''}).exists())
 
         registration_settings = CourseRegistrationSettings.objects.get(academic_year__is_active=True)
         self.assertEqual(
@@ -6880,7 +6972,7 @@ class SeedDataCommandTests(TestCase):
                 student__isnull=False,
                 user__isnull=False,
             ).count(),
-            5,
+            2,
         )
         self.assertGreaterEqual(
             CourseApplication.objects.filter(
@@ -6888,7 +6980,7 @@ class SeedDataCommandTests(TestCase):
                 student__isnull=True,
                 user__isnull=True,
             ).count(),
-            2,
+            1,
         )
 
         for student in Student.objects.select_related('user'):
@@ -7101,6 +7193,59 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         )
         self.assertIn(self.student, formset.forms[-1].fields['student'].queryset)
 
+    def test_assessment_workspace_fields_offer_values_from_related_tables(self):
+        other_subject = Subject.objects.create(
+            name='Другая сдача',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        other_group = AssessmentGroup.objects.create(
+            name='Группа другого предмета',
+            subject=other_subject,
+            academic_year=self.year,
+        )
+        superuser = User.objects.create_superuser(
+            username='assessment_dropdown_admin',
+            email='assessment-dropdown@example.com',
+            password='AdminPass123!',
+        )
+        request = RequestFactory().get('/admin/', {'academic_year': self.year.pk})
+        request.user = superuser
+        request.session = {}
+
+        subject_admin = django_admin.site._registry[Subject]
+        subject_inlines = subject_admin.get_inline_instances(request, self.subject)
+        group_inline = next(
+            inline for inline in subject_inlines
+            if type(inline).__name__ == 'AssessmentGroupForSubjectInline'
+        )
+        group_formset = group_inline.get_formset(request, self.subject)(instance=self.subject)
+        group_name_html = str(group_formset.empty_form['name'])
+        self.assertIn('<datalist', group_name_html)
+        self.assertIn(self.assessment_group.name, group_name_html)
+        self.assertNotIn(other_group.name, group_name_html)
+
+        rule_inline = next(
+            inline for inline in subject_inlines
+            if type(inline).__name__ == 'FinalGradeRuleForSubjectInline'
+        )
+        rule_formset = rule_inline.get_formset(request, self.subject)(instance=self.subject)
+        rule_groups = rule_formset.empty_form.fields['assessment_group'].queryset
+        self.assertIn(self.assessment_group, rule_groups)
+        self.assertNotIn(other_group, rule_groups)
+
+        group_admin = django_admin.site._registry[AssessmentGroup]
+        item_inline = next(
+            inline for inline in group_admin.get_inline_instances(request, self.assessment_group)
+            if type(inline).__name__ == 'AssessmentItemForGroupInline'
+        )
+        item_formset = item_inline.get_formset(request, self.assessment_group)(
+            instance=self.assessment_group,
+        )
+        item_title_html = str(item_formset.empty_form['title'])
+        self.assertIn('<datalist', item_title_html)
+        self.assertIn(self.item.title, item_title_html)
+
     def test_academic_year_admin_exposes_cascading_workspaces(self):
         superuser = User.objects.create_superuser(
             username='academic_year_workspace_admin',
@@ -7120,6 +7265,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             {
                 'StudyGroupForAcademicYearInline',
                 'TeacherEnrollmentForAcademicYearInline',
+                'UserAcademicYearMembershipForAcademicYearInline',
                 'AssessmentGroupForAcademicYearInline',
             },
         )
@@ -7583,10 +7729,14 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
 
     def test_active_year_export_includes_administrator_account(self):
         active_year = self.create_academic_year(name='2025/2026')
-        User.objects.create_superuser(
+        administrator = User.objects.create_superuser(
             username='export_administrator',
             password='Pass12345!',
             first_name='Администратор',
+        )
+        UserAcademicYearMembership.objects.create(
+            user=administrator,
+            academic_year=active_year,
         )
 
         workbook = build_full_export_workbook(active_year)

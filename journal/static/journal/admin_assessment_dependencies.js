@@ -110,6 +110,9 @@
             if (source.dataset.parentStudentId && !url.searchParams.has('student')) {
                 url.searchParams.set('student', source.dataset.parentStudentId);
             }
+            if (source.dataset.parentSubjectId && !url.searchParams.has('subject')) {
+                url.searchParams.set('subject', source.dataset.parentSubjectId);
+            }
             if (source.dataset.parentAssessmentGroupId && !url.searchParams.has('assessment_group')) {
                 url.searchParams.set('assessment_group', source.dataset.parentAssessmentGroupId);
             }

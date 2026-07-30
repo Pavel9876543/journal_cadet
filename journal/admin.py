@@ -10,7 +10,7 @@ from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
 from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from .academic_year_context import (
     filter_temporary_credentials_for_year,
@@ -75,6 +75,7 @@ from .models import (
     TeacherEnrollment,
     TeacherSubject,
     TemporaryCredential,
+    UserAcademicYearMembership,
     object_is_in_archived_academic_year,
 )
 admin.site.site_header = 'Электронный журнал музыкальной школы'
@@ -121,6 +122,25 @@ class JournalAdminDescriptionMixin:
             form_url=form_url,
             extra_context=self._year_extra_context(request, extra_context),
         )
+
+    @staticmethod
+    def _keep_change_form_open(request):
+        return not any(
+            key in request.POST
+            for key in ('_continue', '_addanother', '_saveasnew', '_popup')
+        )
+
+    def response_add(self, request, obj, post_url_continue=None):
+        if self._keep_change_form_open(request):
+            request.POST = request.POST.copy()
+            request.POST['_continue'] = '1'
+        return super().response_add(request, obj, post_url_continue=post_url_continue)
+
+    def response_change(self, request, obj):
+        if self._keep_change_form_open(request):
+            request.POST = request.POST.copy()
+            request.POST['_continue'] = '1'
+        return super().response_change(request, obj)
 
     def model_has_active_state(self):
         try:
@@ -437,6 +457,16 @@ class AccountProfileInline(admin.StackedInline):
     verbose_name_plural = 'Дата рождения администратора'
 
 
+class UserAcademicYearMembershipForUserInline(admin.TabularInline):
+    model = UserAcademicYearMembership
+    fk_name = 'user'
+    extra = 1
+    fields = ('academic_year', 'is_active')
+    autocomplete_fields = ('academic_year',)
+    verbose_name = 'Участие в учебном году'
+    verbose_name_plural = 'Учебные годы пользователя'
+
+
 @admin.register(AuthUser)
 class UserAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixin, BaseUserAdmin):
     changelist_description = (
@@ -445,7 +475,11 @@ class UserAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixi
     )
     form = SpaceFriendlyUserChangeForm
     add_form = SpaceFriendlyUserCreationForm
-    inlines = (*BaseUserAdmin.inlines, AccountProfileInline)
+    inlines = (
+        *BaseUserAdmin.inlines,
+        AccountProfileInline,
+        UserAcademicYearMembershipForUserInline,
+    )
     list_display = (
         'username',
         'last_name',
@@ -488,7 +522,11 @@ class UserAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixi
         if academic_year is None:
             return queryset.none()
         return queryset.filter(
-            Q(is_staff=True)
+            Q(
+                is_staff=True,
+                journal_year_memberships__isnull=True,
+            )
+            | Q(journal_year_memberships__academic_year=academic_year)
             | Q(student_profile__enrollments__academic_year=academic_year)
             | Q(teacher_profile__academic_year_memberships__academic_year=academic_year),
         ).distinct()
@@ -545,6 +583,29 @@ class AuthGroupAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixi
     )
     search_fields = ('name',)
     list_per_page = 40
+
+
+@admin.register(UserAcademicYearMembership)
+class UserAcademicYearMembershipAdmin(
+    ArchivedAcademicYearAdminMixin,
+    JournalAdminDescriptionMixin,
+    admin.ModelAdmin,
+):
+    academic_year_lookup = 'academic_year'
+    changelist_description = (
+        'Ручное назначение учебных годов администраторам, преподавателям '
+        'и другим пользователям. Один аккаунт можно назначить в несколько лет.'
+    )
+    list_display = ('user', 'academic_year', 'is_active', 'updated_at')
+    list_filter = ('academic_year', 'is_active')
+    search_fields = (
+        'user__username', 'user__first_name', 'user__last_name', 'academic_year__name',
+    )
+    autocomplete_fields = ('user', 'academic_year')
+    list_select_related = ('user', 'academic_year')
+    ordering = ('-academic_year__starts_on', 'user__username')
+    readonly_fields = ('created_at', 'updated_at')
+    fields = ('user', 'academic_year', 'is_active', 'created_at', 'updated_at')
 
 
 # -----------------------------------------------------------------------------
@@ -1247,6 +1308,7 @@ class AssessmentDependencyFormMixin:
         endpoint = reverse('assessment_options_api')
         parent_attrs = {
             'parent_student': 'data-parent-student-id',
+            'parent_subject': 'data-parent-subject-id',
             'parent_assessment_group': 'data-parent-assessment-group-id',
             'parent_assessment_item': 'data-parent-assessment-item-id',
             'parent_academic_year': 'data-parent-academic-year-id',
@@ -1264,6 +1326,32 @@ class AssessmentDependencyFormMixin:
                         self.fields[field_name].widget.attrs[data_attribute] = str(parent_id)
 
 
+class ExistingValuesTextInput(forms.TextInput):
+    """Text input with a native dropdown of values already stored in a table."""
+
+    def __init__(self, *args, values=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.suggestion_values = tuple(dict.fromkeys(value for value in values if value))
+
+    def render(self, name, value, attrs=None, renderer=None):
+        attrs = dict(attrs or {})
+        input_id = attrs.get('id') or f'id_{name}'
+        datalist_id = f'{input_id}_stored_values'
+        attrs['list'] = datalist_id
+        input_html = super().render(name, value, attrs=attrs, renderer=renderer)
+        options_html = format_html_join(
+            '',
+            '<option value="{}"></option>',
+            ((item,) for item in self.suggestion_values),
+        )
+        return format_html(
+            '{}<datalist id="{}">{}</datalist>',
+            input_html,
+            datalist_id,
+            options_html,
+        )
+
+
 class AssessmentGroupAdminForm(forms.ModelForm):
     class Meta:
         model = AssessmentGroup
@@ -1271,6 +1359,24 @@ class AssessmentGroupAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        subject_id = (
+            self.data.get(self.add_prefix('subject')) if self.is_bound else None
+        ) or getattr(self.instance, 'subject_id', None) or getattr(
+            getattr(self, 'parent_subject', None), 'pk', None
+        )
+        academic_year_id = (
+            self.data.get(self.add_prefix('academic_year')) if self.is_bound else None
+        ) or getattr(self.instance, 'academic_year_id', None) or getattr(
+            getattr(self, 'parent_academic_year', None), 'pk', None
+        )
+        group_names = AssessmentGroup.objects.all()
+        if subject_id:
+            group_names = group_names.filter(subject_id=subject_id)
+        if academic_year_id:
+            group_names = group_names.filter(academic_year_id=academic_year_id)
+        group_names = group_names.order_by('name').values_list('name', flat=True).distinct()
+        if 'name' in self.fields:
+            self.fields['name'].widget = ExistingValuesTextInput(values=group_names)
         subject_field = self.fields.get('subject')
         if subject_field is not None:
             subject_field.queryset = Subject.objects.filter(
@@ -1303,6 +1409,15 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         if group is not None:
             subject = group.subject
             year = group.academic_year
+        item_titles = AssessmentItem.objects.all()
+        if year is not None:
+            item_titles = item_titles.filter(academic_year=year)
+        if subject is not None:
+            item_titles = item_titles.filter(subject=subject)
+        if 'title' in self.fields:
+            self.fields['title'].widget = ExistingValuesTextInput(
+                values=item_titles.order_by('title').values_list('title', flat=True).distinct(),
+            )
         self._set_queryset('subject', self._include_selected(
             Subject.objects.filter(
                 is_active=True,
@@ -2150,6 +2265,7 @@ class AssessmentResultForItemInline(
 
 
 class AssessmentGroupForSubjectInline(
+    ParentContextInlineMixin,
     SelectedAssessmentYearInlineMixin,
     ArchivedAcademicYearInlineMixin,
     admin.TabularInline,
@@ -2162,6 +2278,12 @@ class AssessmentGroupForSubjectInline(
     show_change_link = True
     verbose_name = 'Группа произведений'
     verbose_name_plural = 'Группы произведений выбранного учебного года'
+
+    def get_form_context(self, request, obj=None):
+        return {
+            'parent_subject': obj,
+            'parent_academic_year': get_selected_admin_academic_year(request) or AcademicYear.get_active(),
+        }
 
 
 class FinalGradeRuleForSubjectInline(
@@ -2253,6 +2375,23 @@ class TeacherEnrollmentForAcademicYearInline(
         return super().get_queryset(request).select_related('teacher')
 
 
+class UserAcademicYearMembershipForAcademicYearInline(
+    AcademicYearParentInlineMixin,
+    ArchivedAcademicYearInlineMixin,
+    admin.TabularInline,
+):
+    model = UserAcademicYearMembership
+    fk_name = 'academic_year'
+    extra = 1
+    fields = ('user', 'is_active')
+    autocomplete_fields = ('user',)
+    verbose_name = 'Участие пользователя'
+    verbose_name_plural = 'Все пользователи учебного года'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user')
+
+
 class AssessmentGroupForAcademicYearInline(
     AcademicYearParentInlineMixin,
     ArchivedAcademicYearInlineMixin,
@@ -2285,6 +2424,7 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
     inlines = (
         StudyGroupForAcademicYearInline,
         TeacherEnrollmentForAcademicYearInline,
+        UserAcademicYearMembershipForAcademicYearInline,
         AssessmentGroupForAcademicYearInline,
     )
     list_display = (
