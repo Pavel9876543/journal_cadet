@@ -1865,6 +1865,33 @@ class FormTests(JournalTestDataMixin, TestCase):
             str(invalid_form.errors),
         )
 
+    def test_grade_form_excludes_another_students_individual_subject(self):
+        data = self.create_base_journal()
+        unassigned_student = self.create_student(
+            full_name='Ученик без индивидуального предмета',
+            group=data['group'],
+            instrument=data['student'].instrument,
+            username='form_student_without_individual_subject',
+        )
+
+        form = GradeCreateForm(
+            data={
+                'group': data['group'].pk,
+                'student': unassigned_student.pk,
+                'subject': data['specialty'].pk,
+                'teacher': data['other_teacher'].pk,
+                'academic_year': data['year'].pk,
+                'date': '2025-10-10',
+                'value': '5',
+                'comment': '',
+            },
+        )
+
+        self.assertNotIn(data['specialty'], form.fields['subject'].queryset)
+        self.assertIn(data['solfeggio'], form.fields['subject'].queryset)
+        self.assertFalse(form.is_valid())
+        self.assertIn('subject', form.errors)
+
     def test_grade_form_accepts_individual_subject_without_group(self):
         data = self.create_base_journal()
         data['student'].group = None
@@ -2565,6 +2592,33 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
             [self.data['student'].pk],
         )
 
+    def test_grade_mode_hides_other_students_individual_subjects(self):
+        unassigned_student = self.create_student(
+            full_name='Ученик без индивидуального предмета',
+            group=self.data['group'],
+            instrument=self.data['student'].instrument,
+            username='student_without_individual_subject',
+        )
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'mode': 'grade',
+                'group': self.data['group'].pk,
+                'student': unassigned_student.pk,
+                'academic_year': self.data['year'].pk,
+                'changed': 'student',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        subject_ids = {item['id'] for item in response.json()['subjects']}
+        self.assertIn(self.data['solfeggio'].pk, subject_ids)
+        self.assertIn(self.data['literature'].pk, subject_ids)
+        self.assertNotIn(self.data['specialty'].pk, subject_ids)
+
     def test_blank_group_does_not_enable_individual_only_mode(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
@@ -3020,7 +3074,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         response = self.client.get(reverse('journal'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'onchange="this.form.submit()"')
+        self.assertContains(response, 'data-filter-auto-submit="1"')
         self.assertNotContains(response, 'data-grade-dependency-mode="journal_filter"')
         self.assertContains(response, 'Мои оценки')
         self.assertContains(response, 'Нет данных по выбранным фильтрам.')
@@ -4145,6 +4199,14 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('data-flash-message', form_state)
         self.assertIn('save-toast save-toast--', form_state)
         self.assertIn("isSuccess ? 'success' : 'error'", form_state)
+        self.assertIn('main form[data-preserve-scroll]', form_state)
+        self.assertIn('main a[data-preserve-scroll]', form_state)
+        self.assertIn('data-filter-auto-submit', form_state)
+
+        journal_template = Path('templates/journal.html').read_text(encoding='utf-8')
+        self.assertIn('data-save-context="journal-filters"', journal_template)
+        self.assertIn('data-save-context="assessment-filters"', journal_template)
+        self.assertNotIn('onchange="this.form.submit()"', journal_template)
 
         mobile_css = Path('journal/static/journal/layout-mobile.css').read_text(encoding='utf-8')
         self.assertIn('.filter-form > *', mobile_css)

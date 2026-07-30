@@ -39,11 +39,12 @@ def get_grade_form_options(
     students_queryset=None,
     individual_only=False,
 ):
-    """Return options narrowed only by the primary group selector.
+    """Return options narrowed primarily by the group selector.
 
     With no group selected every value available in the year is returned. A
     fixed teacher still limits the scope for a teacher account, while the
-    other selected values never hide sibling options from one another.
+    selected student limits only individual subjects to their own assignments.
+    Group subjects remain available to every student enrolled in that group.
     """
     groups = get_grade_groups(
         teacher=fixed_teacher,
@@ -66,6 +67,7 @@ def get_grade_form_options(
         )
         subjects = get_grade_subjects(
             group=group,
+            student=student,
             teacher=fixed_teacher,
             academic_year=academic_year,
         )

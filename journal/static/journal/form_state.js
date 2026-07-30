@@ -162,8 +162,27 @@
             restorePosition(savedState);
         }
 
-        document.querySelectorAll('main form[method="post"]').forEach(function (form) {
+        document.querySelectorAll('main form[method="post"], main form[data-preserve-scroll]').forEach(function (form) {
             form.addEventListener('submit', savePosition);
+        });
+
+        document.querySelectorAll('main a[data-preserve-scroll]').forEach(function (link) {
+            link.addEventListener('click', savePosition);
+        });
+
+        document.querySelectorAll('main [data-filter-auto-submit="1"]').forEach(function (field) {
+            field.addEventListener('change', function () {
+                var form = field.form;
+                if (!form) {
+                    return;
+                }
+                if (typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    savePosition({currentTarget: form});
+                    form.submit();
+                }
+            });
         });
 
         var dirtyForms = new Set();
