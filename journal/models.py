@@ -1872,10 +1872,22 @@ class SubjectResult(models.Model):
                 academic_year_id=self.academic_year_id,
                 is_active=True,
             ).exists()
-            if not in_group_subjects and not in_individual_subjects:
+            in_assessment_groups = StudentAssessmentGroup.objects.filter(
+                student_id=self.student_id,
+                assessment_group__subject_id=self.subject_id,
+                academic_year_id=self.academic_year_id,
+                is_active=True,
+            ).exists()
+            preserves_automatic_history = self.is_auto_calculated and bool(self.pk)
+            if (
+                not in_group_subjects
+                and not in_individual_subjects
+                and not in_assessment_groups
+                and not preserves_automatic_history
+            ):
                 raise ValidationError(
                     'Нельзя выставить итог по предмету, который не назначен группе ученика '
-                    'и не назначен ученику индивидуально.'
+                    'или ученику напрямую, в том числе через группу произведений.'
                 )
 
         if self.subject_id:
@@ -2060,14 +2072,11 @@ class AssessmentItem(models.Model):
         if not self.title:
             raise ValidationError({'title': 'Введите название произведения или элемента.'})
         if self.group_id:
-            if self.subject_id and self.group.subject_id != self.subject_id:
-                raise ValidationError({'group': 'Группа относится к другому предмету.'})
-            if self.academic_year_id and self.group.academic_year_id != self.academic_year_id:
-                raise ValidationError({'group': 'Группа относится к другому учебному году.'})
-            if not self.subject_id:
-                self.subject = self.group.subject
-            if not self.academic_year_id:
-                self.academic_year = self.group.academic_year
+            # A work group owns its subject and academic year.  Synchronizing
+            # these duplicated fields also makes reassignment safe when an
+            # admin form still contains values from the previous group.
+            self.subject = self.group.subject
+            self.academic_year = self.group.academic_year
         if self.subject_id and not self.subject.uses_element_assessment:
             raise ValidationError({'subject': 'Произведения доступны только в специальном режиме предмета.'})
         if self.academic_year_id:
@@ -2080,13 +2089,6 @@ class AssessmentItem(models.Model):
             ).exists():
                 raise ValidationError({
                     'responsible_teacher': 'Преподаватель не зачислен в выбранный учебный год.'
-                })
-            if not TeacherSubject.objects.filter(
-                teacher=self.responsible_teacher,
-                subject=self.subject,
-            ).exists():
-                raise ValidationError({
-                    'responsible_teacher': 'Преподаватель не связан с выбранным предметом.'
                 })
 
     def save(self, *args, **kwargs):
@@ -2190,26 +2192,6 @@ class StudentAssessmentGroup(models.Model):
             if enrollment is None:
                 raise ValidationError({'student': 'Ученик не зачислен в выбранный учебный год.'})
             self.enrollment = enrollment
-            subject_id = self.assessment_group.subject_id if self.assessment_group_id else None
-            has_subject = False
-            if subject_id:
-                has_subject = bool(
-                    (enrollment.group_id and GroupSubject.objects.filter(
-                        group_id=enrollment.group_id,
-                        subject_id=subject_id,
-                        is_active=True,
-                    ).exists())
-                    or StudentSubject.objects.filter(
-                        student=self.student,
-                        subject_id=subject_id,
-                        academic_year=self.academic_year,
-                        is_active=True,
-                    ).exists()
-                )
-            if subject_id and not has_subject:
-                raise ValidationError({
-                    'assessment_group': 'Нельзя назначить группу предмета, которого нет у ученика.'
-                })
         if self.academic_year_id:
             validate_active_academic_year(self.academic_year)
 

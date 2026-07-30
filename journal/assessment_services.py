@@ -49,26 +49,6 @@ class FinalGradeCalculation:
 
 
 
-def _assigned_subject_ids_for_student(student: Student, academic_year: AcademicYear) -> set[int]:
-    enrollment = student.enrollment_for_year(academic_year)
-    subject_ids: set[int] = set()
-    if enrollment is not None and enrollment.group_id:
-        subject_ids.update(
-            GroupSubject.objects.filter(
-                group_id=enrollment.group_id,
-                group__academic_year=academic_year,
-                is_active=True,
-            ).values_list('subject_id', flat=True)
-        )
-    subject_ids.update(
-        StudentSubject.objects.filter(
-            student=student,
-            academic_year=academic_year,
-            is_active=True,
-        ).values_list('subject_id', flat=True)
-    )
-    return subject_ids
-
 def available_assessment_items_for_student(
     student: Student,
     academic_year: AcademicYear,
@@ -95,8 +75,6 @@ def available_assessment_items_for_student(
         .distinct()
         .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
     )
-    assigned_subject_ids = _assigned_subject_ids_for_student(student, academic_year)
-    queryset = queryset.filter(subject_id__in=assigned_subject_ids)
     if subject is not None:
         queryset = queryset.filter(subject=subject)
     if not include_inactive:
@@ -141,14 +119,6 @@ def enrollments_for_assessment_item(
             assignment_filter,
             academic_year=item.academic_year,
         )
-        .filter(
-            Q(group__group_subjects__subject=item.subject, group__group_subjects__is_active=True)
-            | Q(
-                student__individual_subjects__subject=item.subject,
-                student__individual_subjects__academic_year=item.academic_year,
-                student__individual_subjects__is_active=True,
-            )
-        )
         .select_related('student', 'group', 'academic_year')
         .distinct()
         .order_by('full_name', 'pk')
@@ -172,27 +142,10 @@ def enrollments_eligible_for_assessment_group(
     *,
     include_inactive: bool = False,
 ):
-    """Return year-scoped enrollments that may be assigned to a work group.
-
-    This is the same eligibility rule enforced by ``StudentAssessmentGroup``:
-    the student must be enrolled in the group's academic year and must already
-    have the corresponding subject through either their study group or an
-    individual assignment.
-    """
+    """Return year-scoped enrollments that may be assigned to a work group."""
     queryset = (
         StudentEnrollment.objects
         .filter(academic_year=group.academic_year)
-        .filter(
-            Q(
-                group__group_subjects__subject=group.subject,
-                group__group_subjects__is_active=True,
-            )
-            | Q(
-                student__individual_subjects__subject=group.subject,
-                student__individual_subjects__academic_year=group.academic_year,
-                student__individual_subjects__is_active=True,
-            )
-        )
         .select_related('student', 'group', 'academic_year')
         .distinct()
         .order_by('full_name', 'pk')

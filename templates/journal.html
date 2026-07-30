@@ -1850,6 +1850,10 @@
                                             <option value="failed">Незачёт</option>
                                         </select>
                                     </div>
+                                    <div class="field">
+                                        <label for="quick_assessment_comment">Комментарий</label>
+                                        <input id="quick_assessment_comment" type="text" name="comment" maxlength="1000" placeholder="Комментарий к результату">
+                                    </div>
                                     <div class="form-action">
                                         <button type="submit">
                                             <svg class="icon" aria-hidden="true"><use href="#icon-save"></use></svg>
@@ -1891,9 +1895,8 @@
                                     <tr>
                                         <th class="sticky-col" scope="col">Ученик</th>
                                         <th scope="col">Группа</th>
-                                        <th scope="col">Текущий результат</th>
                                         <th scope="col">Итог предмета</th>
-                                        <th scope="col">Изменить результат</th>
+                                        <th scope="col">Результат и комментарий</th>
                                     </tr>
                                     </thead>
                                     <tbody>
@@ -1901,16 +1904,6 @@
                                         <tr>
                                             <th class="sticky-col" scope="row">{{ row.enrollment.full_name|short_person_name }}</th>
                                             <td>{% if row.enrollment.group %}{{ row.enrollment.group.name }}{% else %}—{% endif %}</td>
-                                            <td>
-                                                {% if row.result %}
-                                                    <span class="assessment-status{% if row.result.status == 'passed' %} assessment-status--passed{% else %} assessment-status--failed{% endif %}">
-                                                        {{ row.result.get_status_display }}
-                                                    </span>
-                                                    {% if row.result.comment %}<div class="muted">{{ row.result.comment }}</div>{% endif %}
-                                                {% else %}
-                                                    <span class="assessment-status">Не оценено</span>
-                                                {% endif %}
-                                            </td>
                                             <td>{% if row.final_result %}{{ row.final_result.final_grade|default:'Не рассчитано' }}{% else %}Не рассчитано{% endif %}</td>
                                             <td>
                                                 {% if can_edit_journal %}
@@ -1929,12 +1922,19 @@
                                                         <button type="submit">Сохранить</button>
                                                     </form>
                                                 {% else %}
-                                                    <span class="muted">Только просмотр</span>
+                                                    {% if row.result %}
+                                                        <span class="assessment-status{% if row.result.status == 'passed' %} assessment-status--passed{% else %} assessment-status--failed{% endif %}">
+                                                            {{ row.result.get_status_display }}
+                                                        </span>
+                                                        {% if row.result.comment %}<div class="muted">{{ row.result.comment }}</div>{% endif %}
+                                                    {% else %}
+                                                        <span class="assessment-status">Не оценено</span>
+                                                    {% endif %}
                                                 {% endif %}
                                             </td>
                                         </tr>
                                     {% empty %}
-                                        <tr><td colspan="5">Эта группа произведений пока не назначена ученикам.</td></tr>
+                                        <tr><td colspan="4">Эта группа произведений пока не назначена ученикам.</td></tr>
                                     {% endfor %}
                                     </tbody>
                                 </table>

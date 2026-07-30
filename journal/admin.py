@@ -33,10 +33,7 @@ from .assignment_options import (
     group_subject_queryset,
     student_subject_queryset,
 )
-from .assessment_services import (
-    enrollments_for_assessment_item,
-    students_eligible_for_assessment_group,
-)
+from .assessment_services import enrollments_for_assessment_item
 from .forms import (
     CourseApplicationAdminForm,
     CourseRegistrationSettingsForm,
@@ -460,7 +457,7 @@ class AccountProfileInline(admin.StackedInline):
 class UserAcademicYearMembershipForUserInline(admin.TabularInline):
     model = UserAcademicYearMembership
     fk_name = 'user'
-    extra = 1
+    extra = 0
     fields = ('academic_year', 'is_active')
     autocomplete_fields = ('academic_year',)
     verbose_name = 'Участие в учебном году'
@@ -1432,8 +1429,6 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             'academic_year',
         ))
         groups = AssessmentGroup.objects.filter(is_active=True)
-        if subject is not None:
-            groups = groups.filter(subject=subject)
         if year is not None:
             groups = groups.filter(academic_year=year)
         self._set_queryset('group', self._include_selected(
@@ -1442,8 +1437,6 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             'group',
         ))
         teachers = Teacher.objects.filter(is_active=True)
-        if subject is not None:
-            teachers = teachers.filter(qualified_subjects=subject)
         if year is not None:
             teachers = teachers.filter(
                 academic_year_memberships__academic_year=year,
@@ -1455,10 +1448,24 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             'responsible_teacher',
         ))
         self._set_help_text('responsible_teacher', (
-            'Без ответственного преподавателя произведение считается не полностью '
-            'настроенным и недоступно для выставления результатов.'
+            'Можно выбрать любого активного преподавателя этого учебного года. '
+            'Без ответственного преподавателя произведение недоступно для выставления результатов.'
+        ))
+        self._set_help_text('group', (
+            'Главное поле произведения. При смене группы предмет и учебный год '
+            'обновятся автоматически.'
         ))
         self.attach_dependencies()
+
+    def clean(self):
+        cleaned_data = super().clean()
+        group = cleaned_data.get('group') or getattr(self, 'parent_assessment_group', None)
+        if group is not None:
+            cleaned_data['subject'] = group.subject
+            cleaned_data['academic_year'] = group.academic_year
+            self.instance.subject = group.subject
+            self.instance.academic_year = group.academic_year
+        return cleaned_data
 
 
 class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
@@ -1487,10 +1494,13 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
             year = group.academic_year
         student_queryset = active_student_queryset()
         if group is not None:
-            student_queryset = students_eligible_for_assessment_group(
-                group,
-                include_inactive=bool(self.instance and self.instance.pk),
+            student_queryset = Student.objects.filter(
+                enrollments__academic_year=group.academic_year,
+                enrollments__is_active=True,
             )
+            if not (self.instance and self.instance.pk):
+                student_queryset = student_queryset.filter(is_active=True)
+            student_queryset = student_queryset.distinct().order_by('full_name', 'pk')
         self._set_queryset('student', self._include_selected(
             student_queryset, Student, 'student'
         ))
@@ -1502,19 +1512,6 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
         groups = AssessmentGroup.objects.filter(is_active=True)
         if year is not None:
             groups = groups.filter(academic_year=year)
-        if student is not None and year is not None:
-            enrollment = student.enrollment_for_year(year)
-            subject_ids = set(StudentSubject.objects.filter(
-                student=student,
-                academic_year=year,
-                is_active=True,
-            ).values_list('subject_id', flat=True))
-            if enrollment is not None and enrollment.group_id:
-                subject_ids.update(GroupSubject.objects.filter(
-                    group_id=enrollment.group_id,
-                    is_active=True,
-                ).values_list('subject_id', flat=True))
-            groups = groups.filter(subject_id__in=subject_ids)
         self._set_queryset('assessment_group', self._include_selected(
             groups.select_related('subject', 'academic_year').order_by('subject__name', 'sort_order', 'name'),
             AssessmentGroup,
@@ -1945,7 +1942,7 @@ class GroupSubjectForTeacherInline(SelectedAcademicYearGroupSubjectInlineMixin, 
     model = GroupSubject
     form = GroupSubjectAdminForm
     formset = GroupSubjectInlineFormSet
-    extra = 1
+    extra = 0
     fields = ('group', 'subject', 'sort_order', 'is_active')
     show_change_link = True
     verbose_name = 'Групповой предмет'
@@ -1997,7 +1994,7 @@ class StudentSubjectForTeacherInline(SelectedAcademicYearStudentSubjectInlineMix
     model = StudentSubject
     form = StudentSubjectAdminForm
     formset = StudentSubjectInlineFormSet
-    extra = 1
+    extra = 0
     fields = ('student', 'subject', 'is_active')
     show_change_link = True
     verbose_name = 'Индивидуальный ученик'
@@ -2021,7 +2018,7 @@ class StudentInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     fk_name = 'group'
     form = GroupStudentInlineForm
     formset = StudentInlineFormSet
-    extra = 1
+    extra = 0
     fields = ('student_card_link', 'student', 'city_church')
     readonly_fields = ('student_card_link',)
     show_change_link = False
@@ -2173,7 +2170,7 @@ class AssessmentItemForGroupInline(
     model = AssessmentItem
     form = AssessmentItemAdminForm
     fk_name = 'group'
-    extra = 1
+    extra = 0
     fields = ('title', 'responsible_teacher', 'sort_order', 'is_required', 'is_active')
     show_change_link = True
     verbose_name = 'Произведение / элемент'
@@ -2199,7 +2196,7 @@ class StudentAssessmentGroupForGroupInline(
     model = StudentAssessmentGroup
     form = StudentAssessmentGroupAdminForm
     fk_name = 'assessment_group'
-    extra = 1
+    extra = 0
     fields = ('student', 'is_active')
     show_change_link = True
     verbose_name = 'Назначение ученику'
@@ -2225,7 +2222,7 @@ class FinalGradeRuleForGroupInline(
     model = FinalGradeRule
     form = FinalGradeRuleAdminForm
     fk_name = 'assessment_group'
-    extra = 1
+    extra = 0
     fields = ('rule_type', 'passed_count', 'condition_value', 'grade', 'priority', 'is_active')
     show_change_link = True
     verbose_name = 'Правило итоговой оценки'
@@ -2246,7 +2243,7 @@ class AssessmentResultForItemInline(
     model = AssessmentResult
     form = AssessmentResultAdminForm
     fk_name = 'item'
-    extra = 1
+    extra = 0
     fields = ('enrollment', 'status', 'assessed_by', 'assessed_at', 'comment')
     show_change_link = True
     verbose_name = 'Результат ученика'
@@ -2273,7 +2270,7 @@ class AssessmentGroupForSubjectInline(
     model = AssessmentGroup
     form = AssessmentGroupAdminForm
     fk_name = 'subject'
-    extra = 1
+    extra = 0
     fields = ('name', 'academic_year', 'sort_order', 'is_active')
     show_change_link = True
     verbose_name = 'Группа произведений'
@@ -2295,7 +2292,7 @@ class FinalGradeRuleForSubjectInline(
     model = FinalGradeRule
     form = FinalGradeRuleAdminForm
     fk_name = 'subject'
-    extra = 1
+    extra = 0
     fields = (
         'academic_year', 'assessment_group', 'rule_type', 'passed_count',
         'condition_value', 'grade', 'priority', 'is_active',
@@ -2321,7 +2318,7 @@ class AssessmentItemForTeacherInline(
     form = AssessmentItemAdminForm
     fk_name = 'responsible_teacher'
     academic_year_lookup = 'academic_year'
-    extra = 1
+    extra = 0
     fields = ('title', 'group', 'subject', 'academic_year', 'sort_order', 'is_required', 'is_active')
     show_change_link = True
     verbose_name = 'Произведение под руководством преподавателя'
@@ -2350,7 +2347,7 @@ class StudyGroupForAcademicYearInline(
 ):
     model = StudyGroup
     fk_name = 'academic_year'
-    extra = 1
+    extra = 0
     fields = ('name', 'is_active')
     show_change_link = True
     verbose_name = 'Учебная группа'
@@ -2364,7 +2361,7 @@ class TeacherEnrollmentForAcademicYearInline(
 ):
     model = TeacherEnrollment
     fk_name = 'academic_year'
-    extra = 1
+    extra = 0
     fields = ('teacher', 'is_active')
     autocomplete_fields = ('teacher',)
     show_change_link = False
@@ -2382,7 +2379,7 @@ class UserAcademicYearMembershipForAcademicYearInline(
 ):
     model = UserAcademicYearMembership
     fk_name = 'academic_year'
-    extra = 1
+    extra = 0
     fields = ('user', 'is_active')
     autocomplete_fields = ('user',)
     verbose_name = 'Участие пользователя'
@@ -2400,7 +2397,7 @@ class AssessmentGroupForAcademicYearInline(
     model = AssessmentGroup
     form = AssessmentGroupAdminForm
     fk_name = 'academic_year'
-    extra = 1
+    extra = 0
     fields = ('name', 'subject', 'sort_order', 'is_active')
     show_change_link = True
     verbose_name = 'Группа произведений'
@@ -2500,7 +2497,7 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
 class OrchestraPartInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = OrchestraPart
     fields = ('name', 'is_active')
-    extra = 1
+    extra = 0
     ordering = ('name',)
 
 
@@ -2616,15 +2613,24 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     def get_inlines(self, request, obj=None):
         if obj is None:
             return ()
-        assessment_inlines = ()
-        if obj.uses_element_assessment:
-            assessment_inlines = (
+        inlines = []
+        # The current classification controls where new assignments belong,
+        # but it must never hide related rows that already exist in the
+        # database (including historical/legacy data).
+        if not obj.is_specialty or obj.group_subjects.exists():
+            inlines.append(GroupSubjectForSubjectInline)
+        if obj.is_specialty or obj.individual_students.exists():
+            inlines.append(StudentSubjectForSubjectInline)
+        has_assessment_data = (
+            obj.assessment_groups.exists()
+            or obj.final_grade_rules.exists()
+        )
+        if obj.uses_element_assessment or has_assessment_data:
+            inlines.extend((
                 AssessmentGroupForSubjectInline,
                 FinalGradeRuleForSubjectInline,
-            )
-        if obj.is_specialty:
-            return (StudentSubjectForSubjectInline, *assessment_inlines)
-        return (GroupSubjectForSubjectInline, *assessment_inlines)
+            ))
+        return tuple(inlines)
 
     def get_queryset(self, request):
         academic_year = self.selected_academic_year(request)
@@ -4170,7 +4176,7 @@ class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescript
     list_select_related = ('group', 'subject', 'responsible_teacher', 'academic_year')
     ordering = ('group__sort_order', 'sort_order', 'title')
     fields = (
-        'title', 'description', 'subject', 'academic_year', 'group', 'responsible_teacher',
+        'title', 'description', 'group', 'responsible_teacher',
         'sort_order', 'is_required', 'is_active',
     )
 

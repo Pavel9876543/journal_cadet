@@ -329,6 +329,94 @@
         return (copy.textContent || '').trim();
     }
 
+    function adminFieldErrorDetails(form) {
+        var details = [];
+        form.querySelectorAll(
+            '.errorlist li, .help-block.text-red li, .row-form-errors li, .invalid-feedback'
+        ).forEach(function (error) {
+            var message = adminMessageText(error);
+            if (!message) {
+                return;
+            }
+            var container = error.closest('.form-group, td');
+            var control = container && container.querySelector('input[id], select[id], textarea[id]');
+            var label = control ? form.querySelector('label[for="' + control.id + '"]') : null;
+            if (!label && container && container.matches('td[class*="field-"]')) {
+                var fieldClass = Array.prototype.find.call(container.classList, function (name) {
+                    return name.indexOf('field-') === 0;
+                });
+                var table = container.closest('table');
+                label = fieldClass && table
+                    ? table.querySelector('th.column-' + fieldClass.slice(6))
+                    : null;
+            }
+            var detail = label ? adminMessageText(label) + ': ' + message : message;
+            if (details.indexOf(detail) === -1) {
+                details.push(detail);
+            }
+        });
+        return details;
+    }
+
+    function adminValidationMessage(form) {
+        var details = adminFieldErrorDetails(form);
+        if (!details.length) {
+            return 'Не удалось сохранить запись. Проверьте выделенные поля и строки во всех вкладках.';
+        }
+        var visible = details.slice(0, 4);
+        var suffix = details.length > visible.length
+            ? ' Ещё ошибок: ' + (details.length - visible.length) + '.'
+            : '';
+        return 'Не удалось сохранить. ' + visible.join('; ') + '.' + suffix;
+    }
+
+    function translateAdminErrorSummary(form) {
+        if (!form) {
+            return null;
+        }
+        var summary = form.querySelector(
+            ':scope > .alert-danger:not(.alert-dismissible), .errornote, .alert-warning[role="alert"]'
+        );
+        if (!summary) {
+            summary = Array.prototype.find.call(
+                document.querySelectorAll('.callout-danger'),
+                function (item) {
+                    return /Please correct the errors? below\./i.test(item.textContent || '');
+                }
+            ) || null;
+        }
+        if (summary) {
+            summary.textContent = adminValidationMessage(form);
+            summary.setAttribute('role', 'alert');
+        }
+        return summary;
+    }
+
+    function revealAdminError(form) {
+        var error = form.querySelector(
+            '.errorlist li, .help-block.text-red li, .row-form-errors li, .invalid-feedback'
+        );
+        if (!error) {
+            return;
+        }
+        var pane = error.closest('.tab-pane[id]');
+        if (pane) {
+            var selector = '[href="#' + pane.id + '"], [data-bs-target="#' + pane.id + '"]';
+            var trigger = document.querySelector(selector);
+            if (trigger && !trigger.classList.contains('active')) {
+                trigger.click();
+            }
+        }
+        window.requestAnimationFrame(function () {
+            error.scrollIntoView({behavior: 'smooth', block: 'center'});
+            var container = error.closest('.form-group, td, tr') || error.parentElement;
+            var control = container && container.querySelector('input:not([type="hidden"]), select, textarea');
+            if (control && typeof control.focus === 'function') {
+                control.focus({preventScroll: true});
+            }
+        });
+    }
+
     function createAdminToast(anchor, message, level) {
         if (!anchor || !message) {
             return;
@@ -377,6 +465,16 @@
             return;
         }
         var anchor = adminToastAnchor(form, state);
+        var errorSummary = translateAdminErrorSummary(form);
+        var validationErrors = adminFieldErrorDetails(form);
+        if (errorSummary || validationErrors.length) {
+            createAdminToast(anchor, adminValidationMessage(form), 'error');
+            if (errorSummary) {
+                errorSummary.remove();
+            }
+            revealAdminError(form);
+            return;
+        }
         var flash = document.querySelector(
             '.messagelist li, .alert-success, .alert-danger, .alert-error, .alert-warning'
         );
@@ -392,9 +490,7 @@
             flash.remove();
             return;
         }
-        var error = form.querySelector(
-            '.errorlist li, .invalid-feedback, .errornote, .form-row.errors'
-        );
+        var error = form.querySelector('.form-row.errors');
         if (error) {
             createAdminToast(
                 anchor,
@@ -411,6 +507,7 @@
         if (!forms.length) {
             return;
         }
+        forms.forEach(translateAdminErrorSummary);
         var state = restoreAdminFormState();
         showAdminSaveNotification(state, forms);
         forms.forEach(function (form) {

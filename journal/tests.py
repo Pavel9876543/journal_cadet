@@ -4185,10 +4185,21 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('#content-main form[method="post"]', javascript)
         self.assertIn("state.path.endsWith('/add/')", javascript)
         self.assertIn('showAdminSaveNotification', javascript)
+        self.assertIn('adminValidationMessage', javascript)
+        self.assertIn('revealAdminError', javascript)
+        self.assertIn('Не удалось сохранить запись', javascript)
         self.assertIn('journal-save-toast journal-save-toast--', javascript)
         self.assertIn("isSuccess ? 'success' : 'error'", javascript)
         self.assertIn('.journal-save-toast--success', css)
         self.assertIn('.journal-save-toast--error', css)
+
+        admin_source = Path('journal/admin.py').read_text(encoding='utf-8')
+        self.assertNotRegex(admin_source, r'extra\s*=\s*[1-9]')
+        change_form_template = Path(
+            'templates/admin/change_form.html'
+        ).read_text(encoding='utf-8')
+        self.assertIn('точная причина указана рядом с каждым полем', change_form_template)
+        self.assertNotIn('Please correct the errors below', change_form_template)
 
         form_state = Path(
             'journal/static/journal/form_state.js'
@@ -4697,6 +4708,48 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(individual_response, 'Индивидуальные ученики по этому предмету')
         self.assertNotContains(individual_response, 'Группы, где есть этот предмет')
 
+    def test_subject_admin_keeps_tabs_with_existing_related_data_visible(self):
+        year = self.create_academic_year()
+        group = self.create_group(academic_year=year)
+        teacher = self.create_teacher(username='legacy_subject_tab_teacher')
+        subject = self.create_subject(name='Предмет с сохранённой связью')
+        self.create_group_assignment(group=group, subject=subject, teacher=teacher)
+        Subject.objects.filter(pk=subject.pk).update(is_specialty=True)
+        subject.refresh_from_db()
+
+        request = RequestFactory().get('/admin/', {'academic_year': year.pk})
+        request.user = self.admin_user
+        request.session = {}
+        subject_admin = django_admin.site._registry[Subject]
+        assignment_inline_names = {
+            inline.__name__ for inline in subject_admin.get_inlines(request, subject)
+        }
+
+        self.assertIn('GroupSubjectForSubjectInline', assignment_inline_names)
+        self.assertIn('StudentSubjectForSubjectInline', assignment_inline_names)
+
+        assessment_subject = Subject.objects.create(
+            name='Предмет с сохранёнными произведениями',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        AssessmentGroup.objects.create(
+            name='Сохранённая группа произведений',
+            subject=assessment_subject,
+            academic_year=year,
+        )
+        Subject.objects.filter(pk=assessment_subject.pk).update(
+            assessment_mode=Subject.ASSESSMENT_MODE_STANDARD,
+        )
+        assessment_subject.refresh_from_db()
+
+        assessment_inline_names = {
+            inline.__name__
+            for inline in subject_admin.get_inlines(request, assessment_subject)
+        }
+        self.assertIn('AssessmentGroupForSubjectInline', assessment_inline_names)
+        self.assertIn('FinalGradeRuleForSubjectInline', assessment_inline_names)
+
     def test_student_admin_form_filters_orchestra_parts_by_instrument(self):
         domra = self.create_instrument(name='Домра')
         bayan = self.create_instrument(name='Баян')
@@ -4811,8 +4864,9 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.client.login(username='dashboard_admin', password='Pass12345!')
 
         get_response = self.client.get(reverse('admin:journal_studygroup_change', args=[group.pk]))
-        self.assertContains(get_response, 'name="student_enrollments-0-student"')
-        self.assertContains(get_response, 'name="student_enrollments-0-city_church"')
+        self.assertNotContains(get_response, 'name="student_enrollments-0-student"')
+        self.assertContains(get_response, 'name="student_enrollments-__prefix__-student"')
+        self.assertContains(get_response, 'name="student_enrollments-__prefix__-city_church"')
         self.assertContains(get_response, f'value="{student.pk}"')
         self.assertContains(get_response, 'data-city-church="Тамбов / Центр"')
         self.assertContains(get_response, 'data-student-city-target="1"')
@@ -5350,8 +5404,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.client.login(username='dashboard_admin', password='Pass12345!')
 
         get_response = self.client.get(reverse('admin:journal_teacher_change', args=[teacher.pk]))
-        self.assertContains(get_response, 'name="group_subjects-0-group"')
-        self.assertContains(get_response, 'name="individual_subjects-0-student"')
+        self.assertNotContains(get_response, 'name="group_subjects-0-group"')
+        self.assertNotContains(get_response, 'name="individual_subjects-0-student"')
+        self.assertContains(get_response, 'name="group_subjects-__prefix__-group"')
+        self.assertContains(get_response, 'name="individual_subjects-__prefix__-student"')
 
         response = self.client.post(
             reverse('admin:journal_teacher_change', args=[teacher.pk]),
@@ -7203,6 +7259,144 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(items, [self.item])
 
+    def test_work_group_assignment_does_not_require_a_separate_subject_assignment(self):
+        orchestra_subject = Subject.objects.create(
+            name='Отдельная оркестровая программа',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        orchestra_group = AssessmentGroup.objects.create(
+            name='Сводный оркестр',
+            subject=orchestra_subject,
+            academic_year=self.year,
+        )
+        orchestra_item = AssessmentItem.objects.create(
+            title='Произведение без учебного назначения',
+            subject=orchestra_subject,
+            academic_year=self.year,
+            group=orchestra_group,
+            responsible_teacher=self.teacher,
+        )
+        other_study_group = self.create_group(
+            name='Учебная группа без оркестрового предмета',
+            academic_year=self.year,
+        )
+        orchestra_student = self.create_student(
+            full_name='Ученик сводного оркестра',
+            group=other_study_group,
+            instrument=self.student.instrument,
+            username='independent_orchestra_student',
+        )
+
+        assignment = StudentAssessmentGroup.objects.create(
+            student=orchestra_student,
+            assessment_group=orchestra_group,
+            academic_year=self.year,
+        )
+
+        self.assertEqual(assignment.enrollment.student, orchestra_student)
+        self.assertEqual(
+            list(available_assessment_items_for_student(orchestra_student, self.year)),
+            [orchestra_item],
+        )
+        self.assertTrue(SubjectResult.objects.filter(
+            student=orchestra_student,
+            subject=orchestra_subject,
+            academic_year=self.year,
+            is_auto_calculated=True,
+        ).exists())
+
+        assignment.delete()
+        self.assertFalse(
+            available_assessment_items_for_student(orchestra_student, self.year).exists()
+        )
+        self.assertTrue(SubjectResult.objects.filter(
+            student=orchestra_student,
+            subject=orchestra_subject,
+            academic_year=self.year,
+            is_auto_calculated=True,
+        ).exists())
+
+    def test_assessment_item_can_be_moved_to_another_subject_group(self):
+        other_subject = Subject.objects.create(
+            name='Новая оркестровая программа',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        other_group = AssessmentGroup.objects.create(
+            name='Новая группа произведений',
+            subject=other_subject,
+            academic_year=self.year,
+        )
+        form = AssessmentItemAdminForm(
+            data={
+                'title': self.item.title,
+                'description': self.item.description,
+                'subject': self.subject.pk,
+                'academic_year': self.year.pk,
+                'group': other_group.pk,
+                'responsible_teacher': self.teacher.pk,
+                'sort_order': self.item.sort_order,
+                'is_required': 'on',
+                'is_active': 'on',
+            },
+            instance=self.item,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        moved_item = form.save()
+        self.assertEqual(moved_item.group, other_group)
+        self.assertEqual(moved_item.subject, other_subject)
+        self.assertEqual(moved_item.academic_year, self.year)
+
+    def test_admin_options_include_all_active_year_students_and_teachers(self):
+        unrelated_group = self.create_group(
+            name='Группа без предмета оркестра',
+            academic_year=self.year,
+        )
+        unrelated_student = self.create_student(
+            full_name='Ученик без предмета оркестра',
+            group=unrelated_group,
+            instrument=self.student.instrument,
+            username='assessment_options_unrelated_student',
+        )
+        unrelated_teacher = self.create_teacher(
+            full_name='Преподаватель без связи с предметом',
+            username='assessment_options_unrelated_teacher',
+        )
+        TeacherEnrollment.objects.update_or_create(
+            teacher=unrelated_teacher,
+            academic_year=self.year,
+            defaults={'is_active': True},
+        )
+        superuser = User.objects.create_superuser(
+            username='all_assessment_options_admin',
+            password='AdminPass123!',
+        )
+        self.client.force_login(superuser)
+
+        student_response = self.client.get(reverse('assessment_options_api'), {
+            'type': 'student_group',
+            'assessment_group': self.assessment_group.pk,
+            'academic_year': self.year.pk,
+        })
+        teacher_response = self.client.get(reverse('assessment_options_api'), {
+            'type': 'item',
+            'group': self.assessment_group.pk,
+            'academic_year': self.year.pk,
+        })
+
+        self.assertEqual(student_response.status_code, 200)
+        self.assertEqual(teacher_response.status_code, 200)
+        self.assertIn(
+            unrelated_student.pk,
+            {item['id'] for item in student_response.json()['students']},
+        )
+        self.assertIn(
+            unrelated_teacher.pk,
+            {item['id'] for item in teacher_response.json()['teachers']},
+        )
+
     def test_teacher_result_updates_automatic_string_final(self):
         result = set_assessment_result(
             item=self.item,
@@ -7331,6 +7525,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             instance=self.assessment_group,
         )
         self.assertIn(self.student, formset.forms[-1].fields['student'].queryset)
+        self.assertEqual(student_inline.extra, 0)
 
     def test_assessment_workspace_fields_offer_values_from_related_tables(self):
         other_subject = Subject.objects.create(
@@ -7447,9 +7642,10 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         model_admin = django_admin.site._registry[AssessmentItem]
         inline = model_admin.get_inline_instances(request, self.item)[0]
         formset = inline.get_formset(request, self.item)(instance=self.item)
-        blank_form = formset.forms[-1]
+        blank_form = formset.empty_form
 
         self.assertEqual(type(inline).__name__, 'AssessmentResultForItemInline')
+        self.assertEqual(inline.extra, 0)
         self.assertIn(self.assignment.enrollment, blank_form.fields['enrollment'].queryset)
         self.assertEqual(blank_form.fields['assessed_by'].initial, self.teacher.pk)
 
@@ -7475,7 +7671,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual([row['id'] for row in payload['teachers']], [self.teacher.pk])
         self.assertEqual(payload['defaults']['assessed_by_id'], self.teacher.pk)
 
-    def test_assessment_item_options_filter_subjects_by_responsible_teacher(self):
+    def test_assessment_item_options_do_not_hide_groups_by_teacher_qualification(self):
         other_subject = Subject.objects.create(
             name='Другая оркестровая дисциплина',
             assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
@@ -7515,8 +7711,8 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(
-            [row['id'] for row in payload['subjects']],
-            [self.subject.pk],
+            {row['id'] for row in payload['subjects']},
+            {self.subject.pk, other_subject.pk},
         )
         self.assertIn(
             self.teacher.pk,
@@ -7780,6 +7976,10 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertContains(get_response, 'name="assessment_item"')
         self.assertContains(get_response, 'name="assessment_student"')
         self.assertContains(get_response, 'name="status"')
+        self.assertContains(get_response, 'id="quick_assessment_comment"')
+        self.assertContains(get_response, 'name="comment"')
+        self.assertContains(get_response, 'Результат и комментарий')
+        self.assertNotContains(get_response, 'Текущий результат')
         self.assertNotContains(get_response, 'name="assessment_study_group"')
 
         post_response = self.client.post(
@@ -7790,6 +7990,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
                 'assessment_item': self.item.pk,
                 'assessment_student': self.student.pk,
                 'status': AssessmentResult.STATUS_FAILED,
+                'comment': 'Нужно доработать вступление',
             },
         )
 
@@ -7803,6 +8004,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             enrollment=self.assignment.enrollment,
         )
         self.assertEqual(result.status, AssessmentResult.STATUS_FAILED)
+        self.assertEqual(result.comment, 'Нужно доработать вступление')
 
         refreshed_response = self.client.get(f'{reverse("journal")}{query}')
         self.assertContains(refreshed_response, 'Незачёт: 1')

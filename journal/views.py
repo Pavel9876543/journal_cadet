@@ -32,7 +32,6 @@ from .assessment_services import (
     clear_assessment_result,
     enrollments_for_assessment_item,
     set_assessment_result,
-    students_eligible_for_assessment_group,
 )
 from .assessment_filtering import (
     assessment_filter_querysets,
@@ -568,37 +567,21 @@ def _assessment_options_api_sync(request):
         students = students.filter(enrollments__academic_year=academic_year, enrollments__is_active=True)
         items = items.filter(academic_year=academic_year)
     if subject is not None:
-        groups = groups.filter(subject=subject)
-        teachers = teachers.filter(qualified_subjects=subject)
+        if assessment_type != 'item':
+            groups = groups.filter(subject=subject)
+            teachers = teachers.filter(qualified_subjects=subject)
         items = items.filter(subject=subject)
     if selected_teacher is not None and assessment_type == 'item':
-        subjects = subjects.filter(qualified_teachers=selected_teacher)
-        groups = groups.filter(subject__qualified_teachers=selected_teacher)
         items = items.filter(responsible_teacher=selected_teacher)
     if group is not None:
         items = items.filter(group=group)
     if assessment_type == 'student_group' and group is not None:
-        students = students_eligible_for_assessment_group(
-            group,
-            include_inactive=bool(student),
+        students = Student.objects.filter(
+            enrollments__academic_year=group.academic_year,
+            enrollments__is_active=True,
         )
-    if assessment_type == 'student_group' and student is not None and academic_year is not None:
-        enrollment = student.enrollment_for_year(academic_year)
-        subject_ids = set(
-            StudentSubject.objects.filter(
-                student=student,
-                academic_year=academic_year,
-                is_active=True,
-            ).values_list('subject_id', flat=True)
-        )
-        if enrollment is not None and enrollment.group_id:
-            subject_ids.update(
-                GroupSubject.objects.filter(
-                    group_id=enrollment.group_id,
-                    is_active=True,
-                ).values_list('subject_id', flat=True)
-            )
-        groups = groups.filter(subject_id__in=subject_ids)
+        if student is None:
+            students = students.filter(is_active=True)
     if assessment_type == 'result':
         if item is not None:
             enrollments = enrollments_for_assessment_item(
@@ -671,7 +654,7 @@ def _assessment_options_api_sync(request):
         'groups': [
             {
                 'id': item.pk,
-                'label': item.name,
+                'label': str(item),
                 'subject_id': item.subject_id,
                 'academic_year_id': item.academic_year_id,
             }
