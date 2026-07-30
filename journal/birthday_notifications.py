@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import isleap
 from datetime import date, timedelta
 
 from django.utils import timezone
@@ -22,6 +23,20 @@ def _age_word(age: int) -> str:
     return 'лет'
 
 
+def _candidate_birth_dates(target_dates: tuple[date, ...]) -> set[date]:
+    dates = set()
+    for target_date in target_dates:
+        for birth_year in range(1900, target_date.year + 1):
+            try:
+                dates.add(date(birth_year, target_date.month, target_date.day))
+            except ValueError:
+                continue
+            if target_date.month == 2 and target_date.day == 28 and not isleap(target_date.year):
+                if isleap(birth_year):
+                    dates.add(date(birth_year, 2, 29))
+    return dates
+
+
 def birthday_notifications_for_user(user, *, today: date | None = None) -> list[dict]:
     if not getattr(user, 'is_authenticated', False):
         return []
@@ -32,27 +47,32 @@ def birthday_notifications_for_user(user, *, today: date | None = None) -> list[
     today = today or timezone.localdate()
     tomorrow = today + timedelta(days=1)
     targets = {today: ('Сегодня', 'исполнилось'), tomorrow: ('Завтра', 'исполнится')}
-    people: list[tuple[str, str, date, int | None]] = []
-    seen_user_ids: set[int] = set()
+    birth_dates = _candidate_birth_dates((today, tomorrow))
+    people: list[tuple[str, str, date]] = []
 
-    for student in Student.objects.filter(is_active=True, birth_date__isnull=False).order_by('full_name'):
-        people.append(('Ученик', student.full_name, student.birth_date, student.user_id))
-        if student.user_id:
-            seen_user_ids.add(student.user_id)
+    students = Student.objects.filter(
+        is_active=True,
+        birth_date__in=birth_dates,
+    ).order_by('full_name')
+    for student in students:
+        people.append(('Ученик', student.full_name, student.birth_date))
 
-    for teacher in Teacher.objects.filter(is_active=True, birth_date__isnull=False).order_by('full_name'):
-        people.append(('Преподаватель', teacher.full_name, teacher.birth_date, teacher.user_id))
-        if teacher.user_id:
-            seen_user_ids.add(teacher.user_id)
+    teachers = Teacher.objects.filter(
+        is_active=True,
+        birth_date__in=birth_dates,
+    ).order_by('full_name')
+    for teacher in teachers:
+        people.append(('Преподаватель', teacher.full_name, teacher.birth_date))
 
     admin_profiles = (
         AccountProfile.objects
         .filter(
             user__is_active=True,
             user__is_staff=True,
-            birth_date__isnull=False,
+            birth_date__in=birth_dates,
+            user__student_profile__isnull=True,
+            user__teacher_profile__isnull=True,
         )
-        .exclude(user_id__in=seen_user_ids)
         .select_related('user')
         .order_by('user__last_name', 'user__first_name', 'user__username')
     )
@@ -61,10 +81,10 @@ def birthday_notifications_for_user(user, *, today: date | None = None) -> list[
         name = ' '.join(
             part for part in (admin_user.last_name, admin_user.first_name) if part
         ) or admin_user.username
-        people.append(('Администратор', name, profile.birth_date, admin_user.pk))
+        people.append(('Администратор', name, profile.birth_date))
 
     notifications = []
-    for role, name, birth_date, _user_id in people:
+    for role, name, birth_date in people:
         for target_date, (day_label, verb) in targets.items():
             if _birthday_in_year(birth_date, target_date.year) != target_date:
                 continue

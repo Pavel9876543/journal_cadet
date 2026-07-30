@@ -496,7 +496,7 @@ class StudyGroup(models.Model):
 
 class Teacher(models.Model):
     full_name = models.CharField('ФИО преподавателя', max_length=150)
-    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+    birth_date = models.DateField('Дата рождения', null=True, blank=True, db_index=True)
     phone = models.CharField('Телефон', max_length=32, blank=True)
     email = models.EmailField('Email', blank=True)
     comments = models.TextField('Комментарий', blank=True)
@@ -766,6 +766,7 @@ class Student(models.Model):
         blank=True,
         help_text='Заполняется только когда подходящего инструмента нет в справочнике.',
     )
+    orchestra_part = models.CharField('Партия в оркестре', max_length=255, blank=True)
     is_active = models.BooleanField('Активен', default=True)
 
     class Meta:
@@ -805,6 +806,7 @@ class Student(models.Model):
         if self.comments:
             self.comments = self.comments.strip()
         self.custom_instrument = (self.custom_instrument or '').strip()
+        self.orchestra_part = (self.orchestra_part or '').strip()
         if bool(self.instrument_id) == bool(self.custom_instrument):
             raise ValidationError({
                 'instrument': 'Выберите инструмент из справочника или укажите собственный, но не оба варианта.',
@@ -986,6 +988,7 @@ class StudentEnrollment(models.Model):
     birth_date = models.DateField('Дата рождения', null=True, blank=True)
     city_church = models.CharField('Город / Церковь', max_length=255, blank=True)
     instrument_name = models.CharField('Инструмент', max_length=100, blank=True)
+    orchestra_part = models.CharField('Партия в оркестре', max_length=255, blank=True)
     music_education = models.CharField(
         'Музыкальное образование',
         max_length=20,
@@ -1026,6 +1029,7 @@ class StudentEnrollment(models.Model):
             'birth_date': student.birth_date,
             'city_church': student.city_church,
             'instrument_name': student.instrument_display,
+            'orchestra_part': student.orchestra_part,
             'music_education': student.music_education,
             'student_phone': student.student_phone,
             'parent_contacts': student.parent_contacts,
@@ -2518,7 +2522,7 @@ class AccountProfile(models.Model):
         related_name='journal_account_profile',
         verbose_name='Пользователь',
     )
-    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+    birth_date = models.DateField('Дата рождения', null=True, blank=True, db_index=True)
 
     class Meta:
         verbose_name = 'Дополнительные данные пользователя'
@@ -2652,7 +2656,7 @@ class CourseApplication(models.Model):
     birth_date = models.DateField('Дата рождения')
     city_church = models.CharField('Город / Церковь', max_length=255)
     instrument = models.CharField(
-        'Музыкальный инструмент / партия в оркестре',
+        'Музыкальный инструмент',
         max_length=255,
         help_text='Отображаемое значение, синхронизированное со структурированными полями.',
     )
@@ -2665,6 +2669,7 @@ class CourseApplication(models.Model):
         blank=True,
     )
     custom_instrument = models.CharField('Собственный инструмент', max_length=255, blank=True)
+    orchestra_part = models.CharField('Партия в оркестре', max_length=255, blank=True)
     music_education = models.CharField(
         'Музыкальное образование',
         max_length=20,
@@ -2800,10 +2805,11 @@ class CourseApplication(models.Model):
         super().clean()
 
         for field_name in (
-                'last_name',
-                'first_name',
-                'middle_name',
-                'city_church',
+            'last_name',
+            'first_name',
+            'middle_name',
+            'city_church',
+            'orchestra_part',
         ):
             value = getattr(self, field_name, '')
 
@@ -2981,6 +2987,7 @@ class CourseApplication(models.Model):
                 group=group,
                 instrument=instrument,
                 custom_instrument=custom_instrument,
+                orchestra_part=self.orchestra_part,
                 music_education=self.music_education,
                 student_phone=self.student_phone,
                 parent_contacts=self.parent_contacts,
@@ -2997,6 +3004,7 @@ class CourseApplication(models.Model):
             existing_student.group = group
             existing_student.instrument = instrument
             existing_student.custom_instrument = custom_instrument
+            existing_student.orchestra_part = self.orchestra_part
             existing_student.music_education = self.music_education
             existing_student.student_phone = self.student_phone
             existing_student.parent_contacts = self.parent_contacts
@@ -3273,6 +3281,7 @@ def finalize_academic_year_snapshots(academic_year_id: int) -> None:
                 'birth_date',
                 'city_church',
                 'instrument_name',
+                'orchestra_part',
                 'music_education',
                 'student_phone',
                 'parent_contacts',

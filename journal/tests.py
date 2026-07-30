@@ -1495,6 +1495,24 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIsNone(application.instrument_reference)
         self.assertFalse(Instrument.objects.filter(name='Домра малая II').exists())
 
+    def test_course_application_form_stores_optional_orchestra_part(self):
+        form = CourseApplicationPublicForm(
+            data=self.application_form_payload(
+                orchestra_part='  Партия второго альта  ',
+            ),
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        application = form.save()
+        self.assertEqual(application.orchestra_part, 'Партия второго альта')
+        self.assertEqual(application.student.orchestra_part, 'Партия второго альта')
+        self.assertEqual(
+            application.student.enrollment_for_year(application.academic_year).orchestra_part,
+            'Партия второго альта',
+        )
+        self.assertFalse(form.fields['orchestra_part'].required)
+        self.assertIn('едет на курсы впервые', form.fields['orchestra_part'].help_text)
+
     def test_parent_contacts_accepts_dash_from_form_placeholder(self):
         normalized_contacts = normalize_parent_contacts(
             'Иванов Иван Иванович — +7 (999) 123-45-67',
@@ -3812,10 +3830,32 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'journal/select_search.js')
         self.assertNotContains(response, 'data-searchable-select')
+        self.assertNotContains(response, 'grades-TOTAL_FORMS')
         self.assertLessEqual(
             len(captured_queries),
             85,
             'Карточка ученика снова выполняет слишком много SQL-запросов.',
+        )
+
+    def test_student_changelist_does_not_issue_queries_per_student(self):
+        data = self.create_base_journal()
+        for index in range(12):
+            self.create_student(
+                full_name=f'Ученик Производительности {index:02d}',
+                group=data['group'],
+                instrument=data['instrument'],
+                username=f'performance_student_{index:02d}',
+            )
+        self.client.force_login(self.admin_user)
+
+        with CaptureQueriesContext(connection) as captured_queries:
+            response = self.client.get(reverse('admin:journal_student_changelist'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLessEqual(
+            len(captured_queries),
+            30,
+            [query['sql'] for query in captured_queries],
         )
 
     def test_archived_academic_year_records_are_read_only_in_admin(self):
@@ -6995,6 +7035,28 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
         self.assertEqual(students_sheet.cell(2, headers['Ученик']).value, 'Имя в архиве')
         self.assertEqual(students_sheet.cell(2, headers['Телефон ученика']).value, '')
         self.assertEqual(students_sheet.cell(2, headers['Комментарий']).value, '')
+
+    def test_export_includes_orchestra_part_from_selected_year_snapshot(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        group = self.create_group(name='Архивная группа', academic_year=old_year)
+        student = self.create_student(
+            full_name='Оркестровый Ученик',
+            group=group,
+            username='orchestra_export_student',
+        )
+        student.orchestra_part = 'Партия первого тенора'
+        student.save()
+        self.create_academic_year(name='2026/2027')
+        Student.objects.filter(pk=student.pk).update(orchestra_part='Текущая партия')
+
+        workbook = build_full_export_workbook(old_year)
+        students_sheet = workbook['Ученики']
+        headers = {cell.value: cell.column for cell in students_sheet[1]}
+
+        self.assertEqual(
+            students_sheet.cell(2, headers['Партия в оркестре']).value,
+            'Партия первого тенора',
+        )
 
     def test_export_includes_teacher_temporary_credentials_with_owner_details(self):
         old_year = self.create_academic_year(name='2025/2026')

@@ -2633,6 +2633,7 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     ordering = ('full_name',)
     list_select_related = ('user',)
     list_per_page = 30
+    show_full_result_count = False
     readonly_fields = ('age_display',)
     fieldsets = (
         ('Преподаватель', {
@@ -2686,7 +2687,7 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                     'group_subjects',
                     queryset=GroupSubject.objects.filter(
                         group__academic_year=academic_year,
-                    ).select_related('group', 'subject'),
+                    ).select_related('group', 'group__academic_year', 'subject'),
                     to_attr='selected_year_group_subjects',
                 ),
             )
@@ -2855,6 +2856,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         'group__name',
         'instrument__name',
         'custom_instrument',
+        'orchestra_part',
         'individual_subjects__teacher__full_name',
         'individual_subjects__teacher_name_snapshot',
         'individual_subjects__subject__name',
@@ -2865,11 +2867,11 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         StudentSubjectInline,
         StudentAssessmentGroupInline,
         SubjectResultInline,
-        GradeInline,
     )
     ordering = ('full_name',)
     list_select_related = ('user', 'group', 'group__academic_year', 'instrument')
     list_per_page = 40
+    show_full_result_count = False
     readonly_fields = ('age_display', 'course_application_link')
     fieldsets = (
         ('Ученик', {
@@ -2881,6 +2883,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                 'group',
                 'instrument',
                 'custom_instrument',
+                'orchestra_part',
                 'is_active',
             ),
             'description': (
@@ -2915,7 +2918,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                     'enrollments',
                     queryset=StudentEnrollment.objects.filter(
                         academic_year=academic_year,
-                    ).select_related('group', 'academic_year'),
+                    ).select_related('group', 'group__academic_year', 'academic_year'),
                     to_attr='journal_enrollments',
                 ),
                 Prefetch(
@@ -3132,6 +3135,7 @@ class GroupSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
     list_select_related = ('group', 'group__academic_year', 'subject', 'teacher')
     ordering = ('group__academic_year__name', 'group__name', 'sort_order', 'subject__name')
     list_per_page = 50
+    show_full_result_count = False
     fieldsets = (
         ('Групповой предмет', {
             'fields': ('group', 'subject', 'teacher', 'sort_order', 'is_active'),
@@ -3176,6 +3180,7 @@ class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptio
     list_select_related = ('student', 'subject', 'teacher', 'academic_year')
     ordering = ('student__full_name', 'subject__name')
     list_per_page = 50
+    show_full_result_count = False
     fieldsets = (
         ('Индивидуальный предмет ученика', {
             'fields': ('student', 'subject', 'teacher', 'is_active'),
@@ -3190,7 +3195,11 @@ class StudentSubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptio
         return super().get_queryset(request).prefetch_related(
             Prefetch(
                 'student__enrollments',
-                queryset=StudentEnrollment.objects.select_related('academic_year', 'group'),
+                queryset=StudentEnrollment.objects.select_related(
+                    'academic_year',
+                    'group',
+                    'group__academic_year',
+                ),
                 to_attr='journal_enrollments',
             ),
         )
@@ -3262,6 +3271,7 @@ class GradeAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, a
     list_select_related = ('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
     ordering = ('-date', 'student__full_name')
     list_per_page = 50
+    show_full_result_count = False
 
     fieldsets = (
         ('Оценка', {
@@ -3393,6 +3403,7 @@ class SubjectResultAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescription
     list_select_related = ('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
     ordering = ('academic_year__name', 'student__full_name', 'subject__name')
     list_per_page = 50
+    show_full_result_count = False
     fieldsets = (
         ('Итоговая аттестация', {
             'fields': (
@@ -3494,6 +3505,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
         'instrument',
         'instrument_reference__name',
         'custom_instrument',
+        'orchestra_part',
         'generated_login',
         'user__username',
         'student__full_name',
@@ -3514,6 +3526,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
     list_select_related = ('student', 'user', 'academic_year', 'instrument_reference')
     actions = ('confirm_applications', 'reject_applications')
     list_per_page = 40
+    show_full_result_count = False
 
     fieldsets = (
         ('Статус заявки', {
@@ -3555,6 +3568,7 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
                 'city_church',
                 'instrument_reference',
                 'custom_instrument',
+                'orchestra_part',
                 'music_education',
                 'student_phone',
                 'parent_contacts',
@@ -3687,6 +3701,7 @@ class TemporaryCredentialAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescr
     autocomplete_fields = ('user', 'course_application')
     date_hierarchy = 'created_at'
     list_per_page = 50
+    show_full_result_count = False
     fieldsets = (
         ('Временный доступ', {
             'fields': (
@@ -3735,7 +3750,7 @@ class TemporaryCredentialAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescr
         if user is None:
             return 'Ученик' if obj.course_application_id or obj.student_phone else '—'
 
-        group_names = set(user.groups.values_list('name', flat=True))
+        group_names = {group.name for group in user.groups.all()}
         if user.is_superuser or user.is_staff or 'Администратор' in group_names:
             return 'Администратор'
         if 'Преподаватель' in group_names or hasattr(user, 'teacher_profile'):

@@ -673,6 +673,15 @@ class BaseCourseApplicationForm(forms.ModelForm):
                 'placeholder': 'Например, домра малая',
                 'data-custom-instrument': '1',
             })
+        if 'orchestra_part' in self.fields:
+            self.fields['orchestra_part'].required = False
+            self.fields['orchestra_part'].help_text = (
+                'Укажите, какую партию ученик играет в оркестре. '
+                'Если он едет на курсы впервые, оставьте поле пустым.'
+            )
+            self.fields['orchestra_part'].widget.attrs.update({
+                'placeholder': 'Например, партия второго альта',
+            })
         if 'music_education' in self.fields:
             self.fields['music_education'].widget = forms.Select(
                 choices=CourseApplication.MUSIC_EDUCATION_CHOICES,
@@ -733,6 +742,7 @@ class BaseCourseApplicationForm(forms.ModelForm):
             'city_church',
             'instrument_reference',
             'custom_instrument',
+            'orchestra_part',
             'music_education',
             'student_phone',
             'parent_contacts',

@@ -558,7 +558,7 @@
                     {% csrf_token %}
                     <div class="grid">
                         {% for field in form.visible_fields %}
-                            <div class="field{% if field.name == 'parent_contacts' or field.name == 'comments' or field.name == 'instrument_reference' or field.name == 'custom_instrument' or field.name == 'city_church' or field.name == 'gender' %} field--full{% endif %}">
+                            <div class="field{% if field.name == 'parent_contacts' or field.name == 'comments' or field.name == 'instrument_reference' or field.name == 'custom_instrument' or field.name == 'orchestra_part' or field.name == 'city_church' or field.name == 'gender' %} field--full{% endif %}">
                                 {% if field.name == 'gender' %}
                                     <div class="field-label">
                                         {{ field.label }}{% if field.field.required %}<span class="required">*</span>{% endif %}
