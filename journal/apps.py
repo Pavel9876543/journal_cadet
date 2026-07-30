@@ -8,6 +8,7 @@ class JournalConfig(AppConfig):
 
     def ready(self):
         self._allow_spaces_in_usernames()
+        from . import signals  # noqa: F401
 
     @staticmethod
     def _allow_spaces_in_usernames():

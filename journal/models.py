@@ -2371,7 +2371,12 @@ class CourseRegistrationSettings(models.Model):
         (REGISTRATION_MODE_CLOSED, 'Завершена вручную'),
     )
 
-    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    academic_year = models.OneToOneField(
+        AcademicYear,
+        on_delete=models.CASCADE,
+        related_name='registration_settings',
+        verbose_name='Учебный год',
+    )
     telegram_group_url = models.URLField(
         'Ссылка на Telegram-группу',
         max_length=500,
@@ -2405,11 +2410,14 @@ class CourseRegistrationSettings(models.Model):
         verbose_name_plural = 'Настройки регистрации'
 
     def __str__(self) -> str:
-        return 'Настройки регистрации на курсы'
+        return f'Настройки регистрации на курсы — {self.academic_year}'
 
     @classmethod
-    def load(cls):
-        settings_obj, _created = cls.objects.get_or_create(pk=1)
+    def load(cls, academic_year=None):
+        academic_year = academic_year or AcademicYear.get_active() or AcademicYear.latest()
+        if academic_year is None:
+            raise cls.DoesNotExist('Сначала создайте учебный год.')
+        settings_obj, _created = cls.objects.get_or_create(academic_year=academic_year)
         return settings_obj
 
     def clean(self) -> None:
@@ -2440,7 +2448,7 @@ class CourseRegistrationSettings(models.Model):
         super().save(*args, **kwargs)
 
     def registered_applications_count(self, academic_year=None) -> int:
-        academic_year = academic_year or AcademicYear.get_active()
+        academic_year = academic_year or self.academic_year
         if academic_year is None:
             return 0
         return (
@@ -2451,7 +2459,7 @@ class CourseRegistrationSettings(models.Model):
         )
 
     def registration_is_open(self, academic_year=None) -> bool:
-        academic_year = academic_year or AcademicYear.get_active()
+        academic_year = academic_year or self.academic_year
         if academic_year is None:
             return False
         if self.registration_mode == self.REGISTRATION_MODE_CLOSED:
@@ -2501,6 +2509,23 @@ class PasswordRecoveryContact(models.Model):
     def phone_uri(self) -> str:
         digits = ''.join(character for character in self.phone if character.isdigit())
         return f'tel:+{digits}' if digits else ''
+
+
+class AccountProfile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='journal_account_profile',
+        verbose_name='Пользователь',
+    )
+    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Дополнительные данные пользователя'
+        verbose_name_plural = 'Дополнительные данные пользователей'
+
+    def __str__(self) -> str:
+        return self.user.get_full_name() or self.user.username
 
 
 class TemporaryCredential(models.Model):

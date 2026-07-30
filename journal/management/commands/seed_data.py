@@ -86,13 +86,6 @@ class Command(BaseCommand):
         self.role_groups = self._create_role_groups()
         self._assign_role_to_existing_admins()
 
-        CourseRegistrationSettings.objects.update_or_create(
-            pk=1,
-            defaults={
-                'telegram_group_url': 'https://t.me/cadet_journal_demo',
-                'minimum_registration_age': 14,
-            },
-        )
         for contact_data in (
             {
                 'name': 'Дежурный администратор',
@@ -110,6 +103,13 @@ class Command(BaseCommand):
             PasswordRecoveryContact.objects.create(**contact_data)
 
         academic_year = self._create_current_academic_year()
+        CourseRegistrationSettings.objects.update_or_create(
+            academic_year=academic_year,
+            defaults={
+                'telegram_group_url': 'https://t.me/cadet_journal_demo',
+                'minimum_registration_age': 14,
+            },
+        )
         instruments = self._create_instruments()
         subjects = self._create_subjects()
         groups = self._create_groups(academic_year)
@@ -1104,7 +1104,9 @@ class Command(BaseCommand):
         if active_year is None:
             errors.append('Не найден активный учебный год.')
         else:
-            registration_settings = CourseRegistrationSettings.objects.filter(pk=1).first()
+            registration_settings = CourseRegistrationSettings.objects.filter(
+                academic_year=active_year,
+            ).first()
             if registration_settings is None:
                 errors.append('Не найдены настройки регистрации.')
 

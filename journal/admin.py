@@ -46,6 +46,7 @@ from .grade_options import (
     get_grade_teachers,
 )
 from .models import (
+    AccountProfile,
     AcademicYear,
     AssessmentGroup,
     AssessmentItem,
@@ -383,6 +384,14 @@ class SpaceFriendlyUserChangeForm(SpaceFriendlyUsernameFormMixin, UserChangeForm
         fields = '__all__'
 
 
+class AccountProfileInline(admin.StackedInline):
+    model = AccountProfile
+    extra = 0
+    max_num = 1
+    fields = ('birth_date',)
+    verbose_name_plural = 'Дата рождения администратора'
+
+
 @admin.register(AuthUser)
 class UserAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixin, BaseUserAdmin):
     changelist_description = (
@@ -391,6 +400,7 @@ class UserAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixi
     )
     form = SpaceFriendlyUserChangeForm
     add_form = SpaceFriendlyUserCreationForm
+    inlines = (*BaseUserAdmin.inlines, AccountProfileInline)
     list_display = (
         'username',
         'last_name',
@@ -3747,13 +3757,19 @@ class TemporaryCredentialAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescr
 
 
 @admin.register(CourseRegistrationSettings)
-class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelAdmin):
+class CourseRegistrationSettingsAdmin(
+    ArchivedAcademicYearAdminMixin,
+    JournalAdminDescriptionMixin,
+    admin.ModelAdmin,
+):
+    academic_year_lookup = 'academic_year'
     changelist_description = (
-        'Единые настройки публичной регистрации: ручное управление, автоматический лимит, '
-        'минимальный возраст и ссылка на Telegram-группу.'
+        'Настройки публичной регистрации для каждого учебного года: ручное управление, '
+        'автоматический лимит, минимальный возраст и ссылка на Telegram-группу.'
     )
     form = CourseRegistrationSettingsForm
     list_display = (
+        'academic_year',
         'telegram_group_url',
         'minimum_registration_age',
         'registration_mode',
@@ -3764,6 +3780,7 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
         'updated_at',
     )
     readonly_fields = (
+        'academic_year',
         'registration_status_display',
         'registered_applications_display',
         'active_academic_year_display',
@@ -3772,6 +3789,7 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
     fieldsets = (
         ('Регистрация на курсы', {
             'fields': (
+                'academic_year',
                 'telegram_group_url',
                 'minimum_registration_age',
                 'registration_mode',
@@ -3783,7 +3801,7 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
             ),
             'description': (
                 'Ручной режим позволяет открыть или завершить регистрацию независимо от лимита. '
-                'Минимальный возраст и ссылка общие для всех учебных лет. '
+                'Все значения относятся только к указанному учебному году. '
                 'Даты начала и окончания курсов задаются только в таблице «Учебные годы».'
             ),
         }),
@@ -3791,7 +3809,7 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
 
     @admin.display(description='Активный учебный год')
     def active_academic_year_display(self, obj=None):
-        academic_year = AcademicYear.get_active()
+        academic_year = getattr(obj, 'academic_year', None) or AcademicYear.get_active()
         if academic_year is None:
             return 'Не создан'
         return (
@@ -3813,7 +3831,7 @@ class CourseRegistrationSettingsAdmin(JournalAdminDescriptionMixin, admin.ModelA
         return f'{count} из {settings_obj.application_limit}'
 
     def has_add_permission(self, request):
-        return not CourseRegistrationSettings.objects.exists()
+        return False
 
     def has_delete_permission(self, request, obj=None):
         return False

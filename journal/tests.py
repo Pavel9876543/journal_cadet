@@ -33,6 +33,7 @@ from journal.assessment_services import (
     available_assessment_items_for_student,
     set_assessment_result,
 )
+from journal.birthday_notifications import birthday_notifications_for_user
 from journal.services.excel_export import build_full_export_workbook
 from journal.assignment_options import assignment_teacher_queryset
 from journal.account_utils import (
@@ -97,6 +98,7 @@ from journal.views import (
     _is_duplicate_course_application_phone_error,
 )
 from journal.models import (
+    AccountProfile,
     AcademicYear,
     AssessmentGroup,
     AssessmentItem,
@@ -1524,12 +1526,11 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertIn('birth_date', form.errors)
 
     def test_public_course_application_form_uses_age_reached_in_course_start_year(self):
-        self.create_academic_year(name='2025/2026')
-        registration_settings = CourseRegistrationSettings.objects.create(
-            pk=1,
-            telegram_group_url='https://t.me/test_group',
-            minimum_registration_age=15,
-        )
+        academic_year = self.create_academic_year(name='2025/2026')
+        registration_settings = CourseRegistrationSettings.load(academic_year)
+        registration_settings.telegram_group_url = 'https://t.me/test_group'
+        registration_settings.minimum_registration_age = 15
+        registration_settings.save()
 
         allowed_form = CourseApplicationPublicForm(
             data=self.application_form_payload(
@@ -2221,7 +2222,7 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
         self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
 
-    def test_admin_selected_teacher_filters_students_and_subjects_without_group(self):
+    def test_admin_selected_teacher_returns_only_individual_subjects_without_group(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
         response = self.client.get(
@@ -2241,7 +2242,7 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         )
         self.assertEqual(
             {item['id'] for item in payload['subjects']},
-            {self.data['literature'].pk, self.data['specialty'].pk},
+            {self.data['specialty'].pk},
         )
 
     def test_selecting_group_first_limits_students_and_subjects(self):
@@ -2516,6 +2517,91 @@ class AssignmentOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
         self.assertEqual(payload['defaults']['sort_order'], 110)
         self.assertIn(self.data['group'].pk, [item['id'] for item in payload['groups']])
+
+
+class RegistrationSettingsByAcademicYearTests(JournalTestDataMixin, TestCase):
+    def test_each_academic_year_has_independent_registration_settings(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        old_settings = CourseRegistrationSettings.load(old_year)
+        old_settings.telegram_group_url = 'https://t.me/old_year'
+        old_settings.minimum_registration_age = 16
+        old_settings.registration_mode = CourseRegistrationSettings.REGISTRATION_MODE_CLOSED
+        old_settings.save()
+
+        new_year = self.create_academic_year(name='2026/2027')
+        new_settings = CourseRegistrationSettings.load(new_year)
+
+        self.assertNotEqual(old_settings.pk, new_settings.pk)
+        self.assertEqual(new_settings.minimum_registration_age, 14)
+        self.assertEqual(
+            new_settings.registration_mode,
+            CourseRegistrationSettings.REGISTRATION_MODE_OPEN,
+        )
+        old_settings.refresh_from_db()
+        self.assertEqual(old_settings.telegram_group_url, 'https://t.me/old_year')
+        self.assertEqual(old_settings.minimum_registration_age, 16)
+        self.assertEqual(CourseRegistrationSettings.objects.count(), 2)
+
+
+class BirthdayNotificationTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.data = self.create_base_journal()
+        self.admin_user = User.objects.create_superuser(
+            username='birthday_admin',
+            password='Pass12345!',
+            first_name='Анна',
+            last_name='Администраторова',
+        )
+        self.data['student'].birth_date = date(2008, 7, 30)
+        self.data['student'].save()
+        self.data['teacher'].birth_date = date(1980, 7, 31)
+        self.data['teacher'].save()
+        AccountProfile.objects.create(
+            user=self.admin_user,
+            birth_date=date(1990, 7, 30),
+        )
+
+    def test_admin_and_teacher_receive_today_and_tomorrow_birthdays_with_age(self):
+        today = date(2026, 7, 30)
+
+        admin_messages = [
+            item['message']
+            for item in birthday_notifications_for_user(self.admin_user, today=today)
+        ]
+        teacher_messages = [
+            item['message']
+            for item in birthday_notifications_for_user(self.data['teacher'].user, today=today)
+        ]
+
+        expected_fragments = (
+            'Сегодня день рождения: Сидоров Семён Семёнович (ученик) — исполнилось 18 лет.',
+            'Сегодня день рождения: Администраторова Анна (администратор) — исполнилось 36 лет.',
+            'Завтра день рождения: Иванов Иван Иванович (преподаватель) — исполнится 46 лет.',
+        )
+        for expected in expected_fragments:
+            self.assertIn(expected, admin_messages)
+            self.assertIn(expected, teacher_messages)
+
+    def test_student_does_not_receive_staff_birthday_notifications(self):
+        self.assertEqual(
+            birthday_notifications_for_user(
+                self.data['student'].user,
+                today=date(2026, 7, 30),
+            ),
+            [],
+        )
+
+    def test_birthday_notifications_render_in_admin_and_teacher_journal(self):
+        with patch('journal.birthday_notifications.timezone.localdate', return_value=date(2026, 7, 30)):
+            self.client.force_login(self.admin_user)
+            admin_response = self.client.get(reverse('admin:index'))
+            self.client.force_login(self.data['teacher'].user)
+            teacher_response = self.client.get(reverse('journal'))
+
+        self.assertContains(admin_response, 'Сидоров Семён Семёнович')
+        self.assertContains(admin_response, 'исполнилось 18 лет')
+        self.assertContains(teacher_response, 'Иванов Иван Иванович')
+        self.assertContains(teacher_response, 'исполнится 46 лет')
 
 
 class ViewTests(JournalTestDataMixin, TestCase):
@@ -3531,7 +3617,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         old_year = self.create_academic_year(name='2025/2026')
         self.create_academic_year(name='2026/2027')
         request = self.admin_request(old_year)
-        global_models = {CourseRegistrationSettings, PasswordRecoveryContact}
+        global_models = {PasswordRecoveryContact}
 
         for model, model_admin in django_admin.site._registry.items():
             if model in global_models:
@@ -3542,7 +3628,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
                 self.assertFalse(model_admin.has_add_permission(request))
                 self.assertFalse(model_admin.has_delete_permission(request))
 
-    def test_global_registration_and_recovery_settings_remain_editable_in_archive_mode(self):
+    def test_registration_settings_are_read_only_and_recovery_settings_editable_in_archive_mode(self):
         old_year = self.create_academic_year(name='2025/2026')
         self.create_academic_year(name='2026/2027')
         request = self.admin_request(old_year)
@@ -3555,7 +3641,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             django_admin.site,
         )
 
-        self.assertTrue(registration_admin.has_change_permission(request))
+        self.assertFalse(registration_admin.has_change_permission(request))
         self.assertTrue(recovery_admin.has_add_permission(request))
 
     def test_inactive_academic_year_is_read_only_even_when_active_year_is_selected(self):
@@ -4840,12 +4926,11 @@ class PasswordRecoveryViewTests(TestCase):
 
 class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):
     def setUp(self):
-        self.create_academic_year(name='2025/2026')
-        CourseRegistrationSettings.objects.create(
-            pk=1,
-            telegram_group_url='https://t.me/test_group',
-            minimum_registration_age=14,
-        )
+        academic_year = self.create_academic_year(name='2025/2026')
+        registration_settings = CourseRegistrationSettings.load(academic_year)
+        registration_settings.telegram_group_url = 'https://t.me/test_group'
+        registration_settings.minimum_registration_age = 14
+        registration_settings.save()
 
     def test_registration_page_creates_confirmed_application_and_shows_credentials(
         self,
@@ -5450,10 +5535,9 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
     @override_settings(DATA_TOOLS_PASSWORD='rtycds28')
     def test_superuser_can_delete_database_with_confirmation_password(self):
         self.create_base_journal()
-        CourseRegistrationSettings.objects.update_or_create(
-            pk=1,
-            defaults={'telegram_group_url': 'https://t.me/test_group'},
-        )
+        registration_settings = CourseRegistrationSettings.load()
+        registration_settings.telegram_group_url = 'https://t.me/test_group'
+        registration_settings.save()
         PasswordRecoveryContact.objects.create(
             name='Администратор',
             phone='+7 (999) 123-45-67',
@@ -5969,7 +6053,7 @@ class SeedDataCommandTests(TestCase):
         cls.run_seed_data()
 
     def test_seed_data_creates_new_architecture_records(self):
-        self.assertTrue(CourseRegistrationSettings.objects.filter(pk=1).exists())
+        self.assertTrue(CourseRegistrationSettings.objects.filter(academic_year__is_active=True).exists())
         self.assertEqual(PasswordRecoveryContact.objects.count(), 2)
         self.assertTrue(AcademicYear.objects.exists())
         self.assertEqual(AcademicYear.objects.count(), 1)
@@ -6175,7 +6259,7 @@ class SeedDataCommandTests(TestCase):
         self.run_seed_data()
 
         self.assertEqual(
-            CourseRegistrationSettings.objects.filter(pk=1).count(),
+            CourseRegistrationSettings.objects.filter(academic_year__is_active=True).count(),
             1,
         )
         self.assertTrue(Student.objects.exists())
@@ -6233,7 +6317,7 @@ class SeedDataCommandTests(TestCase):
             ).exists(),
         )
 
-        registration_settings = CourseRegistrationSettings.objects.get(pk=1)
+        registration_settings = CourseRegistrationSettings.objects.get(academic_year__is_active=True)
         self.assertEqual(
             registration_settings.telegram_group_url,
             'https://t.me/cadet_journal_demo',

@@ -418,6 +418,14 @@
             .field select,
             .field textarea {
                 font-size: 16px;
+                min-width: 0;
+                max-width: 100%;
+                padding-right: 10px;
+                padding-left: 10px;
+            }
+            .field input::placeholder,
+            .field textarea::placeholder {
+                font-size: 0.86em;
             }
             .copy-button {
                 width: 100%;

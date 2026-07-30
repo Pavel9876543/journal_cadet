@@ -640,7 +640,7 @@ class BaseCourseApplicationForm(forms.ModelForm):
             },
             'middle_name': {
                 'autocomplete': 'additional-name',
-                'placeholder': 'Отчество, если есть',
+                'placeholder': 'Отчество',
             },
             'city_church': {
                 'placeholder': 'Например: Тамбов или Воронеж, Отрожка',
@@ -668,11 +668,9 @@ class BaseCourseApplicationForm(forms.ModelForm):
             })
         if 'custom_instrument' in self.fields:
             self.fields['custom_instrument'].required = False
-            self.fields['custom_instrument'].help_text = (
-                'Значение сохраняется только в заявке и карточке ученика и не добавляется в справочник.'
-            )
+            self.fields['custom_instrument'].help_text = ''
             self.fields['custom_instrument'].widget.attrs.update({
-                'placeholder': 'Например: Домра малая II или партия тенора',
+                'placeholder': 'Например, домра малая',
                 'data-custom-instrument': '1',
             })
         if 'music_education' in self.fields:
@@ -690,8 +688,8 @@ class BaseCourseApplicationForm(forms.ModelForm):
             self.fields['parent_contacts'].widget = forms.Textarea(attrs={
                 'rows': 4,
                 'placeholder': (
-                    'Иванов Иван Иванович — +7 (999) 123-45-67\n'
-                    'Иванова Мария Петровна — +7 (999) 987-65-43'
+                    'Родитель 1: ФИО — +7 (999) 123-45-67\n'
+                    'Родитель 2: ФИО — +7 (999) 987-65-43'
                 ),
             })
             self.fields['parent_contacts'].required = False
@@ -827,7 +825,10 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
 class CourseRegistrationSettingsForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         if kwargs.get('instance') is None:
-            kwargs['instance'] = CourseRegistrationSettings.load()
+            try:
+                kwargs['instance'] = CourseRegistrationSettings.load()
+            except CourseRegistrationSettings.DoesNotExist:
+                pass
         super().__init__(*args, **kwargs)
 
     class Meta:

@@ -17,6 +17,17 @@
     {% admin_academic_year_context as year_context %}
     {% include "admin/journal/academic_year_selector.html" with admin_academic_years=year_context.admin_academic_years admin_selected_academic_year=year_context.admin_selected_academic_year admin_selected_year_is_archived=year_context.admin_selected_year_is_archived admin_academic_year_param=year_context.admin_academic_year_param %}
 
+    {% if birthday_notifications %}
+        <div class="col-12" aria-label="Уведомления о днях рождения">
+            {% for notification in birthday_notifications %}
+                <div class="alert {% if notification.is_today %}alert-success{% else %}alert-info{% endif %}">
+                    <i class="fas fa-birthday-cake mr-2" aria-hidden="true"></i>
+                    {{ notification.message }}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
     <div class="col-12">
         <div class="journal-dashboard">
             <section class="journal-dashboard-hero">

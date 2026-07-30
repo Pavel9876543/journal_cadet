@@ -1382,6 +1382,17 @@
             {% endif %}
         </div>
 
+        {% if birthday_notifications %}
+            <div class="message-stack birthday-notifications" aria-label="Уведомления о днях рождения">
+                {% for notification in birthday_notifications %}
+                    <div class="alert{% if notification.is_today %} success{% endif %}" role="status">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>
+                        <span>{{ notification.message }}</span>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
         {% if messages %}
             <div class="message-stack">
                 {% for message in messages %}
