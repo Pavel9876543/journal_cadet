@@ -187,9 +187,6 @@ class AcademicYear(models.Model):
     def delete(self, *args, **kwargs):
         with transaction.atomic():
             self._lock_activation()
-            validate_active_academic_year(self)
-            if AcademicYear.objects.count() <= 1:
-                raise ValidationError('Нельзя удалить единственный учебный год.')
             result = super().delete(*args, **kwargs)
             self.activate_latest(lock_acquired=True)
             return result
@@ -309,7 +306,7 @@ class Instrument(models.Model):
 class OrchestraPart(models.Model):
     instrument = models.ForeignKey(
         Instrument,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='orchestra_parts',
         verbose_name='Инструмент',
     )
@@ -478,7 +475,7 @@ class StudyGroup(models.Model):
     name = models.CharField('Название группы', max_length=100)
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='study_groups',
         verbose_name='Учебный год',
     )
@@ -521,7 +518,6 @@ class StudyGroup(models.Model):
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        validate_active_academic_year(self.academic_year)
         return super().delete(*args, **kwargs)
 
     @property
@@ -640,13 +636,13 @@ class Teacher(models.Model):
 class TeacherEnrollment(models.Model):
     teacher = models.ForeignKey(
         Teacher,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='academic_year_memberships',
         verbose_name='Преподаватель',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='teacher_enrollments',
         verbose_name='Учебный год',
     )
@@ -682,7 +678,6 @@ class TeacherEnrollment(models.Model):
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        validate_active_academic_year(self.academic_year)
         teacher_id = self.teacher_id
         result = super().delete(*args, **kwargs)
         if not TeacherEnrollment.objects.filter(
@@ -794,7 +789,7 @@ class Student(models.Model):
     )
     instrument = models.ForeignKey(
         Instrument,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='students',
         verbose_name='Инструмент из справочника',
         null=True,
@@ -808,7 +803,7 @@ class Student(models.Model):
     )
     orchestra_part = models.ForeignKey(
         OrchestraPart,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='students',
         verbose_name='Партия в оркестре',
         null=True,
@@ -902,13 +897,6 @@ class Student(models.Model):
             )
 
     def delete(self, *args, **kwargs):
-        if self.enrollments.exists():
-            raise ValidationError(
-                'Нельзя удалить ученика, у которого есть данные учебных лет. '
-                'Снимите признак «Активен», чтобы сохранить архив.'
-            )
-        if self.group_id:
-            validate_active_academic_year(self.group.academic_year, 'group')
         return super().delete(*args, **kwargs)
 
     def sync_active_enrollment(self, *, create_if_missing: bool = False):
@@ -1031,13 +1019,13 @@ class Student(models.Model):
 class StudentEnrollment(models.Model):
     student = models.ForeignKey(
         Student,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='enrollments',
         verbose_name='Ученик',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='student_enrollments',
         verbose_name='Учебный год',
     )
@@ -1120,7 +1108,6 @@ class StudentEnrollment(models.Model):
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        validate_active_academic_year(self.academic_year)
         student_id = self.student_id
         group_id = self.group_id
         result = super().delete(*args, **kwargs)
@@ -1138,13 +1125,13 @@ class GroupSubject(models.Model):
     )
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='group_subjects',
         verbose_name='Предмет',
     )
     teacher = models.ForeignKey(
         Teacher,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='group_subjects',
         verbose_name='Преподаватель',
     )
@@ -1252,8 +1239,6 @@ class GroupSubject(models.Model):
                 )
 
     def delete(self, *args, **kwargs):
-        if self.group_id:
-            validate_active_academic_year(self.group.academic_year, 'group')
         teacher_id = self.teacher_id
         subject_id = self.subject_id
         with transaction.atomic():
@@ -1271,19 +1256,19 @@ class StudentSubject(models.Model):
     )
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='individual_students',
         verbose_name='Предмет',
     )
     teacher = models.ForeignKey(
         Teacher,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='individual_subjects',
         verbose_name='Преподаватель',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='student_subjects',
         verbose_name='Учебный год',
         editable=False,
@@ -1404,8 +1389,6 @@ class StudentSubject(models.Model):
                 )
 
     def delete(self, *args, **kwargs):
-        if self.academic_year_id:
-            validate_active_academic_year(self.academic_year)
         teacher_id = self.teacher_id
         subject_id = self.subject_id
         with transaction.atomic():
@@ -1480,19 +1463,19 @@ class Grade(models.Model):
     )
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='grades',
         verbose_name='Предмет',
     )
     teacher = models.ForeignKey(
         Teacher,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='grades',
         verbose_name='Преподаватель',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='grades',
         verbose_name='Учебный год',
         null=True,
@@ -1501,7 +1484,7 @@ class Grade(models.Model):
     )
     enrollment = models.ForeignKey(
         StudentEnrollment,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='grades',
         verbose_name='Зачисление ученика',
         null=True,
@@ -1705,8 +1688,6 @@ class Grade(models.Model):
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        if self.academic_year_id:
-            validate_active_academic_year(self.academic_year)
         return super().delete(*args, **kwargs)
 
 
@@ -1719,19 +1700,19 @@ class SubjectResult(models.Model):
     )
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='subject_results',
         verbose_name='Предмет',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='subject_results',
         verbose_name='Учебный год',
     )
     enrollment = models.ForeignKey(
         StudentEnrollment,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='subject_results',
         verbose_name='Зачисление ученика',
         null=True,
@@ -1867,8 +1848,6 @@ class SubjectResult(models.Model):
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        if self.academic_year_id:
-            validate_active_academic_year(self.academic_year)
         return super().delete(*args, **kwargs)
 
 
@@ -1877,13 +1856,13 @@ class AssessmentGroup(models.Model):
     description = models.TextField('Описание', blank=True)
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_groups',
         verbose_name='Предмет',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_groups',
         verbose_name='Учебный год',
     )
@@ -1957,25 +1936,25 @@ class AssessmentItem(models.Model):
     description = models.TextField('Описание', blank=True)
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_items',
         verbose_name='Предмет',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_items',
         verbose_name='Учебный год',
     )
     group = models.ForeignKey(
         AssessmentGroup,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='items',
         verbose_name='Группа произведений',
     )
     responsible_teacher = models.ForeignKey(
         Teacher,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='responsible_assessment_items',
         verbose_name='Ответственный преподаватель-дирижёр',
         blank=True,
@@ -2081,25 +2060,25 @@ class AssessmentItem(models.Model):
 class StudentAssessmentGroup(models.Model):
     student = models.ForeignKey(
         Student,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_group_assignments',
         verbose_name='Ученик',
     )
     assessment_group = models.ForeignKey(
         AssessmentGroup,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='student_assignments',
         verbose_name='Группа произведений',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='student_assessment_group_assignments',
         verbose_name='Учебный год',
     )
     enrollment = models.ForeignKey(
         StudentEnrollment,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_group_assignments',
         verbose_name='Зачисление ученика',
         editable=False,
@@ -2222,20 +2201,20 @@ class AssessmentResult(models.Model):
 
     enrollment = models.ForeignKey(
         StudentEnrollment,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_results',
         verbose_name='Зачисление ученика',
     )
     item = models.ForeignKey(
         AssessmentItem,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='results',
         verbose_name='Произведение / элемент',
     )
     status = models.CharField('Результат', max_length=16, choices=STATUS_CHOICES)
     assessed_by = models.ForeignKey(
         Teacher,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='assessment_results_given',
         verbose_name='Преподаватель, выставивший результат',
     )
@@ -2327,19 +2306,19 @@ class FinalGradeRule(models.Model):
 
     subject = models.ForeignKey(
         Subject,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='final_grade_rules',
         verbose_name='Предмет',
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='final_grade_rules',
         verbose_name='Учебный год',
     )
     assessment_group = models.ForeignKey(
         AssessmentGroup,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='final_grade_rules',
         verbose_name='Группа произведений',
         help_text='Оставьте пустым для общего правила предмета.',
@@ -2728,7 +2707,7 @@ class CourseApplication(models.Model):
     )
     instrument_reference = models.ForeignKey(
         Instrument,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='course_applications',
         verbose_name='Инструмент из справочника',
         null=True,
@@ -2737,7 +2716,7 @@ class CourseApplication(models.Model):
     custom_instrument = models.CharField('Собственный инструмент', max_length=255, blank=True)
     orchestra_part = models.ForeignKey(
         OrchestraPart,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='course_applications',
         verbose_name='Партия в оркестре',
         null=True,
@@ -2764,7 +2743,7 @@ class CourseApplication(models.Model):
     )
     academic_year = models.ForeignKey(
         AcademicYear,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         null=True,
         blank=True,
         related_name='course_applications',
@@ -2987,8 +2966,6 @@ class CourseApplication(models.Model):
                 self.remove_student_from_journal()
 
     def delete(self, *args, **kwargs):
-        if self.academic_year_id:
-            validate_active_academic_year(self.academic_year)
         with transaction.atomic():
             self.remove_student_from_journal(clear_application_links=False)
             return super().delete(*args, **kwargs)

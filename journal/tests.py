@@ -92,6 +92,7 @@ from journal.registration_utils import (
     reaches_age_in_calendar_year,
 )
 from journal.templatetags.admin_dashboard import journal_admin_dashboard
+from journal.templatetags.journal_extras import short_person_name
 from journal.views import (
     _build_journal_tables,
     _calculate_average,
@@ -611,7 +612,7 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         self.assertEqual(data['student'].group_id, data['group'].pk)
         self.assertTrue(data['student'].is_active)
 
-    def test_archived_grade_cannot_be_changed_or_deleted(self):
+    def test_archived_grade_cannot_be_changed_but_can_be_deleted(self):
         data = self.create_base_journal()
         grade = Grade.objects.create(
             student=data['student'],
@@ -626,8 +627,9 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
         grade.value = '4'
         with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
             grade.save()
-        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
-            grade.delete()
+        grade.delete()
+
+        self.assertFalse(Grade.objects.filter(pk=grade.pk).exists())
 
     def test_academic_year_periods_cannot_overlap(self):
         self.create_academic_year()
@@ -743,22 +745,20 @@ class AcademicStructureModelTests(JournalTestDataMixin, TestCase):
             ).exists(),
         )
 
-    def test_only_academic_year_cannot_be_deleted(self):
+    def test_only_academic_year_can_be_deleted(self):
         academic_year = self.create_academic_year()
 
-        with self.assertRaisesMessage(ValidationError, 'единственный учебный год'):
-            academic_year.delete()
+        academic_year.delete()
 
-        self.assertTrue(AcademicYear.objects.filter(pk=academic_year.pk, is_active=True).exists())
+        self.assertFalse(AcademicYear.objects.filter(pk=academic_year.pk).exists())
 
-    def test_archived_academic_year_cannot_be_deleted(self):
+    def test_archived_academic_year_can_be_deleted(self):
         archived_year = self.create_academic_year()
         self.create_academic_year(name='2026/2027')
 
-        with self.assertRaisesMessage(ValidationError, 'Архивный учебный год'):
-            archived_year.delete()
+        archived_year.delete()
 
-        self.assertTrue(AcademicYear.objects.filter(pk=archived_year.pk).exists())
+        self.assertFalse(AcademicYear.objects.filter(pk=archived_year.pk).exists())
 
     def test_student_without_group_keeps_individual_subjects_display(self):
         data = self.create_base_journal()
@@ -1677,6 +1677,21 @@ class FormTests(JournalTestDataMixin, TestCase):
             normalized_contacts,
             'Иванов Иван Иванович - +7 (999) 123-45-67',
         )
+
+    def test_parent_contacts_placeholder_contains_only_examples(self):
+        self.create_academic_year()
+        placeholder = CourseApplicationPublicForm().fields['parent_contacts'].widget.attrs[
+            'placeholder'
+        ]
+
+        self.assertEqual(
+            placeholder,
+            (
+                'Иванов Иван Иванович — +7 (999) 123-45-67\n'
+                'Петрова Анна Сергеевна — +7 (999) 987-65-43'
+            ),
+        )
+        self.assertNotIn('Родитель', placeholder)
 
     def test_minimum_birth_date_for_age_handles_leap_course_start_date(self):
         self.assertEqual(
@@ -2819,6 +2834,27 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Сольфеджио')
         self.assertNotContains(response, 'Регистрация на курсы')
 
+    def test_student_table_row_shows_two_name_words_without_icon(self):
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {
+                'group': self.data['group'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'academic_year': self.data['year'].pk,
+            },
+        )
+        html = response.content.decode()
+        row_start = html.index('<span class="student-name">')
+        row_end = html.index('</span>', html.index('<span>', row_start)) + len('</span>')
+        student_cell = html[row_start:row_end]
+
+        self.assertEqual(short_person_name(self.data['student'].full_name), 'Сидоров Семён')
+        self.assertIn('Сидоров Семён', student_cell)
+        self.assertNotIn('Семёнович', student_cell)
+        self.assertNotIn('<svg', student_cell)
+
     def test_orchestra_part_options_api_returns_only_active_instrument_parts(self):
         domra = self.create_instrument(name='Домра')
         bayan = self.data['instrument']
@@ -3119,7 +3155,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
             },
         )
 
-        self.assertContains(response, old_student_name)
+        self.assertContains(response, ' '.join(old_student_name.split()[:2]))
         self.assertContains(response, old_subject_name)
 
     def test_post_to_archived_academic_year_does_not_change_grade(self):
@@ -3689,7 +3725,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn(old_student, queryset)
         self.assertNotIn(new_student, queryset)
 
-    def test_archived_year_blocks_mutating_academic_data_but_allows_profile_edit(self):
+    def test_archived_year_blocks_edits_but_allows_explicit_deletion(self):
         old_year = self.create_academic_year(name='2025/2026')
         old_group = self.create_group(academic_year=old_year)
         instrument = self.create_instrument()
@@ -3704,10 +3740,10 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
 
         self.assertFalse(group_admin.has_add_permission(request))
         self.assertFalse(group_admin.has_change_permission(request, old_group))
-        self.assertFalse(group_admin.has_delete_permission(request, old_group))
+        self.assertTrue(group_admin.has_delete_permission(request, old_group))
         self.assertTrue(student_admin.has_change_permission(request, student))
         self.assertFalse(student_admin.has_add_permission(request))
-        self.assertFalse(student_admin.has_delete_permission(request, student))
+        self.assertTrue(student_admin.has_delete_permission(request, student))
         self.assertFalse(temporary_admin.has_add_permission(request))
         self.assertFalse(temporary_admin.has_change_permission(request))
         self.assertFalse(student_inline.has_add_permission(request, old_group))
@@ -3800,7 +3836,10 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('student_card_link', inline.fields)
         self.assertTrue(form.fields['student'].widget.can_add_related)
         self.assertTrue(form.fields['student'].widget.can_change_related)
-        self.assertTrue(form.fields['student'].widget.can_delete_related)
+        # Django intentionally hides the related-object delete icon for a
+        # CASCADE relation. The student remains deletable from its own table,
+        # where the complete cascade is shown before confirmation.
+        self.assertFalse(form.fields['student'].widget.can_delete_related)
         self.assertIn(student.full_name, str(inline.student_card_link(enrollment)))
 
     def test_active_group_can_enroll_student_from_previous_year(self):
@@ -3847,7 +3886,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             ).exists(),
         )
 
-    def test_every_non_global_admin_disables_add_and_delete_in_archive_mode(self):
+    def test_every_non_global_admin_disables_add_but_allows_delete_in_archive_mode(self):
         old_year = self.create_academic_year(name='2025/2026')
         self.create_academic_year(name='2026/2027')
         request = self.admin_request(old_year)
@@ -3860,7 +3899,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
                 continue
             with self.subTest(model=model._meta.label):
                 self.assertFalse(model_admin.has_add_permission(request))
-                self.assertFalse(model_admin.has_delete_permission(request))
+                self.assertTrue(model_admin.has_delete_permission(request))
 
     def test_registration_settings_are_read_only_and_recovery_settings_editable_in_archive_mode(self):
         old_year = self.create_academic_year(name='2025/2026')
@@ -3878,7 +3917,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertFalse(registration_admin.has_change_permission(request))
         self.assertTrue(recovery_admin.has_add_permission(request))
 
-    def test_inactive_academic_year_is_read_only_even_when_active_year_is_selected(self):
+    def test_inactive_academic_year_is_not_editable_but_is_deletable(self):
         old_year = self.create_academic_year(name='2025/2026')
         active_year = self.create_academic_year(name='2026/2027')
         old_year.refresh_from_db()
@@ -3886,7 +3925,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         year_admin = AcademicYearAdmin(AcademicYear, django_admin.site)
 
         self.assertFalse(year_admin.has_change_permission(request, old_year))
-        self.assertFalse(year_admin.has_delete_permission(request, old_year))
+        self.assertTrue(year_admin.has_delete_permission(request, old_year))
 
     def test_city_church_fields_are_wide_in_admin_and_registration_forms(self):
         year = self.create_academic_year()
@@ -4098,7 +4137,28 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         model_admin = django_admin.site._registry[StudyGroup]
 
         self.assertFalse(model_admin.has_change_permission(request, data['group']))
-        self.assertFalse(model_admin.has_delete_permission(request, data['group']))
+        self.assertTrue(model_admin.has_delete_permission(request, data['group']))
+
+    def test_active_models_have_activate_and_deactivate_actions(self):
+        subject = self.create_subject(name='Предмет для смены статуса')
+        self.client.force_login(self.admin_user)
+        changelist_url = reverse('admin:journal_subject_changelist')
+
+        response = self.client.post(changelist_url, {
+            'action': 'deactivate_selected_records',
+            '_selected_action': [subject.pk],
+        })
+        self.assertEqual(response.status_code, 302)
+        subject.refresh_from_db()
+        self.assertFalse(subject.is_active)
+
+        response = self.client.post(changelist_url, {
+            'action': 'activate_selected_records',
+            '_selected_action': [subject.pk],
+        })
+        self.assertEqual(response.status_code, 302)
+        subject.refresh_from_db()
+        self.assertTrue(subject.is_active)
 
     def test_archived_group_page_uses_enrollment_and_assignment_snapshots(self):
         data = self.create_base_journal()
@@ -4389,7 +4449,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             StudentAdminForm.Media.js,
         )
 
-    def test_used_subject_delete_page_offers_safe_deactivation(self):
+    def test_used_subject_delete_page_confirms_and_cascades_related_data(self):
         data = self.create_base_journal()
         subject = data['solfeggio']
         assignment = GroupSubject.objects.get(
@@ -4402,16 +4462,14 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         confirmation = self.client.get(delete_url)
 
         self.assertEqual(confirmation.status_code, 200)
-        self.assertContains(confirmation, 'Деактивировать предмет')
-        self.assertContains(confirmation, 'сохранив назначения, оценки и итоги')
-        self.assertContains(confirmation, 'name="deactivate"')
+        self.assertContains(confirmation, str(assignment))
+        self.assertContains(confirmation, 'name="post" value="yes"')
 
-        response = self.client.post(delete_url, {'deactivate': 'yes'})
+        response = self.client.post(delete_url, {'post': 'yes'})
 
         self.assertEqual(response.status_code, 302)
-        subject.refresh_from_db()
-        self.assertFalse(subject.is_active)
-        self.assertTrue(GroupSubject.objects.filter(pk=assignment.pk).exists())
+        self.assertFalse(Subject.objects.filter(pk=subject.pk).exists())
+        self.assertFalse(GroupSubject.objects.filter(pk=assignment.pk).exists())
 
     def test_unused_subject_can_still_be_deleted_permanently(self):
         subject = self.create_subject(name='Неиспользуемый предмет')
@@ -4421,7 +4479,6 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         confirmation = self.client.get(delete_url)
 
         self.assertEqual(confirmation.status_code, 200)
-        self.assertContains(confirmation, 'Предмет нигде не используется')
         self.assertContains(confirmation, 'name="post" value="yes"')
 
         response = self.client.post(delete_url, {'post': 'yes'})

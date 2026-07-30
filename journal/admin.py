@@ -7,10 +7,8 @@ from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as
 from django.contrib.admin.widgets import RelatedFieldWidgetWrapper
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
 from django.contrib.auth.models import Group as AuthGroup, User as AuthUser
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
-from django.db.models.deletion import ProtectedError
-from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html
 
@@ -124,6 +122,59 @@ class JournalAdminDescriptionMixin:
             extra_context=self._year_extra_context(request, extra_context),
         )
 
+    def model_has_active_state(self):
+        try:
+            field = self.model._meta.get_field('is_active')
+        except FieldDoesNotExist:
+            return False
+        return field.get_internal_type() == 'BooleanField' and self.model is not AcademicYear
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if self.model_has_active_state():
+            actions['activate_selected_records'] = (
+                self.__class__.activate_selected_records,
+                'activate_selected_records',
+                'Активировать выбранные записи',
+            )
+            actions['deactivate_selected_records'] = (
+                self.__class__.deactivate_selected_records,
+                'deactivate_selected_records',
+                'Деактивировать выбранные записи',
+            )
+        return actions
+
+    def _set_selected_active_state(self, request, queryset, *, is_active):
+        changed = 0
+        failed = 0
+        for obj in queryset:
+            if obj.is_active == is_active:
+                continue
+            obj.is_active = is_active
+            try:
+                obj.save(update_fields=['is_active'])
+            except (ValidationError, PermissionDenied):
+                failed += 1
+            else:
+                changed += 1
+
+        state = 'активировано' if is_active else 'деактивировано'
+        self.message_user(request, f'Записей {state}: {changed}.', level=messages.SUCCESS)
+        if failed:
+            self.message_user(
+                request,
+                f'Не удалось изменить статус записей: {failed}.',
+                level=messages.ERROR,
+            )
+
+    @admin.action(permissions=['change'], description='Активировать выбранные записи')
+    def activate_selected_records(self, request, queryset):
+        self._set_selected_active_state(request, queryset, is_active=True)
+
+    @admin.action(permissions=['change'], description='Деактивировать выбранные записи')
+    def deactivate_selected_records(self, request, queryset):
+        self._set_selected_active_state(request, queryset, is_active=False)
+
 
 class SelectedAcademicYearMixin:
     academic_year_lookup = None
@@ -159,16 +210,17 @@ class ArchivedAcademicYearAdminMixin(SelectedAcademicYearMixin):
         return super().has_change_permission(request, obj)
 
     def has_delete_permission(self, request, obj=None):
-        if self.selected_year_is_archived(request):
-            return False
-        if obj is not None and object_is_in_archived_academic_year(obj):
-            return False
         return super().has_delete_permission(request, obj)
 
     def get_actions(self, request):
+        actions = super().get_actions(request)
         if self.selected_year_is_archived(request):
-            return {}
-        return super().get_actions(request)
+            return {
+                name: action
+                for name, action in actions.items()
+                if name == 'delete_selected'
+            }
+        return actions
 
     def save_model(self, request, obj, form, change):
         if self.selected_year_is_archived(request):
@@ -181,25 +233,7 @@ class ArchivedAcademicYearAdminMixin(SelectedAcademicYearMixin):
         return super().save_formset(request, form, formset, change)
 
     def delete_queryset(self, request, queryset):
-        if self.selected_year_is_archived(request):
-            raise PermissionDenied('Архивный учебный год доступен только для просмотра.')
-
-        active_ids = []
-        archived_count = 0
-        for obj in queryset:
-            if object_is_in_archived_academic_year(obj):
-                archived_count += 1
-            else:
-                active_ids.append(obj.pk)
-
-        if archived_count:
-            self.message_user(
-                request,
-                f'Архивные записи пропущены и не удалены: {archived_count}.',
-                level='ERROR',
-            )
-        if active_ids:
-            super().delete_queryset(request, queryset.filter(pk__in=active_ids))
+        super().delete_queryset(request, queryset)
 
 
 class SharedProfileAcademicYearAdminMixin(SelectedAcademicYearMixin):
@@ -211,14 +245,17 @@ class SharedProfileAcademicYearAdminMixin(SelectedAcademicYearMixin):
         return super().has_add_permission(request)
 
     def has_delete_permission(self, request, obj=None):
-        if self.selected_year_is_archived(request):
-            return False
         return super().has_delete_permission(request, obj)
 
     def get_actions(self, request):
+        actions = super().get_actions(request)
         if self.selected_year_is_archived(request):
-            return {}
-        return super().get_actions(request)
+            return {
+                name: action
+                for name, action in actions.items()
+                if name == 'delete_selected'
+            }
+        return actions
 
     def save_formset(self, request, form, formset, change):
         if self.selected_year_is_archived(request):
@@ -2013,23 +2050,6 @@ class ParentContextInlineMixin:
         return super().get_formset(request, obj, **kwargs)
 
 
-class AssessmentItemInlineFormSet(forms.models.BaseInlineFormSet):
-    def clean(self):
-        super().clean()
-        for form in self.forms:
-            if not getattr(form, 'cleaned_data', None):
-                continue
-            if not form.cleaned_data.get('DELETE'):
-                continue
-            item = form.instance
-            if item.pk and item.results.exists():
-                form.add_error(
-                    None,
-                    'Произведение с результатами нельзя удалить из вкладки. '
-                    'Деактивируйте его, чтобы сохранить историю.',
-                )
-
-
 class AssessmentItemForGroupInline(
     ParentContextInlineMixin,
     ArchivedAcademicYearInlineMixin,
@@ -2037,7 +2057,6 @@ class AssessmentItemForGroupInline(
 ):
     model = AssessmentItem
     form = AssessmentItemAdminForm
-    formset = AssessmentItemInlineFormSet
     fk_name = 'group'
     extra = 1
     fields = ('title', 'responsible_teacher', 'sort_order', 'is_required', 'is_active')
@@ -2307,36 +2326,11 @@ class AcademicYearAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionM
 
     def delete_queryset(self, request, queryset):
         deleted = 0
-        skipped = 0
         for academic_year in queryset.order_by('-starts_on', '-ends_on', '-pk'):
-            if object_is_in_archived_academic_year(academic_year):
-                skipped += 1
-                continue
-            try:
-                academic_year.delete()
-            except ValidationError as exc:
-                skipped += 1
-                self.message_user(request, '; '.join(exc.messages), level='ERROR')
-            except ProtectedError:
-                skipped += 1
-                self.message_user(
-                    request,
-                    (
-                        f'Учебный год «{academic_year}» не удален: '
-                        'сначала удалите связанные данные активного года.'
-                    ),
-                    level='ERROR',
-                )
-            else:
-                deleted += 1
+            academic_year.delete()
+            deleted += 1
         if deleted:
             self.message_user(request, f'Удалено учебных лет: {deleted}.')
-        if skipped:
-            self.message_user(
-                request,
-                f'Не удалено учебных лет: {skipped}.',
-                level='ERROR',
-            )
 
     @admin.display(description='Групп', ordering='_groups_count')
     def groups_count(self, obj):
@@ -2368,7 +2362,6 @@ class OrchestraPartInline(ArchivedAcademicYearInlineMixin, admin.TabularInline):
     fields = ('name', 'is_active')
     extra = 1
     ordering = ('name',)
-    can_delete = False
 
 
 @admin.register(Instrument)
@@ -2469,7 +2462,6 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
     )
     ordering = ('name',)
     list_per_page = 50
-    delete_confirmation_template = 'admin/journal/subject/delete_confirmation.html'
     fieldsets = (
         ('Предмет', {
             'fields': ('name', 'assessment_mode', 'final_grade_type', 'is_specialty', 'is_active'),
@@ -2523,47 +2515,6 @@ class SubjectAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin,
                 distinct=True,
             ),
         )
-
-    def delete_view(self, request, object_id, extra_context=None):
-        subject = self.get_object(request, object_id)
-        protected = []
-        if subject is not None:
-            protected = super().get_deleted_objects([subject], request)[3]
-
-        if (
-            subject is not None
-            and protected
-            and request.method == 'POST'
-            and request.POST.get('deactivate') == 'yes'
-        ):
-            if not self.has_delete_permission(request, subject):
-                raise PermissionDenied
-            if subject.is_active:
-                subject.is_active = False
-                subject.save(update_fields=['is_active'])
-                self.log_change(
-                    request,
-                    subject,
-                    'Предмет деактивирован вместо удаления: связанные учебные данные сохранены.',
-                )
-                self.message_user(
-                    request,
-                    f'Предмет «{subject}» деактивирован. Связанные назначения и оценки сохранены.',
-                    level=messages.SUCCESS,
-                )
-            else:
-                self.message_user(
-                    request,
-                    f'Предмет «{subject}» уже деактивирован.',
-                    level=messages.INFO,
-                )
-            return HttpResponseRedirect(reverse('admin:journal_subject_changelist'))
-
-        context = dict(extra_context or {})
-        context['subject_can_deactivate'] = bool(
-            subject is not None and protected and subject.is_active
-        )
-        return super().delete_view(request, object_id, extra_context=context)
 
     @admin.display(description='Групп')
     def groups_count(self, obj):
@@ -3699,21 +3650,11 @@ class CourseApplicationAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
 
     def delete_queryset(self, request, queryset):
         deleted = 0
-        skipped = 0
         for application in queryset.select_related('academic_year'):
-            if object_is_in_archived_academic_year(application):
-                skipped += 1
-                continue
             application.delete()
             deleted += 1
         if deleted:
             self.message_user(request, f'Удалено заявок: {deleted}.')
-        if skipped:
-            self.message_user(
-                request,
-                f'Архивные заявки пропущены: {skipped}.',
-                level='ERROR',
-            )
 
     @admin.display(description='ФИО', ordering='last_name')
     def full_name_display(self, obj):
@@ -3966,7 +3907,7 @@ class CourseRegistrationSettingsAdmin(
         return False
 
     def has_delete_permission(self, request, obj=None):
-        return False
+        return super().has_delete_permission(request, obj)
 
 
 @admin.register(PasswordRecoveryContact)
@@ -4025,37 +3966,8 @@ class SelectedAssessmentYearAdminMixin(ArchivedAcademicYearAdminMixin):
         return initial
 
 
-class ProtectedAssessmentDeleteAdminMixin:
-    protected_related_message = 'Используемую запись удалить нельзя. Деактивируйте её, чтобы сохранить историю.'
-
-    def object_has_protected_history(self, obj):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        if obj is not None and self.object_has_protected_history(obj):
-            return False
-        return super().has_delete_permission(request, obj)
-
-    def delete_queryset(self, request, queryset):
-        deletable_ids = []
-        protected_count = 0
-        for obj in queryset:
-            if self.object_has_protected_history(obj):
-                protected_count += 1
-            else:
-                deletable_ids.append(obj.pk)
-        if protected_count:
-            self.message_user(
-                request,
-                f'{self.protected_related_message} Пропущено записей: {protected_count}.',
-                level='ERROR',
-            )
-        if deletable_ids:
-            super().delete_queryset(request, queryset.filter(pk__in=deletable_ids))
-
-
 @admin.register(AssessmentGroup)
-class AssessmentGroupAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+class AssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     form = AssessmentGroupAdminForm
     inlines = (
         AssessmentItemForGroupInline,
@@ -4101,21 +4013,8 @@ class AssessmentGroupAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessme
             obj._students_count,
         )
 
-    protected_related_message = (
-        'Используемую группу произведений удалить нельзя. '
-        'Деактивируйте её, чтобы сохранить историю.'
-    )
-
-    def object_has_protected_history(self, obj):
-        return bool(
-            obj.items.exists()
-            or obj.student_assignments.exists()
-            or obj.final_grade_rules.exists()
-        )
-
-
 @admin.register(AssessmentItem)
-class AssessmentItemAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     form = AssessmentItemAdminForm
     inlines = (AssessmentResultForItemInline,)
     changelist_description = (
@@ -4149,15 +4048,6 @@ class AssessmentItemAdmin(ProtectedAssessmentDeleteAdminMixin, SelectedAssessmen
         if obj.responsible_teacher_id:
             return 'Готово'
         return format_html('<strong style="color:#b45309">Не назначен дирижёр</strong>')
-
-    protected_related_message = (
-        'Произведение с результатами удалить нельзя. '
-        'Деактивируйте его, чтобы сохранить историю.'
-    )
-
-    def object_has_protected_history(self, obj):
-        return obj.results.exists()
-
 
 @admin.register(StudentAssessmentGroup)
 class StudentAssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):

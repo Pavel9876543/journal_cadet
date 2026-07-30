@@ -736,16 +736,6 @@
             font-weight: 800;
         }
 
-        .student-avatar {
-            width: 28px;
-            height: 28px;
-            display: grid;
-            place-items: center;
-            border-radius: 50%;
-            background: #e6f4f1;
-            color: var(--success);
-        }
-
         .grade-cell {
             min-width: 68px;
             text-align: center;
@@ -944,12 +934,6 @@
 
             .student-name span:last-child {
                 overflow-wrap: anywhere;
-            }
-
-            .student-avatar {
-                width: 24px;
-                height: 24px;
-                flex: 0 0 24px;
             }
 
             .table-actions {
@@ -1780,7 +1764,7 @@
                                     <tbody>
                                     {% for row in section.rows %}
                                         <tr>
-                                            <th class="sticky-col" scope="row">{{ row.enrollment.full_name }}</th>
+                                            <th class="sticky-col" scope="row">{{ row.enrollment.full_name|short_person_name }}</th>
                                             <td>{% if row.enrollment.group %}{{ row.enrollment.group.name }}{% else %}—{% endif %}</td>
                                             <td>
                                                 {% if row.result %}
@@ -1987,10 +1971,7 @@
                                             <tr>
                                                 <th class="sticky-col" scope="row">
                                                     <span class="student-name">
-                                                        <span class="student-avatar">
-                                                            <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
-                                                        </span>
-                                                        <span>{{ row.student_name }}</span>
+                                                        <span>{{ row.student_name|short_person_name }}</span>
                                                     </span>
                                                 </th>
                                                 {% for lesson_date in table.dates %}

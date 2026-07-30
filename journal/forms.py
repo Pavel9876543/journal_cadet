@@ -742,8 +742,8 @@ class BaseCourseApplicationForm(forms.ModelForm):
             self.fields['parent_contacts'].widget = forms.Textarea(attrs={
                 'rows': 4,
                 'placeholder': (
-                    'Родитель 1: ФИО — +7 (999) 123-45-67\n'
-                    'Родитель 2: ФИО — +7 (999) 987-65-43'
+                    'Иванов Иван Иванович — +7 (999) 123-45-67\n'
+                    'Петрова Анна Сергеевна — +7 (999) 987-65-43'
                 ),
             })
             self.fields['parent_contacts'].required = False
