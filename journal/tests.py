@@ -58,6 +58,7 @@ from journal.admin import (
     GradeAdmin,
     GradeAdminForm,
     GroupSubjectAdminForm,
+    JournalAdminDescriptionMixin,
     StudentAdmin,
     StudentAdminForm,
     StudentAssessmentGroupAdminForm,
@@ -2004,7 +2005,10 @@ class FormTests(JournalTestDataMixin, TestCase):
             },
         )
 
-        self.assertEqual(list(form.fields['teacher'].queryset), [data['teacher']])
+        self.assertEqual(
+            set(form.fields['teacher'].queryset),
+            {data['teacher'], data['other_teacher']},
+        )
         self.assertEqual(list(form.fields['student'].queryset), [data['student']])
         self.assertFalse(form.fields['group'].required)
         self.assertIn('journal/grade_dependencies.js', GradeAdmin.Media.js)
@@ -2012,17 +2016,10 @@ class FormTests(JournalTestDataMixin, TestCase):
         dependency_script = Path(
             'journal/static/journal/grade_dependencies.js'
         ).read_text(encoding='utf-8')
-        self.assertIn("changedField === 'teacher'", dependency_script)
-        self.assertNotIn(
-            "changedField === 'student') {\n                clearField('subject')",
-            dependency_script,
-        )
-        self.assertIn(
-            "mode === 'grade' && fields.group && !fields.group.value",
-            dependency_script,
-        )
+        self.assertNotIn('clearDescendants', dependency_script)
+        self.assertNotIn('individualMode', dependency_script)
 
-    def test_blank_group_forms_render_only_individual_assignments(self):
+    def test_blank_group_forms_render_all_year_assignments(self):
         data = self.create_base_journal()
 
         journal_form = GradeCreateForm(
@@ -2034,16 +2031,16 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertEqual(
-            list(journal_form.fields['subject'].queryset),
-            [data['specialty']],
+            set(journal_form.fields['subject'].queryset),
+            {data['literature'], data['specialty']},
         )
         self.assertEqual(
             list(journal_form.fields['student'].queryset),
             [data['student']],
         )
         self.assertIn(data['specialty'], admin_form.fields['subject'].queryset)
-        self.assertNotIn(data['solfeggio'], admin_form.fields['subject'].queryset)
-        self.assertNotIn(data['literature'], admin_form.fields['subject'].queryset)
+        self.assertIn(data['solfeggio'], admin_form.fields['subject'].queryset)
+        self.assertIn(data['literature'], admin_form.fields['subject'].queryset)
 
     def test_grade_dependency_options_show_year_values_before_group_selection(self):
         data = self.create_base_journal()
@@ -2075,7 +2072,7 @@ class FormTests(JournalTestDataMixin, TestCase):
             {data['solfeggio'], data['literature'], data['specialty']},
         )
 
-    def test_grade_dependency_options_cross_filter_student_subject_and_teacher(self):
+    def test_grade_dependency_options_ignore_sibling_filters_without_group(self):
         data = self.create_base_journal()
 
         teacher_options = get_grade_form_options(
@@ -2096,14 +2093,14 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertEqual(list(teacher_options['students']), [data['student']])
         self.assertEqual(
             set(teacher_options['subjects']),
-            {data['literature'], data['specialty']},
+            {data['solfeggio'], data['literature'], data['specialty']},
         )
         self.assertEqual(list(student_options['students']), [data['student']])
         self.assertEqual(
             set(subject_options['subjects']),
-            {data['solfeggio']},
+            {data['solfeggio'], data['literature'], data['specialty']},
         )
-        self.assertNotIn(data['specialty'], subject_options['subjects'])
+        self.assertIn(data['specialty'], subject_options['subjects'])
 
     def test_grade_admin_uses_and_locks_year_selected_in_page_filter(self):
         data = self.create_base_journal()
@@ -2298,7 +2295,7 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
             [data['other_teacher']],
         )
 
-    def test_individual_grade_mode_excludes_group_assignments(self):
+    def test_primary_group_options_ignore_legacy_individual_flag(self):
         data = self.create_base_journal()
 
         options = get_grade_form_options(
@@ -2308,9 +2305,12 @@ class SelectorHelperTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertEqual(list(options['students']), [data['student']])
-        self.assertEqual(list(options['subjects']), [data['specialty']])
+        self.assertEqual(
+            set(options['subjects']),
+            {data['literature'], data['specialty']},
+        )
         self.assertEqual(list(options['teachers']), [data['other_teacher']])
-        self.assertNotIn(data['literature'], options['subjects'])
+        self.assertIn(data['literature'], options['subjects'])
 
     def test_grade_option_helpers_hide_archived_year_by_default_but_allow_explicit_view(self):
         data = self.create_base_journal()
@@ -2424,7 +2424,8 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertEqual(payload['defaults']['group_id'], self.data['group'].pk)
         self.assertEqual(payload['defaults']['academic_year_id'], self.data['year'].pk)
 
-    def test_admin_selected_teacher_returns_only_individual_subjects_without_group(self):
+    def test_grade_mode_returns_all_values_without_group(self):
+        other_group, other_student, other_subject = self.create_alternative_group_assignment()
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
         response = self.client.get(
@@ -2439,12 +2440,21 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(
-            [item['id'] for item in payload['students']],
-            [self.data['student'].pk],
+            {item['id'] for item in payload['students']},
+            {self.data['student'].pk, other_student.pk},
         )
         self.assertEqual(
             {item['id'] for item in payload['subjects']},
-            {self.data['specialty'].pk},
+            {
+                self.data['solfeggio'].pk,
+                self.data['literature'].pk,
+                self.data['specialty'].pk,
+                other_subject.pk,
+            },
+        )
+        self.assertEqual(
+            {item['id'] for item in payload['groups']},
+            {self.data['group'].pk, other_group.pk},
         )
 
     def test_selecting_group_first_limits_students_and_subjects(self):
@@ -2453,7 +2463,15 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
 
         response = self.client.get(
             reverse('grade_options_api'),
-            {'group': self.data['group'].pk, 'academic_year': self.data['year'].pk},
+            {
+                'mode': 'grade',
+                'group': self.data['group'].pk,
+                'student': other_student.pk,
+                'subject': other_subject.pk,
+                'academic_year': self.data['year'].pk,
+                'changed': 'group',
+                'strict': '1',
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -2515,7 +2533,7 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertIn(self.data['solfeggio'].pk, subject_ids)
         self.assertIn(other_subject.pk, subject_ids)
 
-    def test_selecting_student_after_individual_subject_keeps_subject(self):
+    def test_grade_mode_sibling_fields_do_not_hide_year_options(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
         response = self.client.get(
@@ -2538,7 +2556,7 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
             self.data['specialty'].pk,
             [item['id'] for item in payload['subjects']],
         )
-        self.assertNotIn(
+        self.assertIn(
             self.data['literature'].pk,
             [item['id'] for item in payload['subjects']],
         )
@@ -2547,7 +2565,7 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
             [self.data['student'].pk],
         )
 
-    def test_blank_group_defaults_to_individual_mode_server_side(self):
+    def test_blank_group_does_not_enable_individual_only_mode(self):
         self.client.login(username='grade_options_admin', password='Pass12345!')
 
         response = self.client.get(
@@ -2563,10 +2581,14 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(
-            [item['id'] for item in payload['subjects']],
-            [self.data['specialty'].pk],
+            {item['id'] for item in payload['subjects']},
+            {
+                self.data['solfeggio'].pk,
+                self.data['literature'].pk,
+                self.data['specialty'].pk,
+            },
         )
-        self.assertNotIn(
+        self.assertIn(
             self.data['literature'].pk,
             [item['id'] for item in payload['subjects']],
         )
@@ -2946,6 +2968,19 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'id="grade-create-form"')
         self.assertContains(response, 'name="academic_year"')
         self.assertContains(response, 'data-workspace-search')
+        self.assertContains(response, 'data-grade-dependency-mode="journal_filter"')
+        self.assertContains(response, 'id="journal-subject-blocks"')
+        self.assertContains(response, 'Свернуть все таблицы оценок по предметам')
+        self.assertContains(response, 'Развернуть все таблицы оценок по предметам')
+        self.assertContains(response, 'data-collapse-target="journal-subject-blocks"', count=1)
+        self.assertContains(
+            response,
+            (
+                'data-collapse-key="journal-subject-'
+                f'{self.data["teacher"].user_id}-{self.data["year"].pk}-'
+                f'{self.data["group"].pk}-{self.data["solfeggio"].pk}"'
+            ),
+        )
         self.assertContains(
             response,
             (
@@ -2983,6 +3018,8 @@ class ViewTests(JournalTestDataMixin, TestCase):
         response = self.client.get(reverse('journal'))
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'onchange="this.form.submit()"')
+        self.assertNotContains(response, 'data-grade-dependency-mode="journal_filter"')
         self.assertContains(response, 'Мои оценки')
         self.assertContains(response, 'Нет данных по выбранным фильтрам.')
 
@@ -3326,9 +3363,14 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
     def test_admin_can_add_grade_by_form(self):
         self.client.login(username='admin_test', password='Pass12345!')
+        current_url = (
+            f'{reverse("journal")}?group={self.data["group"].pk}'
+            f'&subject={self.data["solfeggio"].pk}'
+            f'&academic_year={self.data["year"].pk}'
+        )
 
         response = self.client.post(
-            f'{reverse("journal")}?group={self.data["group"].pk}',
+            current_url,
             data={
                 'action': 'add_grade',
                 'student': self.data['student'].pk,
@@ -3342,6 +3384,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], current_url)
         self.assertTrue(
             Grade.objects.filter(
                 student=self.data['student'],
@@ -4083,6 +4126,15 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('scrollY', javascript)
         self.assertIn('scrollLeft', javascript)
         self.assertIn('activeTab', javascript)
+        self.assertIn('#content-main form[method="post"]', javascript)
+        self.assertIn("state.path.endsWith('/add/')", javascript)
+
+        form_state = Path(
+            'journal/static/journal/form_state.js'
+        ).read_text(encoding='utf-8')
+        self.assertIn('journal-form-state:', form_state)
+        self.assertIn("querySelectorAll('.table-scroll')", form_state)
+        self.assertIn('scrollers', form_state)
 
         mobile_css = Path('journal/static/journal/layout-mobile.css').read_text(encoding='utf-8')
         self.assertIn('.filter-form > *', mobile_css)
@@ -4104,6 +4156,21 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)
         self.assertIn('grid-template-columns: minmax(0, 1fr) !important;', tablet_css)
         self.assertIn('.filter-form > *', tablet_css)
+
+    def test_all_project_admins_keep_the_current_form_or_list_after_save(self):
+        for model, model_admin in django_admin.site._registry.items():
+            if model._meta.app_label not in {'journal', 'auth'}:
+                continue
+            with self.subTest(model=model._meta.label):
+                self.assertIsInstance(model_admin, JournalAdminDescriptionMixin)
+
+        default_save = RequestFactory().post('/admin/example/', {'_save': 'Сохранить'})
+        explicit_navigation = RequestFactory().post(
+            '/admin/example/',
+            {'_addanother': 'Сохранить и добавить другой объект'},
+        )
+        self.assertTrue(JournalAdminDescriptionMixin._keep_change_form_open(default_save))
+        self.assertFalse(JournalAdminDescriptionMixin._keep_change_form_open(explicit_navigation))
 
     def test_archived_admin_lists_use_assignment_snapshots(self):
         old_year = self.create_academic_year(name='2025/2026')
@@ -7429,10 +7496,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             [row['id'] for row in payload['items']],
             [self.item.pk, individual_item.pk],
         )
-        self.assertEqual(
-            [row['id'] for row in payload['study_groups']],
-            [self.group.pk],
-        )
+        self.assertNotIn('study_groups', payload)
         self.assertEqual(
             [row['id'] for row in payload['students']],
             [self.student.pk],
@@ -7454,6 +7518,89 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             [row['id'] for row in filtered_payload['items']],
             [individual_item.pk],
         )
+
+    def test_assessment_group_is_the_only_primary_dependency_filter(self):
+        other_study_group = self.create_group(
+            name='Другая учебная группа',
+            academic_year=self.year,
+        )
+        other_subject = Subject.objects.create(
+            name='Другая оркестровая программа',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        other_student = self.create_student(
+            full_name='Ученик Другого Оркестра',
+            group=other_study_group,
+            instrument=self.student.instrument,
+            username='other_assessment_student',
+        )
+        GroupSubject.objects.create(
+            group=other_study_group,
+            subject=other_subject,
+            teacher=self.teacher,
+        )
+        other_assessment_group = AssessmentGroup.objects.create(
+            name='Другой оркестр',
+            subject=other_subject,
+            academic_year=self.year,
+        )
+        other_item = AssessmentItem.objects.create(
+            title='Чужая программа',
+            subject=other_subject,
+            academic_year=self.year,
+            group=other_assessment_group,
+            responsible_teacher=self.teacher,
+        )
+        StudentAssessmentGroup.objects.create(
+            student=other_student,
+            assessment_group=other_assessment_group,
+            academic_year=self.year,
+        )
+        self.client.force_login(self.teacher.user)
+
+        all_response = self.client.get(
+            reverse('assessment_filter_options_api'),
+            {
+                'academic_year': self.year.pk,
+                'assessment_subject': other_subject.pk,
+                'assessment_item': other_item.pk,
+                'assessment_student': other_student.pk,
+            },
+        )
+        all_payload = all_response.json()
+        self.assertEqual(
+            {row['id'] for row in all_payload['assessment_groups']},
+            {self.assessment_group.pk, other_assessment_group.pk},
+        )
+        self.assertEqual(
+            {row['id'] for row in all_payload['subjects']},
+            {self.subject.pk, other_subject.pk},
+        )
+        self.assertEqual(
+            {row['id'] for row in all_payload['items']},
+            {self.item.pk, other_item.pk},
+        )
+        self.assertEqual(
+            {row['id'] for row in all_payload['students']},
+            {self.student.pk, other_student.pk},
+        )
+
+        group_response = self.client.get(
+            reverse('assessment_filter_options_api'),
+            {
+                'academic_year': self.year.pk,
+                'assessment_group': self.assessment_group.pk,
+                'assessment_subject': other_subject.pk,
+                'assessment_item': other_item.pk,
+                'assessment_student': other_student.pk,
+                'changed': 'assessment_group',
+            },
+        )
+        group_payload = group_response.json()
+        self.assertEqual([row['id'] for row in group_payload['subjects']], [self.subject.pk])
+        self.assertEqual([row['id'] for row in group_payload['items']], [self.item.pk])
+        self.assertEqual([row['id'] for row in group_payload['students']], [self.student.pk])
 
     def test_teacher_assessment_item_filter_limits_rendered_sections(self):
         other_item = AssessmentItem.objects.create(
@@ -7479,7 +7626,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             [section['item'] for section in response.context['assessment_sections']],
             [other_item],
         )
-        self.assertContains(response, 'name="assessment_study_group"')
+        self.assertNotContains(response, 'name="assessment_study_group"')
         self.assertContains(response, 'name="assessment_group"')
         self.assertContains(response, 'name="assessment_student"')
 
@@ -7503,6 +7650,22 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(len(get_response.context['assessment_sections']), 1)
         self.assertContains(get_response, 'name="assessment_teacher"')
+        self.assertContains(
+            get_response,
+            (
+                '<input type="hidden" name="assessment_teacher" '
+                f'value="{self.teacher.pk}">'
+            ),
+            html=True,
+        )
+        self.assertContains(
+            get_response,
+            (
+                '<input type="hidden" name="assessment_subject" '
+                f'value="{self.subject.pk}">'
+            ),
+            html=True,
+        )
 
         post_response = self.client.post(
             (
@@ -7528,6 +7691,48 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             ).exists(),
         )
 
+    def test_teacher_can_save_result_with_quick_assessment_form(self):
+        self.client.force_login(self.teacher.user)
+        query = (
+            f'?academic_year={self.year.pk}'
+            f'&assessment_group={self.assessment_group.pk}'
+        )
+
+        get_response = self.client.get(f'{reverse("journal")}{query}')
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertContains(get_response, 'id="quick-assessment-title"')
+        self.assertContains(get_response, 'name="assessment_group"')
+        self.assertContains(get_response, 'name="assessment_item"')
+        self.assertContains(get_response, 'name="assessment_student"')
+        self.assertContains(get_response, 'name="status"')
+        self.assertNotContains(get_response, 'name="assessment_study_group"')
+
+        post_response = self.client.post(
+            f'{reverse("journal")}{query}',
+            {
+                'action': 'assessment_result',
+                'assessment_group': self.assessment_group.pk,
+                'assessment_item': self.item.pk,
+                'assessment_student': self.student.pk,
+                'status': AssessmentResult.STATUS_FAILED,
+            },
+        )
+
+        self.assertRedirects(
+            post_response,
+            f'{reverse("journal")}{query}',
+            fetch_redirect_response=False,
+        )
+        result = AssessmentResult.objects.get(
+            item=self.item,
+            enrollment=self.assignment.enrollment,
+        )
+        self.assertEqual(result.status, AssessmentResult.STATUS_FAILED)
+
+        refreshed_response = self.client.get(f'{reverse("journal")}{query}')
+        self.assertContains(refreshed_response, 'Незачёт: 1')
+
 
     def test_teacher_journal_shows_compact_assessment_summary(self):
         set_assessment_result(
@@ -7549,12 +7754,17 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.context['assessment_summary']['passed_count'], 1)
         self.assertContains(response, 'Сводка по сдаче произведений')
         self.assertContains(response, 'Не оценено: 0')
-        self.assertContains(response, 'Свернуть всё')
-        self.assertContains(response, 'Развернуть всё')
+        self.assertContains(response, 'Свернуть все таблицы сдачи произведений')
+        self.assertContains(response, 'Развернуть все таблицы сдачи произведений')
+        self.assertContains(response, 'data-collapse-target="teacher-assessment-blocks"', count=1)
         self.assertContains(response, 'id="teacher-assessment-blocks"')
         self.assertContains(
             response,
-            '<details class="table-card collapsible-card" open>',
+            (
+                '<details class="table-card collapsible-card" '
+                f'data-collapse-key="assessment-item-{self.teacher.user_id}-'
+                f'{self.year.pk}-{self.item.pk}" open>'
+            ),
             html=False,
         )
         self.assertContains(response, 'Произведение / элемент:')
@@ -7596,7 +7806,9 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             response,
             (
                 '<details class="table-card assessment-subject-card '
-                'collapsible-card" open>'
+                'collapsible-card" '
+                f'data-collapse-key="student-assessment-{self.student.user_id}-'
+                f'{self.year.pk}-{self.subject.pk}" open>'
             ),
             html=False,
         )

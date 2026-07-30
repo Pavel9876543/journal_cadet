@@ -5,7 +5,6 @@
         academic_year: 'academic_years',
         assessment_teacher: 'teachers',
         assessment_subject: 'subjects',
-        assessment_study_group: 'study_groups',
         assessment_group: 'assessment_groups',
         assessment_item: 'items',
         assessment_student: 'students'
@@ -58,6 +57,9 @@
             if (!fields.assessment_teacher && form.dataset.fixedTeacher) {
                 url.searchParams.set('assessment_teacher', form.dataset.fixedTeacher);
             }
+            if (!fields.academic_year && form.dataset.fixedAcademicYear) {
+                url.searchParams.set('academic_year', form.dataset.fixedAcademicYear);
+            }
             if (changedField) {
                 url.searchParams.set('changed', changedField);
             }
@@ -109,7 +111,7 @@
             }
             select.replaceChildren(fragment);
             select.value = retained ? previousValue : '';
-            select.disabled = items.length === 0;
+            select.disabled = items.length === 0 && !select.value;
             select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
             return Boolean(previousValue && !retained);
         }
@@ -143,7 +145,7 @@
                         reload = replaceOptions(
                             name,
                             payload[FIELD_CONFIG[name]] || [],
-                            changedField === name
+                            !changedField || changedField === name
                         ) || reload;
                     });
                     setStatus('', false);

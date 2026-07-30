@@ -198,32 +198,33 @@ def _grade_options_api_sync(request):
             status=403,
         )
 
-    group = _get_selected_object(
-        StudyGroup.objects.filter(is_active=True),
-        request.GET.get('group'),
-    )
-    student = _get_selected_object(
-        Student.objects.filter(is_active=True).select_related('group'),
-        request.GET.get('student'),
-    )
-    subject = _get_selected_object(
-        Subject.objects.filter(is_active=True),
-        request.GET.get('subject'),
-    )
     academic_year = _get_selected_object(
         AcademicYear.objects.all(),
         request.GET.get('academic_year'),
     ) or AcademicYear.get_active()
+    active_year = academic_year is None or academic_year.is_active
+    group_queryset = StudyGroup.objects.filter(is_active=True) if active_year else StudyGroup.objects.all()
+    student_queryset = Student.objects.filter(is_active=True) if active_year else Student.objects.all()
+    subject_queryset = Subject.objects.filter(is_active=True) if active_year else Subject.objects.all()
+    teacher_queryset = Teacher.objects.filter(is_active=True) if active_year else Teacher.objects.all()
+
+    group = _get_selected_object(group_queryset, request.GET.get('group'))
+    student = _get_selected_object(
+        student_queryset.select_related('group'),
+        request.GET.get('student'),
+    )
+    subject = _get_selected_object(subject_queryset, request.GET.get('subject'))
 
     if can_manage_all_grades:
         teacher = _get_selected_object(
-            Teacher.objects.filter(is_active=True),
+            teacher_queryset,
             request.GET.get('teacher'),
         )
     else:
         teacher = teacher_profile
 
-    if request.GET.get('mode') == 'grade':
+    mode = request.GET.get('mode')
+    if mode == 'grade':
         fixed_teacher = teacher_profile if not can_manage_all_grades else None
         individual_only = group is None
         options = get_grade_form_options(
@@ -254,6 +255,57 @@ def _grade_options_api_sync(request):
         students = options['students']
         subjects = options['subjects']
         teachers = options['teachers']
+        return JsonResponse({
+            'groups': [
+                {
+                    'id': item.pk,
+                    'label': item.name,
+                    'academic_year_id': item.academic_year_id,
+                }
+                for item in groups
+            ],
+            'students': [
+                {'id': item.pk, 'label': item.full_name}
+                for item in students
+            ],
+            'subjects': [
+                {
+                    'id': item.pk,
+                    'label': item.name,
+                    'is_individual': item.is_specialty,
+                }
+                for item in subjects
+            ],
+            'teachers': [
+                {'id': item.pk, 'label': item.full_name}
+                for item in teachers
+            ],
+            'defaults': {},
+        })
+
+    if mode == 'journal_filter':
+        groups = get_grade_groups(
+            teacher=teacher,
+            academic_year=academic_year,
+        ).select_related('academic_year')
+        if group is not None and not groups.filter(pk=group.pk).exists():
+            group = None
+        students = get_grade_students(
+            group=group,
+            teacher=teacher,
+            academic_year=academic_year,
+        )
+        subjects = get_grade_subjects(
+            group=group,
+            teacher=teacher,
+            academic_year=academic_year,
+        )
+        teachers = get_grade_teachers(
+            group=group,
+            academic_year=academic_year,
+        )
+        if not can_manage_all_grades:
+            teachers = teachers.filter(pk=teacher_profile.pk)
         return JsonResponse({
             'groups': [
                 {
@@ -420,7 +472,6 @@ def _assessment_filter_options_api_sync(request):
             'academic_years': [],
             'teachers': [],
             'subjects': [],
-            'study_groups': [],
             'assessment_groups': [],
             'items': [],
             'students': [],
@@ -848,11 +899,7 @@ def _reject_archived_academic_year_post(
         request,
         'Архивный учебный год доступен только для просмотра. Изменения можно вносить только в активном учебном году.',
     )
-    return _redirect_journal(
-        group=selected_group,
-        subject=selected_subject,
-        academic_year=selected_academic_year,
-    )
+    return _redirect_current_journal(request)
 
 
 def _filter_groups_by_academic_year(groups, selected_academic_year: AcademicYear | None):
@@ -918,7 +965,6 @@ def _assessment_workspace_context(
         selection.teacher,
         academic_year,
         subject=selection.subject,
-        study_group=selection.study_group,
         assessment_group=selection.assessment_group,
         item=selection.item,
         student=selection.student,
@@ -952,17 +998,26 @@ def _handle_assessment_result_post(
             'academic_year',
             'responsible_teacher',
         ),
-        request.POST.get('item_id'),
+        request.POST.get('item_id') or request.POST.get('assessment_item'),
     )
     student = _get_selected_object(
         Student.objects.filter(is_active=True),
-        request.POST.get('student_id'),
+        request.POST.get('student_id') or request.POST.get('assessment_student'),
+    )
+    assessment_group = _get_selected_object(
+        AssessmentGroup.objects.all(),
+        request.POST.get('assessment_group'),
     )
     status = (request.POST.get('status') or '').strip()
     comment = (request.POST.get('comment') or '').strip()
     try:
         if item is None or student is None:
             raise ValidationError('Не удалось определить произведение или ученика.')
+        if 'assessment_group' in request.POST:
+            if assessment_group is None:
+                raise ValidationError('Выберите оркестр (группу произведений).')
+            if item.group_id != assessment_group.pk:
+                raise ValidationError('Выбранное произведение не относится к указанному оркестру.')
         acting_teacher = fixed_teacher or item.responsible_teacher
         if acting_teacher is None:
             raise ValidationError('У произведения не назначен ответственный преподаватель.')
@@ -1723,11 +1778,7 @@ def _journal_for_admin(
             subjects=Subject.objects.filter(pk__in=[subject.pk for subject in subjects_to_show]),
             selected_academic_year=selected_academic_year,
         ):
-            return _redirect_journal(
-                group=selected_group,
-                subject=selected_subject,
-                academic_year=selected_academic_year,
-            )
+            return _redirect_current_journal(request)
 
     if isinstance(grade_form, HttpResponse):
         return grade_form
@@ -1869,11 +1920,7 @@ def _journal_for_teacher(
             request,
             'Ваше участие в выбранном учебном году доступно только для просмотра.',
         )
-        return _redirect_journal(
-            group=selected_group,
-            subject=selected_subject,
-            academic_year=selected_academic_year,
-        )
+        return _redirect_current_journal(request)
 
     grade_form = None
     if can_edit_journal:
@@ -1897,11 +1944,7 @@ def _journal_for_teacher(
             teacher=teacher,
             selected_academic_year=selected_academic_year,
         ):
-            return _redirect_journal(
-                group=selected_group,
-                subject=selected_subject,
-                academic_year=selected_academic_year,
-            )
+            return _redirect_current_journal(request)
 
     if isinstance(grade_form, HttpResponse):
         return grade_form
@@ -1945,7 +1988,7 @@ def _journal_for_student(
 
     if request.method == 'POST':
         messages.error(request, 'Ученику недоступно редактирование оценок.')
-        return _redirect_journal(subject=selected_subject, academic_year=selected_academic_year)
+        return _redirect_current_journal(request)
 
     grade_qs = (
         Grade.objects
@@ -2059,11 +2102,7 @@ def _handle_grade_form(
         if grade_form.is_valid():
             grade_form.save()
             messages.success(request, 'Оценка успешно добавлена.')
-            return _redirect_journal(
-                group=posted_group,
-                subject=grade_form.cleaned_data.get('subject') or posted_subject,
-                academic_year=selected_academic_year,
-            )
+            return _redirect_current_journal(request)
 
         return grade_form
 

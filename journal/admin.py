@@ -653,7 +653,7 @@ class GradeAdminForm(forms.ModelForm):
         label='Группа',
         queryset=StudyGroup.objects.none(),
         required=False,
-        empty_label='Без группы / индивидуальный предмет',
+        empty_label='Все группы',
     )
 
     class Meta:

@@ -39,14 +39,12 @@ def get_grade_form_options(
     students_queryset=None,
     individual_only=False,
 ):
-    """Return mutually compatible options for the grade form.
+    """Return options narrowed only by the primary group selector.
 
-    Groups remain an optional year-level filter. Students are narrowed by the
-    group, subject and teacher when those values are selected. Subjects are
-    narrowed by the group, student and teacher. This also keeps individual
-    assignments usable when the student has no study group.
+    With no group selected every value available in the year is returned. A
+    fixed teacher still limits the scope for a teacher account, while the
+    other selected values never hide sibling options from one another.
     """
-    effective_teacher = fixed_teacher or teacher
     groups = get_grade_groups(
         teacher=fixed_teacher,
         academic_year=academic_year,
@@ -62,25 +60,18 @@ def get_grade_form_options(
     else:
         students = get_grade_students(
             group=group,
-            subject=subject,
-            teacher=effective_teacher,
+            teacher=fixed_teacher,
             academic_year=academic_year,
             base_queryset=students_queryset,
-            individual_only=individual_only,
         )
         subjects = get_grade_subjects(
             group=group,
-            student=student,
-            teacher=effective_teacher,
+            teacher=fixed_teacher,
             academic_year=academic_year,
-            individual_only=individual_only,
         )
         teachers = get_grade_teachers(
             group=group,
-            student=student,
-            subject=subject,
             academic_year=academic_year,
-            individual_only=individual_only,
         )
         if fixed_teacher is not None:
             teachers = teachers.filter(pk=fixed_teacher.pk)

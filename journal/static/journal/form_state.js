@@ -2,7 +2,41 @@
     'use strict';
 
     document.addEventListener('DOMContentLoaded', function () {
-        var scrollKey = 'journal-scroll-y';
+        var scrollKey = 'journal-form-state:' + window.location.pathname;
+
+        function savePosition() {
+            var scrollers = [];
+            document.querySelectorAll('.table-scroll').forEach(function (element, index) {
+                if (element.scrollTop || element.scrollLeft) {
+                    scrollers.push({index: index, top: element.scrollTop, left: element.scrollLeft});
+                }
+            });
+            sessionStorage.setItem(scrollKey, JSON.stringify({
+                scrollY: window.scrollY || 0,
+                scrollers: scrollers
+            }));
+        }
+
+        function restorePosition(rawState) {
+            var state;
+            try {
+                state = JSON.parse(rawState);
+            } catch (_error) {
+                state = {scrollY: Number(rawState) || 0, scrollers: []};
+            }
+            window.requestAnimationFrame(function () {
+                window.scrollTo(0, Number(state.scrollY) || 0);
+                var elements = document.querySelectorAll('.table-scroll');
+                (state.scrollers || []).forEach(function (position) {
+                    var element = elements[position.index];
+                    if (element) {
+                        element.scrollTop = Number(position.top) || 0;
+                        element.scrollLeft = Number(position.left) || 0;
+                    }
+                });
+            });
+        }
+
         var firstError = document.querySelector('[data-error-for]');
         if (firstError) {
             sessionStorage.removeItem(scrollKey);
@@ -16,15 +50,13 @@
         } else {
             var savedY = sessionStorage.getItem(scrollKey);
             if (savedY !== null) {
-                window.scrollTo(0, Number(savedY) || 0);
+                restorePosition(savedY);
                 sessionStorage.removeItem(scrollKey);
             }
         }
 
         document.querySelectorAll('main form[method="post"]').forEach(function (form) {
-            form.addEventListener('submit', function () {
-                sessionStorage.setItem(scrollKey, String(window.scrollY));
-            });
+            form.addEventListener('submit', savePosition);
         });
 
         var dirtyForms = new Set();

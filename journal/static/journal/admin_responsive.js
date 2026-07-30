@@ -246,7 +246,15 @@
         } catch (_error) {
             return;
         }
-        if (state.path && state.path !== window.location.pathname) {
+        var currentPath = window.location.pathname;
+        var samePath = !state.path || state.path === currentPath;
+        var continuedAdd = Boolean(
+            state.path
+            && state.path.endsWith('/add/')
+            && currentPath.startsWith(state.path.slice(0, -4))
+            && currentPath.endsWith('/change/')
+        );
+        if (!samePath && !continuedAdd) {
             return;
         }
         if (state.activeTab) {
@@ -269,12 +277,14 @@
     }
 
     function initialiseAdminFormState() {
-        var changeForm = document.querySelector('body.change-form #content-main form[method="post"]');
-        if (!changeForm) {
+        var forms = document.querySelectorAll('#content-main form[method="post"]');
+        if (!forms.length) {
             return;
         }
         restoreAdminFormState();
-        changeForm.addEventListener('submit', saveAdminFormState);
+        forms.forEach(function (form) {
+            form.addEventListener('submit', saveAdminFormState);
+        });
     }
 
     var resizeTimer = null;

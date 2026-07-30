@@ -69,9 +69,6 @@
         var yearFilter = yearFilterSelector ? document.querySelector(yearFilterSelector) : null;
         var requestSequence = 0;
         var activeRequest = null;
-        var individualMode = Boolean(
-            mode === 'grade' && fields.group && !fields.group.value
-        );
 
         function setStatus(message, isError) {
             var status = scope.querySelector('[data-grade-options-status]')
@@ -127,9 +124,6 @@
             if (!fields.academic_year && fixedYear) {
                 url.searchParams.set('academic_year', fixedYear);
             }
-            if (individualMode && (!fields.group || !fields.group.value)) {
-                url.searchParams.set('individual', '1');
-            }
             url.searchParams.set('mode', mode);
             if (changedField) {
                 url.searchParams.set('changed', changedField);
@@ -180,28 +174,6 @@
             syncSelectWidget(select);
             select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
             return Boolean(oldValue && !retained);
-        }
-
-        function clearField(name) {
-            var select = fields[name];
-            if (!select || select.tagName !== 'SELECT') {
-                return;
-            }
-            select.value = '';
-            syncSelectWidget(select);
-        }
-
-        function clearDescendants(changedField) {
-            if (mode !== 'grade') {
-                return;
-            }
-            if (changedField === 'academic_year') {
-                ['group', 'student', 'subject', 'teacher'].forEach(clearField);
-            } else if (changedField === 'group') {
-                ['student', 'subject'].forEach(clearField);
-            } else if (changedField === 'teacher') {
-                ['student', 'subject'].forEach(clearField);
-            }
         }
 
         function updateFormActionYear(yearId) {
@@ -267,20 +239,6 @@
                     }
                     return;
                 }
-                if (name === 'group') {
-                    individualMode = !fields[name].value;
-                } else if (
-                    name === 'subject'
-                    && (!fields.group || !fields.group.value)
-                ) {
-                    var selectedOption = fields[name].selectedIndex >= 0
-                        ? fields[name].options[fields[name].selectedIndex]
-                        : null;
-                    individualMode = Boolean(
-                        selectedOption && selectedOption.dataset.individual === '1'
-                    );
-                }
-                clearDescendants(name);
                 loadOptions(name);
             });
         });
@@ -291,7 +249,6 @@
                 fixedYear = yearFilter.value;
                 syncSelectWidget(fields.academic_year);
                 updateFormActionYear(yearFilter.value);
-                clearDescendants('academic_year');
                 if (yearFilter.dataset.gradeYearAutoSubmit === '1') {
                     return;
                 }
