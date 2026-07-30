@@ -3711,11 +3711,16 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('.grade-form > *', mobile_css)
         self.assertIn('.field > .select-search-input', mobile_css)
         self.assertIn('min-height: 100dvh;', mobile_css)
+        self.assertNotIn('max-height: 500px', mobile_css)
+        self.assertIn(
+            '(max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse)',
+            mobile_css,
+        )
 
         device_styles = Path('templates/journal/device_styles.html').read_text(encoding='utf-8')
         self.assertNotIn(' media="', device_styles)
         self.assertEqual(device_styles.count('data-layout-styles='), 4)
-        self.assertEqual(device_styles.count('?v=20260730-1'), 4)
+        self.assertEqual(device_styles.count('?v=20260730-2'), 4)
 
         tablet_css = Path('journal/static/journal/layout-tablet.css').read_text(encoding='utf-8')
         self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)

@@ -1,6 +1,10 @@
-/* Телефон: портретная и горизонтальная ориентации. */
+/*
+ * Телефон: портретная и горизонтальная ориентации.
+ * В landscape не проверяем высоту viewport: мобильная адресная строка и
+ * клавиатура меняют её во время работы и не должны переключать весь layout.
+ */
 @media (max-width: 767.98px),
-       (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+       (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
     html,
     body {
         width: 100%;
@@ -147,7 +151,7 @@
     }
 }
 
-@media (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+@media (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
     .topbar,
     .journal-tabs {
         position: static;
