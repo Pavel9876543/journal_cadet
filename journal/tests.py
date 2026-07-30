@@ -2524,7 +2524,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Мои оценки')
         self.assertContains(response, 'Нет данных по выбранным фильтрам.')
 
-    def test_user_with_temporary_password_is_redirected_to_password_change(self):
+    def test_user_with_temporary_password_can_open_journal_without_warning(self):
         TemporaryCredential.objects.create(
             user=self.data['teacher'].user,
             login=self.data['teacher'].user.username,
@@ -2537,7 +2537,8 @@ class ViewTests(JournalTestDataMixin, TestCase):
 
         response = self.client.get(reverse('journal'))
 
-        self.assertRedirects(response, reverse('password_change'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Смените временный пароль')
 
     def test_academic_year_filter_limits_admin_groups(self):
         next_year = AcademicYear.objects.create(
@@ -6711,6 +6712,80 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
         self.assertEqual(results_sheet['F2'].value, '2025/2026')
         self.assertEqual(results_sheet['C2'].number_format, '@')
         self.assertEqual(results_sheet['D2'].number_format, '@')
+
+    def test_export_uses_student_snapshot_from_selected_year(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        group = self.create_group(name='Архивная группа', academic_year=old_year)
+        student = self.create_student(
+            full_name='Имя в архиве',
+            group=group,
+            username='student_snapshot_export',
+        )
+        Student.objects.filter(pk=student.pk).update(
+            full_name='Текущее имя',
+            student_phone='+79990000000',
+            comments='Текущий комментарий',
+        )
+
+        workbook = build_full_export_workbook(old_year)
+        students_sheet = workbook['Ученики']
+        headers = {
+            cell.value: cell.column
+            for cell in students_sheet[1]
+        }
+
+        self.assertEqual(students_sheet.cell(2, headers['Ученик']).value, 'Имя в архиве')
+        self.assertEqual(students_sheet.cell(2, headers['Телефон ученика']).value, '')
+        self.assertEqual(students_sheet.cell(2, headers['Комментарий']).value, '')
+
+    def test_export_includes_teacher_temporary_credentials_with_owner_details(self):
+        old_year = self.create_academic_year(name='2025/2026')
+        teacher = self.create_teacher(
+            full_name='Преподаватель Экспорта',
+            username='teacher_credentials_export',
+        )
+        TemporaryCredential.objects.create(
+            user=teacher.user,
+            login=teacher.user.username,
+            temporary_password='TeacherExport123!',
+        )
+
+        workbook = build_full_export_workbook(old_year)
+        credentials_sheet = workbook['Временные доступы']
+
+        self.assertEqual(
+            [cell.value for cell in credentials_sheet[1]],
+            [
+                'ФИО',
+                'Роль',
+                'Логин',
+                'Временный пароль',
+                'Телефон ученика',
+                'Дата выдачи',
+                'Учебный год',
+            ],
+        )
+        self.assertEqual(credentials_sheet['A2'].value, 'Преподаватель Экспорта')
+        self.assertEqual(credentials_sheet['B2'].value, 'Преподаватель')
+        self.assertEqual(credentials_sheet['C2'].value, 'teacher_credentials_export')
+        self.assertEqual(credentials_sheet['G2'].value, '2025/2026')
+
+    def test_active_year_export_includes_administrator_account(self):
+        active_year = self.create_academic_year(name='2025/2026')
+        User.objects.create_superuser(
+            username='export_administrator',
+            password='Pass12345!',
+            first_name='Администратор',
+        )
+
+        workbook = build_full_export_workbook(active_year)
+        users_sheet = workbook['Пользователи']
+        rows = list(users_sheet.iter_rows(min_row=2, values_only=True))
+
+        self.assertIn(
+            ('export_administrator', 'Администратор', '', 'Администратор'),
+            rows,
+        )
 
 class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
     """

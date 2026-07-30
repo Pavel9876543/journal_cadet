@@ -4,13 +4,14 @@ import datetime
 from typing import Iterable
 
 from django.contrib.auth import get_user_model
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from journal.academic_year_context import filter_temporary_credentials_for_year
 from journal.models import (
     AcademicYear,
     AssessmentGroup,
@@ -96,8 +97,11 @@ def write_users_sheet(workbook: Workbook, academic_year: AcademicYear | None) ->
             .exclude(teacher__user__isnull=True)
             .values_list('teacher__user_id', flat=True)
         )
+    user_filter = Q(pk__in=user_ids)
+    if academic_year is not None and academic_year.is_active:
+        user_filter |= Q(is_staff=True)
     users = (
-        User.objects.filter(pk__in=user_ids)
+        User.objects.filter(user_filter)
         .select_related('teacher_profile', 'student_profile')
         .prefetch_related('groups')
         .order_by('username')
@@ -191,7 +195,7 @@ def write_students_sheet(workbook: Workbook, academic_year: AcademicYear | None)
     else:
         enrollments = (
             StudentEnrollment.objects.filter(academic_year=academic_year)
-            .select_related('student', 'student__instrument', 'group', 'academic_year')
+            .select_related('student', 'group', 'academic_year')
             .prefetch_related(
                 Prefetch(
                     'student__course_applications',
@@ -212,14 +216,16 @@ def write_students_sheet(workbook: Workbook, academic_year: AcademicYear | None)
         enrollments,
         [
             ('Ученик', lambda item: item.full_name),
-            ('Пол', lambda item: item.student.get_gender_display()),
-            ('Дата рождения', lambda item: item.student.birth_date),
+            ('Пол', lambda item: item.get_gender_display()),
+            ('Дата рождения', lambda item: item.birth_date),
             ('Группа', lambda item: item.group.name if item.group_id else ''),
-            ('Инструмент', lambda item: item.student.instrument_display),
-            ('Музыкальное образование', lambda item: item.student.get_music_education_display()),
-            ('Телефон ученика', lambda item: item.student.student_phone),
-            ('Телефон родителей', lambda item: item.student.parent_contacts),
-            ('Город / Церковь', lambda item: item.student.city_church),
+            ('Инструмент', lambda item: item.instrument_name),
+            ('Музыкальное образование', lambda item: item.get_music_education_display()),
+            ('Телефон ученика', lambda item: item.student_phone),
+            ('Телефон родителей', lambda item: item.parent_contacts),
+            ('Город / Церковь', lambda item: item.city_church),
+            ('Комментарий', lambda item: item.comments),
+            ('Активен', lambda item: item.is_active),
             ('Дата регистрации заявки', registration_date),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
@@ -244,6 +250,7 @@ def write_teachers_sheet(workbook: Workbook, academic_year: AcademicYear | None)
             ('Телефон', lambda item: item.teacher.phone),
             ('Email', lambda item: item.teacher.email),
             ('Комментарий', lambda item: item.teacher.comments),
+            ('Активен', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
         text_headers={'Телефон'},
@@ -261,6 +268,7 @@ def write_assignments_sheets(workbook: Workbook, academic_year: AcademicYear | N
         groups,
         [
             ('Название группы', lambda item: item.name),
+            ('Активна', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
@@ -278,6 +286,7 @@ def write_assignments_sheets(workbook: Workbook, academic_year: AcademicYear | N
             ('Группа', lambda item: item.group.name),
             ('Предмет', lambda item: item.subject_name_snapshot or item.subject.name),
             ('Преподаватель', lambda item: item.teacher_name_snapshot or item.teacher.full_name),
+            ('Активен', lambda item: item.is_active),
             ('Учебный год', lambda item: item.group.academic_year.name),
         ],
     )
@@ -295,6 +304,7 @@ def write_assignments_sheets(workbook: Workbook, academic_year: AcademicYear | N
             ('Ученик', lambda item: item.student.full_name),
             ('Индивидуальный предмет', lambda item: item.subject_name_snapshot or item.subject.name),
             ('Преподаватель', lambda item: item.teacher_name_snapshot or item.teacher.full_name),
+            ('Активен', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
@@ -363,6 +373,7 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
             ('Группа произведений', lambda item: item.name),
             ('Предмет', lambda item: item.subject.name),
             ('Описание', lambda item: item.description),
+            ('Активна', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
@@ -383,6 +394,7 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
             ('Преподаватель-дирижёр', lambda item: item.responsible_teacher.full_name if item.responsible_teacher_id else ''),
             ('Обязательное', lambda item: yes_no(item.is_required)),
             ('Описание', lambda item: item.description),
+            ('Активно', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
@@ -400,6 +412,7 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
             ('Ученик', lambda item: item.student.full_name),
             ('Группа произведений', lambda item: item.assessment_group.name),
             ('Предмет', lambda item: item.assessment_group.subject.name),
+            ('Активно', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
@@ -478,20 +491,52 @@ def write_applications_sheet(workbook: Workbook, academic_year: AcademicYear | N
 
 
 def write_credentials_sheet(workbook: Workbook, academic_year: AcademicYear | None) -> None:
-    credentials = TemporaryCredential.objects.all().select_related('course_application', 'user')
-    if academic_year is not None:
-        credentials = credentials.filter(course_application__academic_year=academic_year)
+    credentials = TemporaryCredential.objects.all().select_related(
+        'course_application',
+        'course_application__academic_year',
+        'user',
+        'user__student_profile',
+        'user__teacher_profile',
+    )
+    credentials = filter_temporary_credentials_for_year(credentials, academic_year)
     credentials = credentials.order_by('login')
+
+    def owner_name(item):
+        if item.course_application_id:
+            return item.course_application.full_name
+        if item.user_id:
+            student = getattr(item.user, 'student_profile', None)
+            if student is not None:
+                return student.full_name
+            teacher = getattr(item.user, 'teacher_profile', None)
+            if teacher is not None:
+                return teacher.full_name
+            return item.user.get_full_name() or item.user.username
+        return ''
+
+    def owner_role(item):
+        if item.user_id and (item.user.is_superuser or item.user.is_staff):
+            return 'Администратор'
+        if item.user_id and getattr(item.user, 'teacher_profile', None) is not None:
+            return 'Преподаватель'
+        if item.course_application_id or (
+            item.user_id and getattr(item.user, 'student_profile', None) is not None
+        ):
+            return 'Ученик'
+        return 'Пользователь'
+
     write_custom_sheet(
         workbook,
         'Временные доступы',
         credentials,
         [
-            ('Ученик', lambda item: item.course_application.full_name if item.course_application_id else ''),
+            ('ФИО', owner_name),
+            ('Роль', owner_role),
             ('Логин', lambda item: item.login),
             ('Временный пароль', lambda item: item.temporary_password),
             ('Телефон ученика', lambda item: item.student_phone),
-            ('Учебный год', lambda item: item.course_application.academic_year.name if item.course_application_id and item.course_application.academic_year_id else ''),
+            ('Дата выдачи', lambda item: item.created_at),
+            ('Учебный год', lambda _item: academic_year.name if academic_year else ''),
         ],
         text_headers={'Логин', 'Временный пароль', 'Телефон ученика'},
     )
