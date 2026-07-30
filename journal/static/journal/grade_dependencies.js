@@ -190,8 +190,6 @@
                 ['group', 'student', 'subject', 'teacher'].forEach(clearField);
             } else if (changedField === 'group') {
                 ['student', 'subject'].forEach(clearField);
-            } else if (changedField === 'student') {
-                clearField('subject');
             } else if (changedField === 'teacher') {
                 ['student', 'subject'].forEach(clearField);
             }

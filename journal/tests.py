@@ -1818,6 +1818,10 @@ class FormTests(JournalTestDataMixin, TestCase):
             'journal/static/journal/grade_dependencies.js'
         ).read_text(encoding='utf-8')
         self.assertIn("changedField === 'teacher'", dependency_script)
+        self.assertNotIn(
+            "changedField === 'student') {\n                clearField('subject')",
+            dependency_script,
+        )
 
     def test_grade_dependency_options_show_year_values_before_group_selection(self):
         data = self.create_base_journal()
@@ -2266,6 +2270,27 @@ class GradeOptionsApiTests(JournalTestDataMixin, TestCase):
         subject_ids = [item['id'] for item in payload['subjects']]
         self.assertIn(self.data['solfeggio'].pk, subject_ids)
         self.assertIn(other_subject.pk, subject_ids)
+
+    def test_selecting_student_after_subject_keeps_compatible_subject(self):
+        self.client.login(username='grade_options_admin', password='Pass12345!')
+
+        response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'mode': 'grade',
+                'student': self.data['student'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'academic_year': self.data['year'].pk,
+                'changed': 'student',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            self.data['solfeggio'].pk,
+            [item['id'] for item in response.json()['subjects']],
+        )
 
     def test_changing_subject_drops_incompatible_group_and_student(self):
         other_group, other_student, other_subject = self.create_alternative_group_assignment()
