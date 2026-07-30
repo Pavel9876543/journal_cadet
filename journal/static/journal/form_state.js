@@ -4,25 +4,45 @@
     document.addEventListener('DOMContentLoaded', function () {
         var scrollKey = 'journal-form-state:' + window.location.pathname;
 
-        function savePosition() {
+        function savePosition(event) {
             var scrollers = [];
             document.querySelectorAll('.table-scroll').forEach(function (element, index) {
                 if (element.scrollTop || element.scrollLeft) {
                     scrollers.push({index: index, top: element.scrollTop, left: element.scrollLeft});
                 }
             });
-            sessionStorage.setItem(scrollKey, JSON.stringify({
-                scrollY: window.scrollY || 0,
-                scrollers: scrollers
-            }));
+            try {
+                sessionStorage.setItem(scrollKey, JSON.stringify({
+                    scrollY: window.scrollY || 0,
+                    scrollers: scrollers,
+                    saveContext: event.currentTarget.dataset.saveContext || ''
+                }));
+            } catch (_error) {
+                // Saving still works when session storage is unavailable.
+            }
         }
 
-        function restorePosition(rawState) {
-            var state;
+        function readSavedState() {
+            var rawState;
             try {
-                state = JSON.parse(rawState);
+                rawState = sessionStorage.getItem(scrollKey);
+                sessionStorage.removeItem(scrollKey);
             } catch (_error) {
-                state = {scrollY: Number(rawState) || 0, scrollers: []};
+                return null;
+            }
+            if (!rawState) {
+                return null;
+            }
+            try {
+                return JSON.parse(rawState);
+            } catch (_error) {
+                return {scrollY: Number(rawState) || 0, scrollers: [], saveContext: ''};
+            }
+        }
+
+        function restorePosition(state) {
+            if (!state) {
+                return;
             }
             window.requestAnimationFrame(function () {
                 window.scrollTo(0, Number(state.scrollY) || 0);
@@ -37,10 +57,101 @@
             });
         }
 
-        var firstError = document.querySelector('[data-error-for]');
+        function findSavedForm(state) {
+            if (!state || !state.saveContext) {
+                return null;
+            }
+            return Array.prototype.find.call(
+                document.querySelectorAll('main form[data-save-context]'),
+                function (form) {
+                    return form.dataset.saveContext === state.saveContext;
+                }
+            ) || null;
+        }
+
+        function toastHost(form) {
+            var previous = form.previousElementSibling;
+            if (previous && previous.classList.contains('save-toast-stack')) {
+                return previous;
+            }
+            var host = document.createElement('div');
+            host.className = 'save-toast-stack';
+            host.dataset.saveToastHost = '1';
+            form.parentNode.insertBefore(host, form);
+            return host;
+        }
+
+        function showToast(form, message, level) {
+            if (!form || !message) {
+                return false;
+            }
+            var isSuccess = level === 'success';
+            var toast = document.createElement('div');
+            toast.className = 'save-toast save-toast--' + (isSuccess ? 'success' : 'error');
+            toast.setAttribute('role', isSuccess ? 'status' : 'alert');
+            toast.setAttribute('aria-live', isSuccess ? 'polite' : 'assertive');
+            toast.dataset.localSaveToast = '1';
+
+            var symbol = document.createElement('span');
+            symbol.className = 'save-toast__symbol';
+            symbol.setAttribute('aria-hidden', 'true');
+            symbol.textContent = isSuccess ? '\u2713' : '!';
+
+            var text = document.createElement('span');
+            text.className = 'save-toast__message';
+            text.textContent = message.trim();
+
+            var close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'save-toast__close';
+            close.setAttribute('aria-label', 'Закрыть уведомление');
+            close.textContent = '\u00d7';
+
+            toast.appendChild(symbol);
+            toast.appendChild(text);
+            toast.appendChild(close);
+            var host = toastHost(form);
+            host.appendChild(toast);
+
+            function removeToast() {
+                toast.remove();
+                if (!host.children.length) {
+                    host.remove();
+                }
+            }
+            close.addEventListener('click', removeToast);
+            window.setTimeout(removeToast, isSuccess ? 6000 : 9000);
+            return true;
+        }
+
+        function localizeFlashMessages(form) {
+            if (!form) {
+                return false;
+            }
+            var localized = false;
+            document.querySelectorAll('[data-flash-message]').forEach(function (flash) {
+                var level = flash.dataset.messageLevel === 'success' ? 'success' : 'error';
+                if (showToast(form, flash.textContent || '', level)) {
+                    var stack = flash.parentElement;
+                    flash.remove();
+                    if (stack && !stack.children.length) {
+                        stack.remove();
+                    }
+                    localized = true;
+                }
+            });
+            return localized;
+        }
+
+        var savedState = readSavedState();
+        var savedForm = findSavedForm(savedState);
+        var localizedFlash = localizeFlashMessages(savedForm);
+        var firstError = document.querySelector('[data-error-for], .grade-form .field-error');
         if (firstError) {
-            sessionStorage.removeItem(scrollKey);
             var form = firstError.closest('form') || document.querySelector('#grade-create-form');
+            if (!localizedFlash) {
+                showToast(form, firstError.textContent || 'Не удалось сохранить изменения.', 'error');
+            }
             var field = form && firstError.dataset.errorFor ? form.elements[firstError.dataset.errorFor] : null;
             var target = field || firstError;
             target.scrollIntoView({behavior: 'smooth', block: 'center'});
@@ -48,11 +159,7 @@
                 field.focus({preventScroll: true});
             }
         } else {
-            var savedY = sessionStorage.getItem(scrollKey);
-            if (savedY !== null) {
-                restorePosition(savedY);
-                sessionStorage.removeItem(scrollKey);
-            }
+            restorePosition(savedState);
         }
 
         document.querySelectorAll('main form[method="post"]').forEach(function (form) {

@@ -31,6 +31,66 @@ html[data-bs-theme="dark"] {
     --journal-admin-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
 }
 
+.journal-save-toast {
+    position: sticky;
+    top: 70px;
+    z-index: 1200;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: min(100%, 620px);
+    margin: 10px 0;
+    border: 1px solid;
+    border-radius: 8px;
+    padding: 11px 12px;
+    box-shadow: 0 12px 28px rgba(16, 24, 40, 0.2);
+    font-weight: 700;
+    animation: journal-save-toast-in 0.18s ease-out;
+}
+
+.journal-save-toast--success {
+    border-color: #6ce9a6;
+    background: #ecfdf3;
+    color: #067647;
+}
+
+.journal-save-toast--error {
+    border-color: #fda29b;
+    background: #fef3f2;
+    color: #b42318;
+}
+
+.journal-save-toast__symbol {
+    flex: 0 0 auto;
+    font-size: 1.05rem;
+    line-height: 1.35;
+}
+
+.journal-save-toast__message {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.journal-save-toast .journal-save-toast__close {
+    flex: 0 0 28px;
+    width: 28px;
+    min-width: 28px;
+    min-height: 28px;
+    margin: -4px -4px -4px 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: currentColor;
+    font-size: 1.2rem;
+    line-height: 1;
+    box-shadow: none;
+}
+
+@keyframes journal-save-toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 body:not(.login-page) .app-wrapper,
 body:not(.login-page) .app-main {
     background: var(--journal-admin-bg);

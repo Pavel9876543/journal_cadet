@@ -2966,6 +2966,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertTrue(response.context['journal_tables'])
         self.assertIsNotNone(response.context['grade_form'])
         self.assertContains(response, 'id="grade-create-form"')
+        self.assertContains(response, 'data-save-context="grade-create"')
         self.assertContains(response, 'name="academic_year"')
         self.assertContains(response, 'data-workspace-search')
         self.assertContains(response, 'data-grade-dependency-mode="journal_filter"')
@@ -2973,6 +2974,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'Свернуть все таблицы оценок по предметам')
         self.assertContains(response, 'Развернуть все таблицы оценок по предметам')
         self.assertContains(response, 'data-collapse-target="journal-subject-blocks"', count=1)
+        self.assertContains(response, 'data-save-context="journal-table-')
         self.assertContains(
             response,
             (
@@ -4128,6 +4130,11 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('activeTab', javascript)
         self.assertIn('#content-main form[method="post"]', javascript)
         self.assertIn("state.path.endsWith('/add/')", javascript)
+        self.assertIn('showAdminSaveNotification', javascript)
+        self.assertIn('journal-save-toast journal-save-toast--', javascript)
+        self.assertIn("isSuccess ? 'success' : 'error'", javascript)
+        self.assertIn('.journal-save-toast--success', css)
+        self.assertIn('.journal-save-toast--error', css)
 
         form_state = Path(
             'journal/static/journal/form_state.js'
@@ -4135,6 +4142,9 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('journal-form-state:', form_state)
         self.assertIn("querySelectorAll('.table-scroll')", form_state)
         self.assertIn('scrollers', form_state)
+        self.assertIn('data-flash-message', form_state)
+        self.assertIn('save-toast save-toast--', form_state)
+        self.assertIn("isSuccess ? 'success' : 'error'", form_state)
 
         mobile_css = Path('journal/static/journal/layout-mobile.css').read_text(encoding='utf-8')
         self.assertIn('.filter-form > *', mobile_css)
@@ -7702,6 +7712,8 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(get_response.status_code, 200)
         self.assertContains(get_response, 'id="quick-assessment-title"')
+        self.assertContains(get_response, 'data-save-context="quick-assessment"')
+        self.assertContains(get_response, 'data-save-context="assessment-')
         self.assertContains(get_response, 'name="assessment_group"')
         self.assertContains(get_response, 'name="assessment_item"')
         self.assertContains(get_response, 'name="assessment_student"')
@@ -7732,6 +7744,28 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
 
         refreshed_response = self.client.get(f'{reverse("journal")}{query}')
         self.assertContains(refreshed_response, 'Незачёт: 1')
+        self.assertContains(refreshed_response, 'data-flash-message')
+        self.assertContains(refreshed_response, 'data-message-level="success"')
+
+    def test_quick_assessment_error_is_rendered_for_local_red_toast(self):
+        self.client.force_login(self.teacher.user)
+        response = self.client.post(
+            f'{reverse("journal")}?academic_year={self.year.pk}',
+            {
+                'action': 'assessment_result',
+                'assessment_group': self.assessment_group.pk,
+                'assessment_item': 999999,
+                'assessment_student': self.student.pk,
+                'status': AssessmentResult.STATUS_PASSED,
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-flash-message')
+        self.assertContains(response, 'data-message-level="error"')
+        self.assertContains(response, 'Не удалось определить произведение или ученика.')
+        self.assertFalse(AssessmentResult.objects.exists())
 
 
     def test_teacher_journal_shows_compact_assessment_summary(self):

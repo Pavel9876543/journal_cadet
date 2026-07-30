@@ -216,35 +216,55 @@
     function saveAdminFormState(event) {
         var submitterName = event && event.submitter ? event.submitter.name : '';
         if (submitterName === '_addanother' || submitterName === '_saveasnew') {
-            sessionStorage.removeItem(adminFormStateKey);
+            try {
+                sessionStorage.removeItem(adminFormStateKey);
+            } catch (_error) {
+                // Navigation still works when session storage is unavailable.
+            }
             return;
         }
         var activeTab = document.querySelector('.nav-tabs .nav-link.active, [role="tab"].active');
+        var form = event.currentTarget;
+        var forms = Array.prototype.slice.call(
+            document.querySelectorAll('#content-main form[method="post"]')
+        );
         var scrollers = [];
         document.querySelectorAll('.journal-responsive-table, .inline-group, .tabular').forEach(function (element, index) {
             if (element.scrollTop || element.scrollLeft) {
                 scrollers.push({index: index, top: element.scrollTop, left: element.scrollLeft});
             }
         });
-        sessionStorage.setItem(adminFormStateKey, JSON.stringify({
-            path: window.location.pathname,
-            scrollY: window.scrollY || 0,
-            activeTab: activeTab ? activeTab.getAttribute('href') : '',
-            scrollers: scrollers
-        }));
+        try {
+            sessionStorage.setItem(adminFormStateKey, JSON.stringify({
+                path: window.location.pathname,
+                scrollY: window.scrollY || 0,
+                activeTab: activeTab ? activeTab.getAttribute('href') : '',
+                scrollers: scrollers,
+                formId: form.id || '',
+                formIndex: forms.indexOf(form),
+                submitterName: submitterName
+            }));
+        } catch (_error) {
+            // Saving still works when session storage is unavailable.
+        }
     }
 
     function restoreAdminFormState() {
-        var rawState = sessionStorage.getItem(adminFormStateKey);
-        if (!rawState) {
-            return;
+        var rawState;
+        try {
+            rawState = sessionStorage.getItem(adminFormStateKey);
+            sessionStorage.removeItem(adminFormStateKey);
+        } catch (_error) {
+            return null;
         }
-        sessionStorage.removeItem(adminFormStateKey);
+        if (!rawState) {
+            return null;
+        }
         var state;
         try {
             state = JSON.parse(rawState);
         } catch (_error) {
-            return;
+            return null;
         }
         var currentPath = window.location.pathname;
         var samePath = !state.path || state.path === currentPath;
@@ -255,7 +275,7 @@
             && currentPath.endsWith('/change/')
         );
         if (!samePath && !continuedAdd) {
-            return;
+            return null;
         }
         if (state.activeTab) {
             var tab = document.querySelector('.nav-tabs .nav-link[href="' + state.activeTab + '"]');
@@ -274,14 +294,125 @@
                 }
             });
         });
+        return state;
+    }
+
+    function adminFormForState(state, forms) {
+        if (!state) {
+            return null;
+        }
+        if (state.formId) {
+            var byId = document.getElementById(state.formId);
+            if (byId && byId.matches('#content-main form[method="post"]')) {
+                return byId;
+            }
+        }
+        return forms[state.formIndex] || forms[0] || null;
+    }
+
+    function adminToastAnchor(form, state) {
+        if (state && state.submitterName) {
+            var submitter = Array.prototype.find.call(
+                form.querySelectorAll('[name]'),
+                function (element) { return element.name === state.submitterName; }
+            );
+            if (submitter) {
+                return submitter.closest('.submit-row, .actions, .paginator') || submitter.parentElement;
+            }
+        }
+        return form;
+    }
+
+    function adminMessageText(element) {
+        var copy = element.cloneNode(true);
+        copy.querySelectorAll('button, .close, svg').forEach(function (item) { item.remove(); });
+        return (copy.textContent || '').trim();
+    }
+
+    function createAdminToast(anchor, message, level) {
+        if (!anchor || !message) {
+            return;
+        }
+        var isSuccess = level === 'success';
+        var toast = document.createElement('div');
+        toast.className = 'journal-save-toast journal-save-toast--' + (isSuccess ? 'success' : 'error');
+        toast.setAttribute('role', isSuccess ? 'status' : 'alert');
+        toast.setAttribute('aria-live', isSuccess ? 'polite' : 'assertive');
+        toast.dataset.localSaveToast = '1';
+
+        var symbol = document.createElement('span');
+        symbol.className = 'journal-save-toast__symbol';
+        symbol.setAttribute('aria-hidden', 'true');
+        symbol.textContent = isSuccess ? '\u2713' : '!';
+
+        var text = document.createElement('span');
+        text.className = 'journal-save-toast__message';
+        text.textContent = message;
+
+        var close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'journal-save-toast__close';
+        close.setAttribute('aria-label', 'Закрыть уведомление');
+        close.textContent = '\u00d7';
+
+        toast.appendChild(symbol);
+        toast.appendChild(text);
+        toast.appendChild(close);
+        if (anchor === anchor.closest('form')) {
+            anchor.insertBefore(toast, anchor.firstChild);
+        } else {
+            anchor.parentNode.insertBefore(toast, anchor);
+        }
+
+        function removeToast() {
+            toast.remove();
+        }
+        close.addEventListener('click', removeToast);
+        window.setTimeout(removeToast, isSuccess ? 6000 : 9000);
+    }
+
+    function showAdminSaveNotification(state, forms) {
+        var form = adminFormForState(state, forms);
+        if (!form) {
+            return;
+        }
+        var anchor = adminToastAnchor(form, state);
+        var flash = document.querySelector(
+            '.messagelist li, .alert-success, .alert-danger, .alert-error, .alert-warning'
+        );
+        if (flash) {
+            var level = (
+                flash.classList.contains('error')
+                || flash.classList.contains('alert-danger')
+                || flash.classList.contains('alert-error')
+                || flash.classList.contains('warning')
+                || flash.classList.contains('alert-warning')
+            ) ? 'error' : 'success';
+            createAdminToast(anchor, adminMessageText(flash), level);
+            flash.remove();
+            return;
+        }
+        var error = form.querySelector(
+            '.errorlist li, .invalid-feedback, .errornote, .form-row.errors'
+        );
+        if (error) {
+            createAdminToast(
+                anchor,
+                adminMessageText(error) || 'Не удалось сохранить изменения. Проверьте поля формы.',
+                'error'
+            );
+        }
     }
 
     function initialiseAdminFormState() {
-        var forms = document.querySelectorAll('#content-main form[method="post"]');
+        var forms = Array.prototype.slice.call(
+            document.querySelectorAll('#content-main form[method="post"]')
+        );
         if (!forms.length) {
             return;
         }
-        restoreAdminFormState();
+        var state = restoreAdminFormState();
+        showAdminSaveNotification(state, forms);
         forms.forEach(function (form) {
             form.addEventListener('submit', saveAdminFormState);
         });
