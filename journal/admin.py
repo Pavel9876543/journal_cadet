@@ -1388,6 +1388,45 @@ class AssessmentGroupAdminForm(forms.ModelForm):
             ).order_by('-starts_on')
 
 
+class AssessmentGroupForSubjectAdminForm(AssessmentGroupAdminForm):
+    """Use only names that already exist in the assessment-group table."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'name' not in self.fields:
+            return
+
+        names = list(
+            AssessmentGroup.objects
+            .order_by('name')
+            .values_list('name', flat=True)
+            .distinct()
+        )
+        current_name = (getattr(self.instance, 'name', '') or '').strip()
+        bound_name = (
+            self.data.get(self.add_prefix('name'))
+            if self.is_bound
+            else ''
+        )
+        for value in (current_name, bound_name):
+            if value and value not in names:
+                names.append(value)
+        names.sort(key=str.casefold)
+
+        self.fields['name'] = forms.ChoiceField(
+            label='Название группы произведений',
+            choices=[('', 'Выберите группу произведений')] + [
+                (name, name) for name in names
+            ],
+            required=True,
+            help_text=(
+                'Список формируется только из таблицы «Группы произведений». '
+                'Новое название сначала создайте в этом справочнике.'
+            ),
+        )
+        self.fields['name'].initial = current_name
+
+
 class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
     assessment_type = 'item'
     dependency_fields = ('subject', 'academic_year', 'group', 'element', 'responsible_teacher')
@@ -2274,7 +2313,7 @@ class AssessmentGroupForSubjectInline(
     admin.TabularInline,
 ):
     model = AssessmentGroup
-    form = AssessmentGroupAdminForm
+    form = AssessmentGroupForSubjectAdminForm
     fk_name = 'subject'
     extra = 0
     fields = ('name', 'academic_year', 'sort_order', 'is_active')

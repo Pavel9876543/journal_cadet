@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest import skipUnless
 from unittest.mock import patch
 
+from django import forms
 from django.apps import apps
 from django.conf import settings
 from django.contrib import admin as django_admin
@@ -51,6 +52,7 @@ from journal.account_utils import (
 )
 from journal.admin import (
     AcademicYearAdmin,
+    AssessmentGroupForSubjectAdminForm,
     AssessmentItemAdminForm,
     AssessmentResultAdminForm,
     CourseRegistrationSettingsAdmin,
@@ -7302,6 +7304,30 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             grade='Зачёт',
             priority=10,
         )
+
+    def test_subject_inline_group_name_is_a_strict_database_dropdown(self):
+        another_group = AssessmentGroup.objects.create(
+            name='Камерный состав',
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        form_class = type(
+            'SubjectScopedAssessmentGroupForm',
+            (AssessmentGroupForSubjectAdminForm,),
+            {
+                'parent_subject': self.subject,
+                'parent_academic_year': self.year,
+            },
+        )
+
+        form = form_class(instance=another_group)
+
+        self.assertIsInstance(form.fields['name'].widget, forms.Select)
+        self.assertEqual(
+            {value for value, _label in form.fields['name'].choices if value},
+            {'Старший состав', 'Камерный состав'},
+        )
+        self.assertNotIsInstance(form.fields['name'].widget, forms.TextInput)
 
     def test_group_item_uses_catalog_element_and_snapshots_its_text(self):
         catalog_item = AssessmentElement.objects.create(
