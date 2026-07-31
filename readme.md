@@ -11,40 +11,52 @@ Django-приложение для ведения журнала кадет/уч
 
 ## Файлы окружения
 
-Проект читает переменные окружения из одного env-файла. Уже заданные переменные окружения имеют приоритет над значениями из файла.
+Проект сначала читает общий `.env`, затем файл выбранного окружения. Явные
+переменные процесса имеют наивысший приоритет.
 
-- Если задан `DJANGO_ENV_FILE`, загружается указанный файл.
-- Если `DJANGO_ENV=production` или `DJANGO_ENV=prod`, загружается `.env.prod`.
-- В остальных случаях загружается `.env.dev`.
+- `DJANGO_ENV=development` — `.env.dev`;
+- `DJANGO_ENV=test` — `.env.test`;
+- `DJANGO_ENV=production` — `.env.prod`;
+- `DJANGO_ENV_FILE` позволяет явно указать другой файл.
 
-Для создания env-файла из примера:
+Подготовка файлов из примеров:
 
 ```bash
 ./scripts/ensure-env-files.sh .env.dev
+./scripts/ensure-env-files.sh .env.test
 ./scripts/ensure-env-files.sh .env.prod
 ```
 
-Основные переменные:
+`.env.test` содержит только безопасные тестовые значения и хранится в Git.
+Настоящий `.env.prod` не коммитится: при CD он формируется из GitHub Secrets,
+проверяется и передаётся на сервер с правами `600`.
 
-- `DJANGO_ENV` - окружение запуска: `development` или `production`.
-- `DJANGO_ENV_FILE` - явный путь к env-файлу, если нужен нестандартный файл.
-- `DEBUG` - `1` для разработки, `0` для production.
-- `ALLOW_EMBEDDED_PREVIEW` - разрешить открытие сайта во встроенном iframe; по умолчанию включено только при `DEBUG=1`.
-- `SECRET_KEY` - секретный ключ Django.
-- `ALLOWED_HOSTS` - хосты через запятую.
-- `CSRF_TRUSTED_ORIGINS` - доверенные origins через запятую, например `https://example.com`.
-- `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE` - HTTPS-настройки для production.
-- `SECURE_HSTS_SECONDS`, `SECURE_HSTS_INCLUDE_SUBDOMAINS`, `SECURE_HSTS_PRELOAD` - HSTS-настройки для production.
-- `USE_X_FORWARDED_PROTO=1` - учитывать `X-Forwarded-Proto`, если HTTPS завершается на reverse proxy.
-- `DB_ENGINE` - движок БД, например `django.db.backends.postgresql` или `django.db.backends.sqlite3`.
-- `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` - настройки подключения Django к БД.
-- `DB_CONN_MAX_AGE` - время повторного использования соединения PostgreSQL в production; по умолчанию 60 секунд.
-- `REDIS_URL`, `CACHE_DEFAULT_TIMEOUT`, `CACHE_KEY_PREFIX` - production-кэш Redis. В development и тестах кэш отключён через `DummyCache`.
-- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` - настройки контейнера PostgreSQL.
-- `pas_key_data` или `DATA_TOOLS_PASSWORD` - пароль подтверждения для опасных инструментов данных в админке.
-- `TRUST_X_FORWARDED_FOR=1` - учитывать `X-Forwarded-For` только за доверенным reverse proxy; адрес берётся с правой стороны цепочки с учётом `TRUSTED_PROXY_COUNT`.
-- `WAIT_FOR_DB=1` - ждать доступности PostgreSQL при старте контейнера.
-- `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`, `DJANGO_SUPERUSER_PASSWORD` - данные суперпользователя. Пароль применяется только при первом создании аккаунта и не меняется при последующих запусках.
+Основные production-переменные:
+
+- `SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`;
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`;
+- `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`,
+  `DJANGO_SUPERUSER_PASSWORD`;
+- `APP_PORT` — локальный порт reverse proxy, по умолчанию `8000`;
+- `TRUSTED_PROXY_COUNT` — число доверенных proxy-hop;
+- `DB_CONN_MAX_AGE`, `CACHE_DEFAULT_TIMEOUT`, `CACHE_KEY_PREFIX`;
+- `REDIS_MAXMEMORY`, `REDIS_MAXMEMORY_POLICY`;
+- `WEB_CONCURRENCY`, `WEB_TIMEOUT_KEEP_ALIVE`, `WEB_LOG_LEVEL`,
+  `WEB_ACCESS_LOG`;
+- `DB_WAIT_TIMEOUT`, `DEPLOY_WAIT_TIMEOUT`;
+- `BACKUP_INTERVAL_SECONDS`, `BACKUP_RETENTION_DAYS`;
+- `DATA_TOOLS_PASSWORD` — отдельный пароль сервисных инструментов.
+
+Фиксированные безопасные параметры (`DJANGO_ENV`, HTTPS cookies, HSTS,
+`MIGRATION_MODE=check`, адреса `db` и `redis`, отключение опасных инструментов)
+задаются в `docker-compose.prod.yml`, поэтому не дублируются в `.env.prod`.
+
+Проверка env-файлов:
+
+```bash
+python scripts/validate_env.py --file .env.test --environment test
+python scripts/validate_env.py --file .env.prod --environment production
+```
 
 ## Локальный запуск через Docker
 
@@ -113,35 +125,38 @@ http://127.0.0.1:8000/admin/
 
 ## Production-запуск вручную
 
-Перед запуском настройте `.env.prod`: поменяйте `SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, пароли БД и данные суперпользователя. С placeholder-значением `SECRET_KEY` production-запуск будет остановлен.
-
-Production-контейнер доступен только на `127.0.0.1:8000`. Для внешнего доступа обязателен HTTPS reverse proxy (например, Nginx или Caddy), который проксирует запросы на этот адрес, передаёт `X-Forwarded-Proto` и корректно формирует `X-Forwarded-For`. По умолчанию приложение доверяет одному proxy-hop (`TRUSTED_PROXY_COUNT=1`).
+Создайте `.env.prod` из примера и замените все значения `replace-with-*`:
 
 ```bash
+./scripts/ensure-env-files.sh .env.prod
+nano .env.prod
 ./scripts/run-prod.sh
 ```
 
-Скрипт создаст `.env.prod` из `.env.prod.example`, если файла нет, и выполнит:
+`run-prod.sh`:
+
+1. проверяет `.env.prod` и отклоняет placeholder, слабые или лишние значения;
+2. проверяет итоговую Compose-конфигурацию;
+3. обновляет образы PostgreSQL/Redis, собирает web-образ;
+4. запускает стек и ждёт успешных healthcheck;
+5. выполняет Django system check и проверяет Redis.
+
+Приложение публикуется только на `127.0.0.1:${APP_PORT}:8000`. Перед ним должен
+работать HTTPS reverse proxy (Nginx/Caddy), передающий `Host`,
+`X-Forwarded-Proto` и корректный `X-Forwarded-For`.
+
+Production-статика собирается во время Docker build. Контейнер `web` запускается
+с read-only filesystem, сброшенными Linux capabilities и
+`no-new-privileges`. При старте выполняются только проверка миграций,
+`migrate` и `ensure_superuser`; код и статика на сервере не изменяются.
+
+Полезные команды:
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 180
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml ps
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml logs -f web
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml exec web python manage.py check
 ```
-
-При сборке Docker-образа выполняются проверка `makemigrations` и полный `migrate` на временной SQLite-базе. Это останавливает сборку, если модели расходятся с миграциями или чистая база не разворачивается.
-
-При старте контейнера `docker/entrypoint.sh` автоматически выполняет:
-
-```bash
-python manage.py makemigrations --noinput journal   # development: MIGRATION_MODE=create
-python manage.py makemigrations --check --dry-run   # production: MIGRATION_MODE=check
-python manage.py migrate --noinput
-python manage.py ensure_superuser
-python manage.py collectstatic --noinput --clear
-```
-
-В development новые миграции создаются в примонтированном проекте. В production используется режим `check`: контейнер не создаёт незакоммиченные миграции на сервере и не стартует, пока они не добавлены в репозиторий. Режим `skip` предназначен только для специальных служебных контейнеров.
-
-Статика собирается в контейнерный каталог `/var/lib/cadet-journal/staticfiles`, а не в примонтированный с Windows каталог `/app`. После обновления со старой версии обязательно пересоберите образ через `./scripts/run-local.sh` или командой Compose с `--build`.
 
 ## Тестовое заполнение БД
 
@@ -290,57 +305,155 @@ docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.y
 
 ## Тесты и проверки
 
-В проекте используется один полный набор тестов без отдельных быстрых и медленных подмножеств:
+CI использует PostgreSQL и `.env.test`. Быстрый набор исключает тесты с тегом
+`slow`, а конкурентные сценарии и полное заполнение `seed_data` выполняются
+отдельно и последовательно:
 
 ```bash
-./scripts/test.sh
+./scripts/test-fast.sh -v 2
+./scripts/test-slow.sh -v 2
 ```
 
-Скрипт всегда запускает все тесты, включая конкурентные сценарии и полную проверку `seed_data`. Тестовые настройки используют быстрый хешер паролей, не меняя проверяемую семантику авторизации. По умолчанию набор использует два процесса; значение можно изменить через `TEST_PROCESSES`, а повторное использование тестовой БД отключить через `KEEP_TEST_DB=0`.
-
-Прямой стандартный запуск Django также поддерживается:
+Полный локальный набор:
 
 ```bash
-python manage.py test journal --settings=config.test_settings
+./scripts/test.sh -v 2
 ```
 
-Django system check:
+Проверки перед push:
 
 ```bash
-python manage.py check
-```
-
-Линтинг в CI выполняется через закреплённую версию Ruff из `requirements-dev.txt`:
-
-```bash
-pip install -r requirements-dev.txt
-pip check
+python scripts/validate_env.py --file .env.test --environment test
 ruff check .
+python manage.py makemigrations --check --dry-run
+python manage.py check
+./scripts/test-fast.sh
+./scripts/test-slow.sh
 ```
 
-## Деплой
+## CD через GitHub Actions: пошаговый деплой
 
-Подробные инструкции по Docker/CD находятся в `DEPLOY_DOCKER.md`.
+Production-деплой является вызываемым workflow и не может стартовать напрямую.
+Он запускается только job-ом `deploy-production` после успешного
+`Required CI result` для push в `main`. Pull request и merge queue получают тот
+же CI, но не получают серверные секреты и не меняют production. После merge
+создаётся push в `main`, который и запускает деплой проверенного SHA.
 
-Для ручного деплоя из уже склонированного репозитория на сервере:
+### 1. Подготовьте сервер
+
+Используйте Debian/Ubuntu. Создайте пользователя для деплоя, разрешите ему
+`sudo` без интерактивного пароля либо используйте `root`. Настройте DNS и HTTPS
+reverse proxy на `http://127.0.0.1:8000`. Docker при отсутствии установит
+CD-скрипт, однако для первого запуска лучше заранее проверить:
 
 ```bash
-./scripts/deploy-server.sh
+docker --version
+docker compose version
+git --version
 ```
 
-Скрипт делает `git pull --ff-only` текущей ветки и запускает `./scripts/run-prod.sh`.
-
-Для первичной подготовки сервера:
+Для приватного репозитория создайте **отдельный** ключ доступа сервера к GitHub:
 
 ```bash
-./scripts/bootstrap-server.sh <github_repo_url> [target_dir]
+sudo -u deploy mkdir -p /home/deploy/.ssh
+sudo -u deploy chmod 700 /home/deploy/.ssh
+sudo -u deploy ssh-keygen -t ed25519 -C cadet-journal-repository \
+  -f /home/deploy/.ssh/id_ed25519_github
+sudo -u deploy ssh-keyscan -H github.com \
+  >> /home/deploy/.ssh/known_hosts
+sudo -u deploy chmod 600 /home/deploy/.ssh/known_hosts
 ```
 
-Пример:
+Добавьте содержимое `id_ed25519_github.pub` в GitHub:
+`Settings → Deploy keys → Add deploy key`, оставив доступ только на чтение.
+На сервере добавьте SSH-конфигурацию:
+
+```text
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_ed25519_github
+  IdentitiesOnly yes
+```
+
+После этого проверьте `ssh -T git@github.com` и задайте
+`REPO_CLONE_URL=git@github.com:ORG/REPO.git`. Для публичного репозитория можно
+оставить HTTPS URL и второй ключ не нужен.
+
+### 2. Создайте SSH-ключ GitHub Actions → сервер
+
+На доверенном компьютере:
 
 ```bash
-./scripts/bootstrap-server.sh git@github.com:your-org/cadet_journal.git /opt/cadet_journal
+ssh-keygen -t ed25519 -C cadet-journal-cd -f cadet_journal_cd
+ssh-copy-id -i cadet_journal_cd.pub deploy@SERVER_IP
+ssh-keyscan -H SERVER_IP
 ```
+
+Закрытый ключ целиком сохраните в secret `SSH_PRIVATE_KEY`, а строку
+`ssh-keyscan` — в `SSH_KNOWN_HOSTS`. Это не ключ доступа сервера к GitHub; для
+приватного репозитория нужен отдельный Deploy key из предыдущего шага.
+
+### 3. Создайте GitHub Environment `production`
+
+Откройте `Settings → Environments → New environment → production`. При
+необходимости включите required reviewers, чтобы успешный CI ожидал ручного
+разрешения перед production.
+
+Добавьте Environment secrets:
+
+- `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`;
+- `SSH_PORT` — необязательно, по умолчанию `22`;
+- `DJANGO_SECRET_KEY` — случайная строка не короче 50 символов;
+- `DJANGO_ALLOWED_HOSTS`;
+- `DJANGO_CSRF_TRUSTED_ORIGINS` — origins с `https://`;
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`;
+- `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`,
+  `DJANGO_SUPERUSER_PASSWORD`;
+- `DATA_TOOLS_PASSWORD` — необязательно, но рекомендуется.
+
+Добавьте Environment variables:
+
+- `APP_DIR=/opt/cadet_journal`;
+- `REPO_CLONE_URL=https://github.com/ORG/REPO.git` для публичного репозитория
+  или `git@github.com:ORG/REPO.git` для приватного;
+- необязательно: `APP_PORT`, `TRUSTED_PROXY_COUNT`, `WEB_CONCURRENCY`,
+  `DB_CONN_MAX_AGE`, параметры Redis и резервного копирования. Значения по
+  умолчанию совпадают с `.env.prod.example`.
+
+### 4. Защитите ветку `main`
+
+В `Settings → Rules → Rulesets` (либо Branch protection rule):
+
+1. запретите force push и удаление `main`;
+2. включите обязательный pull request перед merge;
+3. включите required status checks;
+4. выберите проверку `CI / Required CI result`;
+5. при использовании merge queue оставьте событие `merge_group` включённым —
+   оно уже настроено в `.github/workflows/ci.yml`.
+
+В GitHub термин используется `pull request`; это эквивалент merge request.
+
+### 5. Выполните первый и последующие деплои
+
+```bash
+git push origin main
+```
+
+Последовательность:
+
+1. CI запускает Ruff, проверки env/shell, миграции, Django checks, быстрые и
+   медленные тесты;
+2. отдельно собирается production Docker image и поднимается полный
+   PostgreSQL + Redis + web smoke-стек;
+3. job `Required CI result` завершается успешно только при успехе обоих job;
+4. CD подключается к серверу по проверенному SSH host key;
+5. runner формирует и валидирует `.env.prod`, сервер сверяет SHA с текущим
+   `origin/main`, затем собирает и запускает production Compose;
+6. при любой ошибке CI или healthcheck production-деплой считается неуспешным.
+
+Прямого `workflow_dispatch`, tag-deploy и `workflow_run` больше нет: они не могут
+обойти CI. Подробности и диагностика находятся в `DEPLOY_DOCKER.md`.
 
 ## Частые команды Django
 
