@@ -4387,6 +4387,15 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             email='dashboard-admin@example.com',
         )
 
+    def test_dashboard_reference_section_contains_orchestra_parts(self):
+        self.client.force_login(self.superuser)
+
+        response = self.client.get(reverse('admin:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Партии оркестра')
+        self.assertContains(response, reverse('admin:journal_orchestrapart_changelist'))
+
     def test_student_change_card_uses_bounded_query_count(self):
         data = self.create_base_journal()
         self.client.force_login(self.admin_user)
