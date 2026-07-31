@@ -108,35 +108,62 @@ class Command(BaseCommand):
         ):
             PasswordRecoveryContact.objects.create(**contact_data)
 
-        academic_year = self._create_current_academic_year()
-        self._assign_existing_admins_to_academic_year(academic_year)
-        CourseRegistrationSettings.objects.update_or_create(
-            academic_year=academic_year,
-            defaults={
-                'telegram_group_url': 'https://t.me/cadet_journal_demo',
-                'minimum_registration_age': 14,
-            },
+        # Архивный год создаётся первым: пока он единственный, модель считает
+        # его активным и позволяет безопасно сформировать все связанные записи.
+        archived_year = self._create_archived_academic_year()
+        self._assign_existing_admins_to_academic_year(archived_year)
+        CourseRegistrationSettings.objects.create(
+            academic_year=archived_year,
+            telegram_group_url='https://t.me/cadet_journal_archive_demo',
+            minimum_registration_age=14,
+            registration_mode=CourseRegistrationSettings.REGISTRATION_MODE_CLOSED,
         )
+
         instruments = self._create_instruments()
         self._create_orchestra_parts(instruments)
         subjects = self._create_subjects()
-        groups = self._create_groups(academic_year)
-
+        archived_groups = self._create_groups(archived_year)
         teachers = self._create_teachers(subjects)
+        self._create_group_subjects(archived_groups, subjects, teachers)
+        archived_students = self._create_students(
+            archived_groups,
+            instruments,
+            subjects,
+            teachers,
+            cohort='archive',
+        )
+        self._create_grades_and_results(archived_students, archived_year)
+        self._create_assessment_demo_data(
+            archived_students,
+            archived_year,
+            subjects,
+            teachers,
+        )
+
+        # Более новый год автоматически становится единственным активным.
+        academic_year = self._create_current_academic_year()
+        self._assign_existing_admins_to_academic_year(academic_year)
+        CourseRegistrationSettings.objects.create(
+            academic_year=academic_year,
+            telegram_group_url='https://t.me/cadet_journal_demo',
+            minimum_registration_age=14,
+        )
+        self._assign_teachers_to_academic_year(teachers, academic_year)
+        groups = self._create_groups(academic_year)
         self._create_group_subjects(groups, subjects, teachers)
-        self._create_students(groups, instruments, subjects, teachers)
+        students = self._create_students(
+            groups,
+            instruments,
+            subjects,
+            teachers,
+            cohort='active',
+        )
         self._create_course_applications()
         self._create_course_group_assignments(academic_year, subjects, teachers)
-        self._ensure_temporary_credentials_for_all_users()
-
-        students = list(
-            Student.objects
-            .filter(is_active=True)
-            .select_related('group', 'instrument')
-            .order_by('id')
-        )
         self._create_grades_and_results(students, academic_year)
         self._create_assessment_demo_data(students, academic_year, subjects, teachers)
+
+        self._ensure_temporary_credentials_for_all_users()
         self._validate_demo_data()
 
         credentials_path = self._write_credentials(options['credentials_output'])
@@ -340,6 +367,14 @@ class Command(BaseCommand):
         if self.STUDENT_GROUP_NAME in group_names:
             return 'student'
         return 'user'
+
+    def _create_archived_academic_year(self) -> AcademicYear:
+        return AcademicYear.objects.create(
+            name='2024/2025',
+            starts_on=date(2024, 9, 1),
+            ends_on=date(2025, 8, 31),
+            is_active=True,
+        )
 
     def _create_current_academic_year(self) -> AcademicYear:
         return AcademicYear.objects.create(
@@ -576,6 +611,18 @@ class Command(BaseCommand):
 
         return teachers
 
+    def _assign_teachers_to_academic_year(
+        self,
+        teachers: dict[str, Teacher],
+        academic_year: AcademicYear,
+    ) -> None:
+        for teacher in teachers.values():
+            TeacherEnrollment.objects.create(
+                teacher=teacher,
+                academic_year=academic_year,
+                is_active=True,
+            )
+
     def _create_group_subjects(
         self,
         groups: dict[str, StudyGroup],
@@ -639,6 +686,8 @@ class Command(BaseCommand):
         instruments: dict[str, Instrument],
         subjects: dict[str, Subject],
         teachers: dict[str, Teacher],
+        *,
+        cohort: str,
     ) -> list[Student]:
         student_specs = [
             ('Лев Андреев', Student.GENDER_MALE, 'Подготовительная группа', 'Фортепиано', 'Дмитрий Ковалёв'),
@@ -676,14 +725,20 @@ class Command(BaseCommand):
             ('Лидия Кузьмина', Student.GENDER_FEMALE, 'Старший ансамбль', 'Хоровая партия', 'Ольга Захарова'),
             ('Степан Захаров', Student.GENDER_MALE, 'Старший ансамбль', 'Балалайка', 'Сергей Аксёнов'),
         ]
+        if cohort not in {'active', 'archive'}:
+            raise CommandError(f'Неизвестный набор учеников: {cohort}.')
+
+        # В исходном наборе по шесть учеников на группу. Для каждого учебного
+        # года берём отдельную половину, поэтому данные компактны и не повторяются.
+        cohort_start = 0 if cohort == 'active' else 3
         students_per_group: dict[str, int] = {}
         reduced_student_specs = []
         for student_spec in student_specs:
             group_name = student_spec[2]
-            if students_per_group.get(group_name, 0) >= 3:
-                continue
-            students_per_group[group_name] = students_per_group.get(group_name, 0) + 1
-            reduced_student_specs.append(student_spec)
+            group_position = students_per_group.get(group_name, 0)
+            students_per_group[group_name] = group_position + 1
+            if cohort_start <= group_position < cohort_start + 3:
+                reduced_student_specs.append(student_spec)
         student_specs = reduced_student_specs
 
         students: list[Student] = []
@@ -714,7 +769,9 @@ class Command(BaseCommand):
             student_specs,
             start=1,
         ):
-            user_email = f'student{index:02d}@cadet-journal.local'
+            email_prefix = 'student' if cohort == 'active' else 'archive-student'
+            contact_index = index if cohort == 'active' else index + 50
+            user_email = f'{email_prefix}{index:02d}@cadet-journal.local'
             user, password = self._create_user_for_full_name(full_name, email=user_email)
             self._assign_user_role(user, self.STUDENT_GROUP_NAME)
 
@@ -726,13 +783,13 @@ class Command(BaseCommand):
                 group=groups[group_name],
                 instrument=instruments[instrument_name],
                 music_education=education_values[(index - 1) % len(education_values)],
-                student_phone=f'+7 (901) 200-00-{index:02d}',
+                student_phone=f'+7 (901) 200-00-{contact_index:02d}',
                 parent_contacts=(
-                    f'Отец ученика {index} - +7 (902) 300-00-{index:02d}\n'
-                    f'Мама ученика {index} — +7 (903) 400-00-{index:02d}'
+                    f'Отец ученика {contact_index} - +7 (902) 300-00-{contact_index:02d}\n'
+                    f'Мама ученика {contact_index} — +7 (903) 400-00-{contact_index:02d}'
                 ),
                 comments=(
-                    f'Демо-карточка с полными данными. Инструмент: {instrument_name}. '
+                    f'Демо-карточка набора {cohort}. Инструмент: {instrument_name}. '
                     f'Предпочтительное время занятий: {"утро" if index % 2 else "вечер"}. '
                     'Можно использовать для проверки длинных комментариев, переносов строк '
                     'и отображения контактов в админке.'
@@ -849,6 +906,10 @@ class Command(BaseCommand):
         results_to_create: list[SubjectResult] = []
 
         for student in students:
+            enrollment = StudentEnrollment.objects.get(
+                student=student,
+                academic_year=academic_year,
+            )
             group_assignments = list(
                 GroupSubject.objects
                 .select_related('subject', 'teacher')
@@ -887,8 +948,13 @@ class Command(BaseCommand):
                             subject=subject,
                             teacher=teacher,
                             academic_year=academic_year,
+                            enrollment=enrollment,
                             date=grade_date,
                             value=grade_value,
+                            student_name_snapshot=enrollment.full_name,
+                            group_name_snapshot=enrollment.group.name if enrollment.group else '',
+                            subject_name_snapshot=subject.name,
+                            teacher_name_snapshot=teacher.full_name,
                             comment=(
                                 f'Демо-оценка: {subject.name.lower()}, '
                                 f'занятие {index + 1}, преподаватель {teacher.full_name}.'
@@ -908,8 +974,13 @@ class Command(BaseCommand):
                         student=student,
                         subject=subject,
                         academic_year=academic_year,
+                        enrollment=enrollment,
                         exam_grade=exam_value,
                         final_grade=final_value,
+                        student_name_snapshot=enrollment.full_name,
+                        group_name_snapshot=enrollment.group.name if enrollment.group else '',
+                        subject_name_snapshot=subject.name,
+                        final_grade_type_snapshot=subject.final_grade_type,
                     )
                 )
 
@@ -1140,45 +1211,54 @@ class Command(BaseCommand):
 
     def _validate_demo_data(self) -> None:
         errors: list[str] = []
-        active_year = AcademicYear.objects.filter(is_active=True).first()
+        years = list(AcademicYear.objects.order_by('starts_on'))
+        active_year = next((year for year in years if year.is_active), None)
 
+        if len(years) != 2:
+            errors.append('Должно быть создано ровно два учебных года.')
         if AcademicYear.objects.filter(is_active=True).count() != 1:
             errors.append('Должен быть ровно один активный учебный год.')
-
         if active_year is None:
             errors.append('Не найден активный учебный год.')
-        else:
-            registration_settings = CourseRegistrationSettings.objects.filter(
-                academic_year=active_year,
-            ).first()
-            if registration_settings is None:
-                errors.append('Не найдены настройки регистрации.')
+        elif active_year.name != '2025/2026':
+            errors.append('Активным должен быть учебный год 2025/2026.')
+        if not AcademicYear.objects.filter(name='2024/2025', is_active=False).exists():
+            errors.append('Не найден архивный учебный год 2024/2025.')
 
-            if StudyGroup.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть группы вне активного учебного года.')
-
-            if CourseApplication.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть заявки вне активного учебного года.')
-
-            if Grade.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть оценки вне активного учебного года.')
-
-            if Grade.objects.filter(
-                Q(date__lt=active_year.starts_on) | Q(date__gt=active_year.ends_on),
+        for academic_year in years:
+            if not CourseRegistrationSettings.objects.filter(
+                academic_year=academic_year,
             ).exists():
-                errors.append('В тестовых данных есть оценки вне дат активного учебного года.')
+                errors.append(f'Нет настроек регистрации для {academic_year}.')
+            if not StudyGroup.objects.filter(academic_year=academic_year).exists():
+                errors.append(f'Нет учебных групп для {academic_year}.')
+            if not Grade.objects.filter(academic_year=academic_year).exists():
+                errors.append(f'Нет оценок для {academic_year}.')
+            if not SubjectResult.objects.filter(academic_year=academic_year).exists():
+                errors.append(f'Нет итогов для {academic_year}.')
+            if not AssessmentGroup.objects.filter(academic_year=academic_year).exists():
+                errors.append(f'Нет групп произведений для {academic_year}.')
+            if not AssessmentItem.objects.filter(academic_year=academic_year).exists():
+                errors.append(f'Нет произведений для {academic_year}.')
+            if not StudentAssessmentGroup.objects.filter(academic_year=academic_year).exists():
+                errors.append(f'Нет назначений произведений для {academic_year}.')
+            if Grade.objects.filter(academic_year=academic_year).filter(
+                Q(date__lt=academic_year.starts_on) | Q(date__gt=academic_year.ends_on),
+            ).exists():
+                errors.append(f'Есть оценки вне дат учебного года {academic_year}.')
+            oversized_group = (
+                StudentEnrollment.objects
+                .filter(academic_year=academic_year, is_active=True, group__isnull=False)
+                .values('group_id')
+                .annotate(total=Count('id'))
+                .filter(total__gt=3)
+                .exists()
+            )
+            if oversized_group:
+                errors.append(f'В {academic_year} есть группа более чем с тремя учениками.')
 
-            if SubjectResult.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть итоги вне активного учебного года.')
-
-            if AssessmentGroup.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть группы произведений вне активного учебного года.')
-
-            if AssessmentItem.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть произведения вне активного учебного года.')
-
-            if StudentAssessmentGroup.objects.exclude(academic_year=active_year).exists():
-                errors.append('В тестовых данных есть назначения произведений вне активного учебного года.')
+        if active_year and CourseApplication.objects.exclude(academic_year=active_year).exists():
+            errors.append('Демонстрационные заявки должны относиться к активному учебному году.')
 
         if Grade.objects.filter(subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS).exists():
             errors.append('Для предмета со сдачей произведений созданы обычные оценки.')
@@ -1254,7 +1334,7 @@ class Command(BaseCommand):
         for grade_id, student_id, group_id, subject_id, teacher_id in Grade.objects.values_list(
             'pk',
             'student_id',
-            'student__group_id',
+            'enrollment__group_id',
             'subject_id',
             'teacher_id',
         ):
@@ -1278,7 +1358,7 @@ class Command(BaseCommand):
         for result_id, student_id, group_id, subject_id, exam_grade, final_grade in SubjectResult.objects.values_list(
             'pk',
             'student_id',
-            'student__group_id',
+            'enrollment__group_id',
             'subject_id',
             'exam_grade',
             'final_grade',

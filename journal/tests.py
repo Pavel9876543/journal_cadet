@@ -6938,14 +6938,21 @@ class SeedDataCommandTests(TestCase):
     def test_seed_data_creates_new_architecture_records(self):
         self.assertTrue(CourseRegistrationSettings.objects.filter(academic_year__is_active=True).exists())
         self.assertEqual(PasswordRecoveryContact.objects.count(), 2)
-        self.assertTrue(AcademicYear.objects.exists())
-        self.assertEqual(AcademicYear.objects.count(), 1)
+        self.assertEqual(AcademicYear.objects.count(), 2)
         self.assertTrue(
             AcademicYear.objects.filter(
                 name='2025/2026',
                 starts_on=date(2025, 9, 1),
                 ends_on=date(2026, 8, 31),
                 is_active=True,
+            ).exists(),
+        )
+        self.assertTrue(
+            AcademicYear.objects.filter(
+                name='2024/2025',
+                starts_on=date(2024, 9, 1),
+                ends_on=date(2025, 8, 31),
+                is_active=False,
             ).exists(),
         )
         self.assertTrue(Instrument.objects.exists())
@@ -6981,6 +6988,33 @@ class SeedDataCommandTests(TestCase):
                     distinct=True,
                 ),
             ).filter(assessment_group_count__gte=2).exists(),
+        )
+
+    def test_seed_data_uses_distinct_compact_cohorts_for_two_years(self):
+        archived_year = AcademicYear.objects.get(name='2024/2025')
+        active_year = AcademicYear.objects.get(name='2025/2026')
+        archived_names = set(
+            StudentEnrollment.objects.filter(academic_year=archived_year).values_list(
+                'full_name', flat=True,
+            )
+        )
+        active_names = set(
+            StudentEnrollment.objects.filter(academic_year=active_year).values_list(
+                'full_name', flat=True,
+            )
+        )
+
+        self.assertTrue(archived_names)
+        self.assertTrue(active_names)
+        self.assertTrue(archived_names.isdisjoint(active_names))
+        self.assertEqual(len(archived_names), 15)
+        self.assertEqual(len(active_names), 15)
+        self.assertEqual(
+            TeacherEnrollment.objects.values('teacher_id')
+            .annotate(years=Count('academic_year_id'))
+            .filter(years=2)
+            .count(),
+            Teacher.objects.count(),
         )
 
     def test_seed_data_creates_course_applications_with_instruments(self):
@@ -7068,16 +7102,29 @@ class SeedDataCommandTests(TestCase):
 
     def test_seed_data_has_no_assignment_or_grade_contradictions(self):
         active_year = AcademicYear.objects.get(is_active=True)
+        years = list(AcademicYear.objects.order_by('starts_on'))
 
-        self.assertFalse(StudyGroup.objects.exclude(academic_year=active_year).exists())
+        self.assertEqual(len(years), 2)
         self.assertFalse(CourseApplication.objects.exclude(academic_year=active_year).exists())
-        self.assertFalse(Grade.objects.exclude(academic_year=active_year).exists())
-        self.assertFalse(SubjectResult.objects.exclude(academic_year=active_year).exists())
-        self.assertFalse(
-            Grade.objects.filter(
-                Q(date__lt=active_year.starts_on) | Q(date__gt=active_year.ends_on),
-            ).exists(),
-        )
+        for academic_year in years:
+            with self.subTest(academic_year=academic_year.name):
+                self.assertTrue(StudyGroup.objects.filter(academic_year=academic_year).exists())
+                self.assertTrue(Grade.objects.filter(academic_year=academic_year).exists())
+                self.assertTrue(SubjectResult.objects.filter(academic_year=academic_year).exists())
+                self.assertFalse(
+                    Grade.objects.filter(academic_year=academic_year).filter(
+                        Q(date__lt=academic_year.starts_on)
+                        | Q(date__gt=academic_year.ends_on),
+                    ).exists(),
+                )
+                self.assertFalse(
+                    StudentEnrollment.objects
+                    .filter(academic_year=academic_year, is_active=True, group__isnull=False)
+                    .values('group_id')
+                    .annotate(total=Count('id'))
+                    .filter(total__gt=3)
+                    .exists(),
+                )
 
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
@@ -7112,7 +7159,7 @@ class SeedDataCommandTests(TestCase):
             for grade_id, student_id, group_id, subject_id, teacher_id in Grade.objects.values_list(
                 'pk',
                 'student_id',
-                'student__group_id',
+                'enrollment__group_id',
                 'subject_id',
                 'teacher_id',
             )
@@ -7138,7 +7185,7 @@ class SeedDataCommandTests(TestCase):
             for result_id, student_id, group_id, subject_id in SubjectResult.objects.values_list(
                 'pk',
                 'student_id',
-                'student__group_id',
+                'enrollment__group_id',
                 'subject_id',
             )
             if (group_id, subject_id) not in group_result_keys and (student_id, subject_id) not in individual_result_keys
@@ -7158,21 +7205,25 @@ class SeedDataCommandTests(TestCase):
     def test_seed_data_populates_compact_demo_profiles(self):
         self.assertGreaterEqual(Instrument.objects.count(), 14)
         self.assertGreaterEqual(Subject.objects.count(), 21)
-        self.assertGreaterEqual(StudyGroup.objects.count(), 7)
+        self.assertGreaterEqual(StudyGroup.objects.count(), 13)
         self.assertGreaterEqual(Teacher.objects.count(), 9)
-        self.assertGreaterEqual(Student.objects.count(), 15)
-        self.assertLessEqual(Student.objects.count(), 20)
-        self.assertGreaterEqual(GroupSubject.objects.count(), 34)
-        self.assertGreaterEqual(StudentSubject.objects.count(), 30)
-        self.assertLessEqual(StudentSubject.objects.count(), 45)
-        self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 30)
+        self.assertGreaterEqual(Student.objects.count(), 30)
+        self.assertLessEqual(Student.objects.count(), 35)
+        self.assertGreaterEqual(GroupSubject.objects.count(), 60)
+        self.assertGreaterEqual(StudentSubject.objects.count(), 60)
+        self.assertLessEqual(StudentSubject.objects.count(), 75)
+        self.assertGreaterEqual(StudentSubject.objects.filter(subject__is_specialty=True).count(), 60)
         self.assertFalse(GroupSubject.objects.filter(subject__is_specialty=True).exists())
         self.assertFalse(StudentSubject.objects.filter(subject__is_specialty=False).exists())
         expected_grade_count = 0
-        for student in Student.objects.select_related('group'):
+        enrollments = StudentEnrollment.objects.filter(
+            is_active=True,
+            group__isnull=False,
+        ).select_related('student', 'group', 'academic_year')
+        for enrollment in enrollments:
             subject_ids = set(
                 GroupSubject.objects.filter(
-                    group=student.group,
+                    group=enrollment.group,
                     is_active=True,
                 ).exclude(
                     subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
@@ -7180,7 +7231,8 @@ class SeedDataCommandTests(TestCase):
             )
             subject_ids.update(
                 StudentSubject.objects.filter(
-                    student=student,
+                    student=enrollment.student,
+                    academic_year=enrollment.academic_year,
                     is_active=True,
                 ).exclude(
                     subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
@@ -7201,13 +7253,18 @@ class SeedDataCommandTests(TestCase):
             .filter(grades_count=0)
             .exists(),
         )
-        self.assertFalse(Grade.objects.exclude(academic_year__name='2025/2026').exists())
-        self.assertFalse(CourseApplication.objects.exclude(academic_year__name='2025/2026').exists())
-        self.assertFalse(
-            Grade.objects.filter(
-                Q(date__lt=date(2025, 9, 1)) | Q(date__gt=date(2026, 8, 31)),
-            ).exists(),
+        self.assertEqual(
+            set(Grade.objects.values_list('academic_year__name', flat=True)),
+            {'2024/2025', '2025/2026'},
         )
+        self.assertFalse(CourseApplication.objects.exclude(academic_year__name='2025/2026').exists())
+        for academic_year in AcademicYear.objects.all():
+            self.assertFalse(
+                Grade.objects.filter(academic_year=academic_year).filter(
+                    Q(date__lt=academic_year.starts_on)
+                    | Q(date__gt=academic_year.ends_on),
+                ).exists(),
+            )
         self.assertEqual(CourseApplication.objects.count(), 3)
 
         for model in apps.get_app_config('journal').get_models():
