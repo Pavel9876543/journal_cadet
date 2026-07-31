@@ -60,6 +60,8 @@ from journal.admin import (
     GradeAdmin,
     GradeAdminForm,
     GroupSubjectAdminForm,
+    GroupSubjectForSubjectAdminForm,
+    GroupSubjectForSubjectInline,
     JournalAdminDescriptionMixin,
     StudentAdmin,
     StudentAdminForm,
@@ -4748,6 +4750,26 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(individual_response, 'Индивидуальный предмет')
         self.assertContains(individual_response, 'Индивидуальные ученики по этому предмету')
         self.assertNotContains(individual_response, 'Группы, где есть этот предмет')
+
+    def test_subject_group_inline_exposes_full_related_group_controls(self):
+        year = self.create_academic_year()
+        group = self.create_group(name='Связанная группа', academic_year=year)
+        form = GroupSubjectForSubjectAdminForm()
+        group_field = form.fields['group']
+        widget = group_field.widget
+
+        self.assertEqual(list(group_field.queryset), [group])
+        self.assertEqual(widget.__class__.__name__, 'RelatedFieldWidgetWrapper')
+        self.assertTrue(widget.can_add_related)
+        self.assertTrue(widget.can_change_related)
+        self.assertTrue(widget.can_delete_related)
+        self.assertTrue(widget.can_view_related)
+        self.assertIn('удаляется флажком', group_field.help_text)
+
+        inline = GroupSubjectForSubjectInline(Subject, django_admin.site)
+        self.assertTrue(inline.can_delete)
+        self.assertTrue(inline.show_change_link)
+        self.assertEqual(inline.form, GroupSubjectForSubjectAdminForm)
 
     def test_subject_admin_keeps_tabs_with_existing_related_data_visible(self):
         year = self.create_academic_year()

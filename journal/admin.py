@@ -1153,6 +1153,33 @@ class GroupSubjectAdminForm(forms.ModelForm):
         return cleaned_data
 
 
+class GroupSubjectForSubjectAdminForm(GroupSubjectAdminForm):
+    """Inline form with complete controls for the related study group."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        group_field = self.fields.get('group')
+        if group_field is None:
+            return
+
+        relation = GroupSubject._meta.get_field('group').remote_field
+        if not isinstance(group_field.widget, RelatedFieldWidgetWrapper):
+            group_field.widget = RelatedFieldWidgetWrapper(
+                group_field.widget,
+                relation,
+                admin.site,
+                can_add_related=True,
+                can_change_related=True,
+                can_delete_related=True,
+                can_view_related=True,
+            )
+        group_field.help_text = (
+            'Связь предмета с группой удаляется флажком «Удалить» в строке. '
+            'Кнопки рядом со списком позволяют отдельно создать, открыть, '
+            'изменить или удалить саму группу.'
+        )
+
+
 class StudentSubjectAdminForm(forms.ModelForm):
     class Meta:
         model = StudentSubject
@@ -1996,7 +2023,7 @@ class GroupSubjectForTeacherInline(SelectedAcademicYearGroupSubjectInlineMixin, 
 
 class GroupSubjectForSubjectInline(SelectedAcademicYearGroupSubjectInlineMixin, ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = GroupSubject
-    form = GroupSubjectAdminForm
+    form = GroupSubjectForSubjectAdminForm
     formset = GroupSubjectInlineFormSet
     extra = 0
     fields = ('group', 'teacher', 'sort_order', 'is_active')
@@ -2004,6 +2031,7 @@ class GroupSubjectForSubjectInline(SelectedAcademicYearGroupSubjectInlineMixin, 
     classes = ('collapse',)
     verbose_name = 'Групповой предмет'
     verbose_name_plural = 'Группы, где есть этот предмет'
+    can_delete = True
 
 
 class StudentSubjectInline(
