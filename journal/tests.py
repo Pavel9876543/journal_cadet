@@ -4245,6 +4245,8 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             'templates/admin/base_site.html'
         ).read_text(encoding='utf-8')
         self.assertIn('journal/responsive_overflow.css', admin_base_template)
+        self.assertIn('journal/responsive_tables.js', admin_base_template)
+        self.assertIn('journal/responsive_tables.js', journal_template)
 
         tablet_css = Path('journal/static/journal/layout-tablet.css').read_text(encoding='utf-8')
         self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)
@@ -4260,6 +4262,15 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('max-height: 72dvh !important;', overflow_css)
         self.assertNotIn('font-size:', overflow_css)
         self.assertNotIn('padding:', overflow_css)
+
+        responsive_tables = Path(
+            'journal/static/journal/responsive_tables.js'
+        ).read_text(encoding='utf-8')
+        self.assertIn("querySelectorAll?.('table')", responsive_tables)
+        self.assertIn("overflow-y", overflow_css)
+        self.assertIn('MutationObserver', responsive_tables)
+        self.assertIn("document.addEventListener('formset:added'", responsive_tables)
+        self.assertIn("role', 'region'", responsive_tables)
 
     def test_all_project_admins_keep_the_current_form_or_list_after_save(self):
         for model, model_admin in django_admin.site._registry.items():

@@ -5,3 +5,8 @@
     {{ block.super }}
     <link rel="stylesheet" href="{% static 'journal/responsive_overflow.css' %}" data-layout-styles="overflow">
 {% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <script src="{% static 'journal/responsive_tables.js' %}" defer></script>
+{% endblock %}

@@ -1,9 +1,6 @@
 /*
- * Прокрутка таблиц на телефонах и планшетах.
- *
- * Файл намеренно не меняет размеры шрифтов, полей, кнопок, ячеек и колонок.
- * Он подключается после основных стилей, чтобы overflow не отменялся более
- * поздними правилами темы или административной панели.
+ * Двухосевая прокрутка всех таблиц на телефонах и планшетах.
+ * Размеры текста и элементов управления задаются профильными layout-файлами.
  */
 @media (max-width: 767.98px),
        (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
@@ -16,22 +13,31 @@
     body.change-list #changelist .results,
     body.change-form .inline-group,
     body.change-form .inline-group .tabular {
+        box-sizing: border-box;
         width: 100%;
         max-width: 100%;
         max-height: 70vh !important;
-        max-height: min(70vh, calc(100dvh - 140px)) !important;
+        max-height: min(70dvh, calc(100dvh - 140px)) !important;
         overflow-x: auto !important;
         overflow-y: auto !important;
         overscroll-behavior: contain;
+        scrollbar-gutter: stable both-edges;
         touch-action: pan-x pan-y;
         -webkit-overflow-scrolling: touch;
     }
 
-    .table-scroll table,
-    .results table,
+    .journal-responsive-table:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: 2px;
+    }
+
+    .table-scroll > table,
+    .journal-responsive-table > table,
+    .results > table,
+    .table-responsive > table,
     .inline-group table {
         width: max-content;
-        min-width: 680px;
+        min-width: 100%;
     }
 
     button,
@@ -53,14 +59,26 @@
     body.change-list #changelist .results,
     body.change-form .inline-group,
     body.change-form .inline-group .tabular {
+        box-sizing: border-box;
+        width: 100%;
         max-width: 100%;
         max-height: 70vh !important;
-        max-height: min(70vh, calc(100dvh - 160px)) !important;
+        max-height: min(70dvh, calc(100dvh - 160px)) !important;
         overflow-x: auto !important;
         overflow-y: auto !important;
         overscroll-behavior: contain;
+        scrollbar-gutter: stable both-edges;
         touch-action: pan-x pan-y;
         -webkit-overflow-scrolling: touch;
+    }
+
+    .table-scroll > table,
+    .journal-responsive-table > table,
+    .results > table,
+    .table-responsive > table,
+    .inline-group table {
+        width: max-content;
+        min-width: 100%;
     }
 
     button,
