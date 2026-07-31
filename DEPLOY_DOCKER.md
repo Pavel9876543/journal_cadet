@@ -7,6 +7,8 @@
 - Production-образ собирается на сервере из текущего коммита; внешний container registry не требуется.
 - Суперпользователь создаётся или проверяется автоматически при старте контейнера.
 - Контейнеры автоматически поднимаются после перезагрузки через `restart: unless-stopped`.
+- В production запускается отдельный Redis-контейнер для кэша; development и тесты не используют Redis-кэш.
+- Для частых запросов добавлены составные индексы, а соединения PostgreSQL повторно используются ограниченное время.
 - Опасные инструменты создания тестовых данных и очистки базы в production принудительно отключены.
 
 ## Поведение файлов окружения
@@ -144,6 +146,26 @@ Workflow:
 
 Перед ручным запуском обязательно замените placeholder-значения в `.env.prod`; с тестовым `SECRET_KEY` Django намеренно не стартует.
 
-## 7. Резервное копирование
+## 7. Redis и соединения с PostgreSQL
+
+Production Compose запускает Redis только как быстрый непостоянный кэш. Для него задан лимит памяти 256 МБ и политика `allkeys-lru`: при заполнении памяти удаляются давно неиспользуемые ключи. Кэш не записывается на диск, поэтому Redis не является источником данных и не требует резервного копирования.
+
+Основные переменные `.env.prod`:
+
+- `REDIS_URL=redis://redis:6379/1`;
+- `CACHE_DEFAULT_TIMEOUT=300`;
+- `CACHE_KEY_PREFIX=cadet-journal`;
+- `DB_CONN_MAX_AGE=60`.
+
+Проверка состояния Redis:
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml ps redis
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml exec redis redis-cli ping
+```
+
+Ожидаемый ответ второй команды — `PONG`. Если Redis временно недоступен, сначала восстановите контейнер и только затем перезапускайте `web`, потому что production-сервис ожидает успешную healthcheck-проверку Redis.
+
+## 8. Резервное копирование
 
 Production Compose запускает отдельный сервис `backup`, который сохраняет архивы PostgreSQL в volume `pg_backups`. Инструкция по проверке и восстановлению: `docs/backup-restore.md`.

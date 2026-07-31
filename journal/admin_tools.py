@@ -91,6 +91,9 @@ def _admin_guide_view_sync(request: HttpRequest) -> HttpResponse:
         'teachers_url': reverse('admin:journal_teacher_changelist'),
         'subjects_url': reverse('admin:journal_subject_changelist'),
         'orchestra_parts_url': reverse('admin:journal_orchestrapart_changelist'),
+        'assessment_elements_url': reverse('admin:journal_assessmentelement_changelist'),
+        'assessment_groups_url': reverse('admin:journal_assessmentgroup_changelist'),
+        'assessment_items_url': reverse('admin:journal_assessmentitem_changelist'),
         'grades_url': reverse('admin:journal_grade_changelist'),
         'results_url': reverse('admin:journal_subjectresult_changelist'),
         'applications_url': reverse('admin:journal_courseapplication_changelist'),
@@ -98,6 +101,7 @@ def _admin_guide_view_sync(request: HttpRequest) -> HttpResponse:
         'academic_years_url': reverse('admin:journal_academicyear_changelist'),
         'settings_url': reverse('admin:journal_courseregistrationsettings_changelist'),
         'password_contacts_url': reverse('admin:journal_passwordrecoverycontact_changelist'),
+        'export_all_data_url': reverse('admin_export_all_data_excel'),
         'data_tools_url': reverse('admin_data_tools'),
     }
     return render(request, 'admin/journal/admin_guide.html', context)

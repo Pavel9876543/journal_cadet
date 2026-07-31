@@ -4672,8 +4672,13 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(admin_response.status_code, 200)
         self.assertContains(admin_response, 'Как работать с журналом')
         self.assertContains(admin_response, reverse('admin:journal_academicyear_changelist'))
-        self.assertContains(admin_response, 'Архивный год можно открыть в фильтре журнала')
+        self.assertContains(admin_response, 'Архивный год предназначен для просмотра')
         self.assertContains(admin_response, reverse('admin:journal_student_changelist'))
+        self.assertContains(admin_response, reverse('admin:journal_assessmentelement_changelist'))
+        self.assertContains(admin_response, reverse('admin:journal_assessmentgroup_changelist'))
+        self.assertContains(admin_response, reverse('admin_export_all_data_excel'))
+        self.assertContains(admin_response, 'Любую таблицу можно прокручивать пальцем')
+        self.assertContains(admin_response, 'архивный 2024/2025 и активный 2025/2026')
         self.assertContains(admin_response, reverse('admin_data_tools'))
 
     def test_admin_changelist_add_button_is_ordered_before_search(self):
