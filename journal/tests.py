@@ -6148,16 +6148,35 @@ class DockerMigrationBootstrapTests(SimpleTestCase):
             dockerfile.index('python manage.py migrate --noinput'),
         )
 
-    def test_environment_examples_use_safe_migration_modes(self):
-        development = (self.project_root / '.env.dev.example').read_text(encoding='utf-8')
-        production = (self.project_root / '.env.prod.example').read_text(encoding='utf-8')
-        development_compose = (self.project_root / 'docker-compose.dev.yml').read_text(encoding='utf-8')
+    def test_docker_build_collects_static_and_runtime_is_read_only(self):
+        dockerfile = (self.project_root / 'Dockerfile').read_text(encoding='utf-8')
+        entrypoint = (self.project_root / 'docker' / 'entrypoint.sh').read_text(encoding='utf-8')
+        production_compose = (
+            self.project_root / 'docker-compose.prod.yml'
+        ).read_text(encoding='utf-8')
 
-        self.assertIn('MIGRATION_MODE=create', development)
-        self.assertIn('MIGRATION_MODE=check', production)
+        self.assertIn('python manage.py collectstatic --noinput --clear', dockerfile)
+        self.assertNotIn('python manage.py collectstatic', entrypoint)
+        self.assertIn('read_only: true', production_compose)
+        self.assertIn('no-new-privileges:true', production_compose)
+        self.assertIn('cap_drop:', production_compose)
+
+    def test_compose_uses_safe_migration_modes(self):
+        development_compose = (
+            self.project_root / 'docker-compose.dev.yml'
+        ).read_text(encoding='utf-8')
+        production_compose = (
+            self.project_root / 'docker-compose.prod.yml'
+        ).read_text(encoding='utf-8')
+
         self.assertIn('MIGRATION_MODE: create', development_compose)
+        self.assertIn('MIGRATION_MODE: check', production_compose)
+        production_environment = (
+            self.project_root / '.env.prod.example'
+        ).read_text(encoding='utf-8')
+        self.assertNotIn('MIGRATION_MODE=', production_environment)
 
-    def test_environment_examples_use_configured_databases(self):
+    def test_environment_examples_do_not_duplicate_compose_database_settings(self):
         local_environment = (
             self.project_root / '.env.example'
         ).read_text(encoding='utf-8')
@@ -6167,22 +6186,103 @@ class DockerMigrationBootstrapTests(SimpleTestCase):
         )
         self.assertIn('DB_NAME=journal_db', local_environment)
 
-        postgres_examples = (
+        for env_path in (
             self.project_root / '.env.dev.example',
             self.project_root / '.env.prod.example',
-        )
-
-        for env_path in postgres_examples:
+        ):
             with self.subTest(env_path=env_path.name):
                 environment = env_path.read_text(encoding='utf-8')
-                self.assertIn(
-                    'DB_ENGINE=django.db.backends.postgresql',
-                    environment,
-                )
-                self.assertIn('DB_NAME=journal_db', environment)
-                self.assertIn('DB_USER=journal_user', environment)
                 self.assertIn('POSTGRES_DB=journal_db', environment)
                 self.assertIn('POSTGRES_USER=journal_user', environment)
+                self.assertNotIn('DB_ENGINE=', environment)
+                self.assertNotIn('DB_NAME=', environment)
+                self.assertNotIn('DB_USER=', environment)
+                self.assertNotIn('DB_PASSWORD=', environment)
+
+        test_environment = (self.project_root / '.env.test').read_text(encoding='utf-8')
+        self.assertIn('DJANGO_ENV=test', test_environment)
+        self.assertIn('DB_ENGINE=django.db.backends.postgresql', test_environment)
+        self.assertEqual(
+            test_environment,
+            (self.project_root / '.env.test.example').read_text(encoding='utf-8'),
+        )
+
+
+class DeploymentPipelineTests(SimpleTestCase):
+    project_root = Path(__file__).resolve().parents[1]
+
+    def test_ci_has_real_fast_and_slow_test_scripts(self):
+        ci = (self.project_root / '.github' / 'workflows' / 'ci.yml').read_text(
+            encoding='utf-8'
+        )
+
+        self.assertTrue((self.project_root / 'scripts' / 'test-fast.sh').exists())
+        self.assertTrue((self.project_root / 'scripts' / 'test-slow.sh').exists())
+        self.assertIn('./scripts/test-fast.sh -v 2', ci)
+        self.assertIn('./scripts/test-slow.sh -v 2', ci)
+        fast_script = (self.project_root / 'scripts' / 'test-fast.sh').read_text(
+            encoding='utf-8'
+        )
+        slow_script = (self.project_root / 'scripts' / 'test-slow.sh').read_text(
+            encoding='utf-8'
+        )
+        self.assertIn('--exclude-tag=slow', fast_script)
+        self.assertIn('--tag=slow', slow_script)
+
+    def test_deploy_is_called_only_after_required_ci_job(self):
+        ci = (self.project_root / '.github' / 'workflows' / 'ci.yml').read_text(
+            encoding='utf-8'
+        )
+        cd = (self.project_root / '.github' / 'workflows' / 'cd.yml').read_text(
+            encoding='utf-8'
+        )
+
+        self.assertIn("needs:\n      - ci-passed", ci)
+        self.assertIn("github.event_name == 'push'", ci)
+        self.assertIn("github.ref == 'refs/heads/main'", ci)
+        self.assertIn('uses: ./.github/workflows/cd.yml', ci)
+        self.assertIn('workflow_call:', cd)
+        self.assertNotIn('workflow_dispatch:', cd)
+        self.assertNotIn('workflow_run:', cd)
+        self.assertNotIn('create:', cd)
+
+    def test_ci_covers_pull_requests_and_merge_queue_without_deploying_them(self):
+        ci = (self.project_root / '.github' / 'workflows' / 'ci.yml').read_text(
+            encoding='utf-8'
+        )
+
+        self.assertIn('pull_request:', ci)
+        self.assertIn('merge_group:', ci)
+        self.assertIn('types: [checks_requested]', ci)
+        self.assertIn("github.ref == 'refs/heads/main'", ci)
+
+    def test_cd_uses_verified_sha_and_key_based_ssh(self):
+        cd = (self.project_root / '.github' / 'workflows' / 'cd.yml').read_text(
+            encoding='utf-8'
+        )
+        remote = (self.project_root / 'scripts' / 'remote-deploy.sh').read_text(
+            encoding='utf-8'
+        )
+
+        self.assertIn('SSH_PRIVATE_KEY', cd)
+        self.assertIn('SSH_KNOWN_HOSTS', cd)
+        self.assertNotIn('SSH_PASSWORD', cd)
+        self.assertIn('DEPLOY_SHA: ${{ github.sha }}', cd)
+        self.assertIn('git rev-parse origin/main', remote)
+        self.assertIn('git reset --hard "$DEPLOY_SHA"', remote)
+
+    def test_production_env_is_rendered_and_validated_before_upload(self):
+        cd = (self.project_root / '.github' / 'workflows' / 'cd.yml').read_text(
+            encoding='utf-8'
+        )
+        run_prod = (self.project_root / 'scripts' / 'run-prod.sh').read_text(
+            encoding='utf-8'
+        )
+
+        self.assertIn('scripts/render_prod_env.py', cd)
+        self.assertIn('scripts/validate_env.py --file .env.prod', run_prod)
+        self.assertIn('config --quiet', run_prod)
+        self.assertIn('--wait-timeout', run_prod)
 
 
 class AsyncDatabaseViewTests(TestCase):
