@@ -14,21 +14,25 @@ from openpyxl.utils import get_column_letter
 from journal.academic_year_context import filter_temporary_credentials_for_year
 from journal.models import (
     AcademicYear,
+    AssessmentElement,
     AssessmentGroup,
     AssessmentItem,
     AssessmentResult,
     CourseApplication,
+    CourseRegistrationSettings,
     FinalGradeRule,
     Grade,
     GroupSubject,
     Instrument,
     OrchestraPart,
+    PasswordRecoveryContact,
     StudentAssessmentGroup,
     StudentEnrollment,
     StudentSubject,
     Subject,
     SubjectResult,
     TeacherEnrollment,
+    TeacherSubject,
     TemporaryCredential,
     UserAcademicYearMembership,
 )
@@ -58,6 +62,7 @@ def build_full_export_workbook(academic_year: AcademicYear | None = None) -> Wor
     write_readme_sheet(workbook, academic_year)
     write_users_sheet(workbook, academic_year)
     write_reference_sheets(workbook, academic_year)
+    write_configuration_sheets(workbook, academic_year)
     write_students_sheet(workbook, academic_year)
     write_teachers_sheet(workbook, academic_year)
     write_assignments_sheets(workbook, academic_year)
@@ -112,7 +117,8 @@ def write_users_sheet(workbook: Workbook, academic_year: AcademicYear | None) ->
     )
 
     def role(user):
-        names = set(user.groups.values_list('name', flat=True))
+        prefetched_groups = getattr(user, '_prefetched_objects_cache', {}).get('groups', ())
+        names = {group.name for group in prefetched_groups}
         if user.is_superuser or user.is_staff:
             return 'Администратор'
         if 'Преподаватель' in names or hasattr(user, 'teacher_profile'):
@@ -156,6 +162,13 @@ def write_reference_sheets(workbook: Workbook, academic_year: AcademicYear | Non
         )
         subject_ids.update(
             AssessmentGroup.objects.filter(academic_year=academic_year)
+            .values_list('subject_id', flat=True)
+        )
+        subject_ids.update(
+            TeacherSubject.objects.filter(
+                teacher__academic_year_memberships__academic_year=academic_year,
+                teacher__academic_year_memberships__is_active=True,
+            )
             .values_list('subject_id', flat=True)
         )
     write_custom_sheet(
@@ -202,6 +215,62 @@ def write_reference_sheets(workbook: Workbook, academic_year: AcademicYear | Non
                 ),
             ),
         ],
+    )
+
+    write_custom_sheet(
+        workbook,
+        'Каталог произведений',
+        AssessmentElement.objects.filter(subject_id__in=subject_ids)
+        .select_related('subject')
+        .order_by('subject__name', 'title'),
+        [
+            ('Произведение / элемент', lambda item: item.title),
+            ('Предмет', lambda item: item.subject.name),
+            ('Описание', lambda item: item.description),
+            ('Активно', lambda item: item.is_active),
+        ],
+    )
+
+
+def write_configuration_sheets(
+    workbook: Workbook,
+    academic_year: AcademicYear | None,
+) -> None:
+    registration_settings = (
+        CourseRegistrationSettings.objects.filter(academic_year=academic_year)
+        .select_related('academic_year')
+        if academic_year else CourseRegistrationSettings.objects.none()
+    )
+    write_custom_sheet(
+        workbook,
+        'Настройки регистрации',
+        registration_settings,
+        [
+            ('Учебный год', lambda item: item.academic_year.name),
+            ('Режим регистрации', lambda item: item.get_registration_mode_display()),
+            ('Минимальный возраст', lambda item: item.minimum_registration_age),
+            ('Лимит заявок', lambda item: item.application_limit),
+            ('Принято заявок', lambda item: item.registered_applications_count()),
+            ('Регистрация открыта', lambda item: item.registration_is_open()),
+            ('Telegram-группа', lambda item: item.telegram_group_url),
+            ('Дата изменения', lambda item: item.updated_at),
+        ],
+    )
+
+    write_custom_sheet(
+        workbook,
+        'Контакты восстановления',
+        PasswordRecoveryContact.objects.order_by('display_order', 'name', 'pk'),
+        [
+            ('Администратор', lambda item: item.name),
+            ('Телефон', lambda item: item.phone),
+            ('Мессенджеры', lambda item: item.messengers),
+            ('Имя пользователя', lambda item: item.messenger_username),
+            ('Показывать пользователям', lambda item: item.is_active),
+            ('Порядок показа', lambda item: item.display_order),
+            ('Дата изменения', lambda item: item.updated_at),
+        ],
+        text_headers={'Телефон', 'Имя пользователя'},
     )
 
 
@@ -289,6 +358,46 @@ def write_assignments_sheets(workbook: Workbook, academic_year: AcademicYear | N
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
+    memberships = (
+        UserAcademicYearMembership.objects.filter(academic_year=academic_year)
+        .select_related('user', 'academic_year')
+        .order_by('user__username')
+        if academic_year else UserAcademicYearMembership.objects.none()
+    )
+    write_custom_sheet(
+        workbook,
+        'Доступ к учебному году',
+        memberships,
+        [
+            ('Логин', lambda item: item.user.username),
+            ('ФИО', lambda item: item.user.get_full_name()),
+            ('Активен', lambda item: item.is_active),
+            ('Учебный год', lambda item: item.academic_year.name),
+        ],
+        text_headers={'Логин'},
+    )
+
+    teacher_subjects = (
+        TeacherSubject.objects.filter(
+            teacher__academic_year_memberships__academic_year=academic_year,
+            teacher__academic_year_memberships__is_active=True,
+        )
+        .select_related('teacher', 'subject')
+        .distinct()
+        .order_by('teacher__full_name', 'subject__name')
+        if academic_year else TeacherSubject.objects.none()
+    )
+    write_custom_sheet(
+        workbook,
+        'Квалификации преподавателей',
+        teacher_subjects,
+        [
+            ('Преподаватель', lambda item: item.teacher.full_name),
+            ('Предмет', lambda item: item.subject.name),
+            ('Учебный год', lambda _item: academic_year.name if academic_year else ''),
+        ],
+    )
+
     group_subjects = (
         GroupSubject.objects.filter(group__academic_year=academic_year)
         .select_related('group', 'subject', 'teacher', 'group__academic_year')
@@ -390,13 +499,14 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
             ('Группа произведений', lambda item: item.name),
             ('Предмет', lambda item: item.subject.name),
             ('Описание', lambda item: item.description),
+            ('Порядок отображения', lambda item: item.sort_order),
             ('Активна', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],
     )
     items = (
         AssessmentItem.objects.filter(academic_year=academic_year)
-        .select_related('group', 'subject', 'responsible_teacher', 'academic_year')
+        .select_related('element', 'group', 'subject', 'responsible_teacher', 'academic_year')
         .order_by('group__sort_order', 'sort_order', 'title')
         if academic_year else AssessmentItem.objects.none()
     )
@@ -406,11 +516,16 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
         items,
         [
             ('Произведение', lambda item: item.title),
+            (
+                'Запись справочника',
+                lambda item: item.element.title if item.element_id else '',
+            ),
             ('Группа произведений', lambda item: item.group.name),
             ('Предмет', lambda item: item.subject.name),
             ('Преподаватель-дирижёр', lambda item: item.responsible_teacher.full_name if item.responsible_teacher_id else ''),
             ('Обязательное', lambda item: yes_no(item.is_required)),
             ('Описание', lambda item: item.description),
+            ('Порядок отображения', lambda item: item.sort_order),
             ('Активно', lambda item: item.is_active),
             ('Учебный год', lambda item: item.academic_year.name),
         ],

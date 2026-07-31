@@ -8559,6 +8559,103 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
         self.assertEqual(credentials_sheet['C2'].value, 'teacher_credentials_export')
         self.assertEqual(credentials_sheet['G2'].value, '2025/2026')
 
+    def test_export_includes_new_catalog_and_administration_sheets(self):
+        year = self.create_academic_year(name='2025/2026')
+        group = self.create_group(name='Оркестровая группа', academic_year=year)
+        subject = Subject.objects.create(
+            name='Сдача партий',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_NUMERIC,
+        )
+        teacher = self.create_teacher(
+            full_name='Дирижёр Экспорта',
+            username='export_conductor',
+        )
+        TeacherEnrollment.objects.create(teacher=teacher, academic_year=year)
+        TeacherSubject.objects.create(teacher=teacher, subject=subject)
+        GroupSubject.objects.create(group=group, subject=subject, teacher=teacher)
+        element = AssessmentElement.objects.create(
+            subject=subject,
+            title='Марш для проверки',
+            description='Каталожное описание',
+        )
+        settings_obj = CourseRegistrationSettings.objects.get(academic_year=year)
+        settings_obj.telegram_group_url = 'https://t.me/example_group'
+        settings_obj.minimum_registration_age = 14
+        settings_obj.registration_mode = CourseRegistrationSettings.REGISTRATION_MODE_OPEN
+        settings_obj.save()
+        PasswordRecoveryContact.objects.create(
+            name='Администратор Экспорта',
+            phone='+7 (900) 000-00-00',
+            messengers='Telegram',
+            messenger_username='export_admin',
+        )
+
+        workbook = build_full_export_workbook(year)
+
+        self.assertIn('Каталог произведений', workbook.sheetnames)
+        self.assertIn('Квалификации преподавателей', workbook.sheetnames)
+        self.assertIn('Доступ к учебному году', workbook.sheetnames)
+        self.assertIn('Настройки регистрации', workbook.sheetnames)
+        self.assertIn('Контакты восстановления', workbook.sheetnames)
+        self.assertEqual(workbook['Каталог произведений']['A2'].value, element.title)
+        self.assertEqual(
+            workbook['Квалификации преподавателей']['A2'].value,
+            teacher.full_name,
+        )
+        self.assertEqual(
+            workbook['Настройки регистрации']['A2'].value,
+            settings_obj.academic_year.name,
+        )
+        self.assertEqual(
+            workbook['Контакты восстановления']['D2'].value,
+            'export_admin',
+        )
+        membership_rows = list(
+            workbook['Доступ к учебному году'].iter_rows(min_row=2, values_only=True)
+        )
+        self.assertIn(
+            ('export_conductor', '', 'Да', '2025/2026'),
+            membership_rows,
+        )
+
+    def test_assessment_item_export_preserves_catalog_reference_and_snapshot(self):
+        year = self.create_academic_year(name='2025/2026')
+        subject = Subject.objects.create(
+            name='Оркестровая практика',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_NUMERIC,
+        )
+        group = AssessmentGroup.objects.create(
+            name='Основная программа',
+            subject=subject,
+            academic_year=year,
+        )
+        element = AssessmentElement.objects.create(
+            subject=subject,
+            title='Симфония № 1',
+            description='Исходное описание',
+        )
+        item = AssessmentItem.objects.create(
+            element=element,
+            group=group,
+            subject=subject,
+            academic_year=year,
+            sort_order=20,
+        )
+        AssessmentElement.objects.filter(pk=element.pk).update(title='Новое название')
+
+        workbook = build_full_export_workbook(year)
+        sheet = workbook['Произведения']
+        headers = {cell.value: cell.column for cell in sheet[1]}
+
+        self.assertEqual(sheet.cell(2, headers['Произведение']).value, item.title)
+        self.assertEqual(
+            sheet.cell(2, headers['Запись справочника']).value,
+            'Новое название',
+        )
+        self.assertEqual(sheet.cell(2, headers['Порядок отображения']).value, 20)
+
     def test_active_year_export_includes_administrator_account(self):
         active_year = self.create_academic_year(name='2025/2026')
         administrator = User.objects.create_superuser(
