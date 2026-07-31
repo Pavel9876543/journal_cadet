@@ -32,6 +32,7 @@ else:
     _load_env_file('.env.dev')
 
 IS_PRODUCTION_ENV = os.getenv('DJANGO_ENV', '').lower() in {'production', 'prod'}
+RELEASE_REVISION = os.getenv('RELEASE_REVISION', '').strip()
 
 
 def _env_list(name: str, default: str = '') -> list[str]:
@@ -93,6 +94,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'journal.middleware.NoCacheHtmlMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 

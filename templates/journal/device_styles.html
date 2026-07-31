@@ -1,7 +1,8 @@
 {% load static %}
 {# Файлы загружаются сразу, а режим выбирают их внутренние media-блоки. #}
 {# Так поворот телефона не ждёт отложенной загрузки нового stylesheet. #}
-<link rel="stylesheet" href="{% static 'journal/layout-desktop.css' %}?v=20260730-2" data-layout-styles="desktop">
-<link rel="stylesheet" href="{% static 'journal/layout-laptop.css' %}?v=20260730-2" data-layout-styles="laptop">
-<link rel="stylesheet" href="{% static 'journal/layout-tablet.css' %}?v=20260731-1" data-layout-styles="tablet">
-<link rel="stylesheet" href="{% static 'journal/layout-mobile.css' %}?v=20260731-1" data-layout-styles="mobile">
+<link rel="stylesheet" href="{% static 'journal/layout-desktop.css' %}" data-layout-styles="desktop">
+<link rel="stylesheet" href="{% static 'journal/layout-laptop.css' %}" data-layout-styles="laptop">
+<link rel="stylesheet" href="{% static 'journal/layout-tablet.css' %}" data-layout-styles="tablet">
+<link rel="stylesheet" href="{% static 'journal/layout-mobile.css' %}" data-layout-styles="mobile">
+<link rel="stylesheet" href="{% static 'journal/responsive_overflow.css' %}" data-layout-styles="overflow">

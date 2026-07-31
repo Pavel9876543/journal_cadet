@@ -4172,8 +4172,8 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
 
         css = Path('journal/static/journal/admin_dashboard.css').read_text(encoding='utf-8')
         javascript = Path('journal/static/journal/admin_responsive.js').read_text(encoding='utf-8')
-        self.assertIn('layout-tablet.css?v=20260731-1', css)
-        self.assertIn('layout-mobile.css?v=20260731-1', css)
+        self.assertIn('@import url("layout-tablet.css");', css)
+        self.assertIn('@import url("layout-mobile.css");', css)
         self.assertIn('@media (max-width: 767.98px)', css)
         self.assertIn('responsive-admin-modal', css)
         self.assertIn('body.change-form .field-city_church', css)
@@ -4231,23 +4231,32 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             '(max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse)',
             mobile_css,
         )
-        self.assertIn('#journal-subject-blocks .grade-cell', mobile_css)
-        self.assertIn('width: 112px;', mobile_css)
-        self.assertIn('font-size: 0.72rem;', mobile_css)
 
         device_styles = Path('templates/journal/device_styles.html').read_text(encoding='utf-8')
         self.assertNotIn(' media="', device_styles)
-        self.assertEqual(device_styles.count('data-layout-styles='), 4)
-        self.assertEqual(device_styles.count('?v=20260730-2'), 2)
-        self.assertEqual(device_styles.count('?v=20260731-1'), 2)
+        self.assertEqual(device_styles.count('data-layout-styles='), 5)
+        self.assertNotIn('?v=', device_styles)
+        self.assertIn('journal/responsive_overflow.css', device_styles)
+
+        admin_base_template = Path(
+            'templates/admin/base_site.html'
+        ).read_text(encoding='utf-8')
+        self.assertIn('journal/responsive_overflow.css', admin_base_template)
 
         tablet_css = Path('journal/static/journal/layout-tablet.css').read_text(encoding='utf-8')
         self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)
         self.assertIn('grid-template-columns: minmax(0, 1fr) !important;', tablet_css)
         self.assertIn('.filter-form > *', tablet_css)
-        self.assertIn('#journal-subject-blocks .grade-cell', tablet_css)
-        self.assertIn('width: 150px;', tablet_css)
-        self.assertIn('font-size: 0.8rem;', tablet_css)
+
+        overflow_css = Path(
+            'journal/static/journal/responsive_overflow.css'
+        ).read_text(encoding='utf-8')
+        self.assertIn('overflow-x: auto !important;', overflow_css)
+        self.assertIn('overflow-y: auto !important;', overflow_css)
+        self.assertIn('touch-action: pan-x pan-y;', overflow_css)
+        self.assertIn('max-height: 72dvh !important;', overflow_css)
+        self.assertNotIn('font-size:', overflow_css)
+        self.assertNotIn('padding:', overflow_css)
 
     def test_all_project_admins_keep_the_current_form_or_list_after_save(self):
         for model, model_admin in django_admin.site._registry.items():

@@ -1,0 +1,88 @@
+/*
+ * Прокрутка таблиц на телефонах и планшетах.
+ *
+ * Файл намеренно не меняет размеры шрифтов, полей, кнопок, ячеек и колонок.
+ * Он подключается после основных стилей, чтобы overflow не отменялся более
+ * поздними правилами темы или административной панели.
+ */
+@media (max-width: 767.98px),
+       (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
+    .table-scroll,
+    .journal-responsive-table,
+    .results,
+    .inline-group,
+    .table-responsive,
+    body.change-list #changelist,
+    body.change-list #changelist .results,
+    body.change-form .inline-group,
+    body.change-form .inline-group .tabular {
+        width: 100%;
+        max-width: 100%;
+        max-height: 70vh !important;
+        max-height: min(70vh, calc(100dvh - 140px)) !important;
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        overscroll-behavior: contain;
+        touch-action: pan-x pan-y;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .table-scroll table,
+    .results table,
+    .inline-group table {
+        width: max-content;
+        min-width: 680px;
+    }
+
+    button,
+    .button,
+    .btn {
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+@media (min-width: 768px) and (max-width: 1023.98px) {
+    .table-scroll,
+    .journal-responsive-table,
+    .results,
+    .inline-group,
+    .table-responsive,
+    body.change-list #changelist,
+    body.change-list #changelist .results,
+    body.change-form .inline-group,
+    body.change-form .inline-group .tabular {
+        max-width: 100%;
+        max-height: 70vh !important;
+        max-height: min(70vh, calc(100dvh - 160px)) !important;
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        overscroll-behavior: contain;
+        touch-action: pan-x pan-y;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    button,
+    .button,
+    .btn {
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+@media (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
+    .table-scroll,
+    .journal-responsive-table,
+    .results,
+    .inline-group,
+    .table-responsive,
+    body.change-list #changelist,
+    body.change-list #changelist .results,
+    body.change-form .inline-group,
+    body.change-form .inline-group .tabular {
+        max-height: 72vh !important;
+        max-height: 72dvh !important;
+    }
+}

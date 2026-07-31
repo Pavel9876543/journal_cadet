@@ -1,6 +1,7 @@
 name: CD
 
 on:
+  create:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -18,6 +19,11 @@ jobs:
   deploy:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'create' &&
+        github.event.ref_type == 'tag' &&
+        startsWith(github.event.ref, 'deploy-')
+      ) ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -242,6 +248,7 @@ jobs:
             write_env_line ENABLE_DESTRUCTIVE_DATA_TOOLS 0
             write_env_line BACKUP_RETENTION_DAYS 30
             write_env_line APP_IMAGE cadet-journal:web
+            write_env_line RELEASE_REVISION "$DEPLOY_SHA"
 
             mv "$env_tmp" .env.prod
             env_tmp=""

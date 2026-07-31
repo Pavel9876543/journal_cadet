@@ -1,0 +1,7 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    <link rel="stylesheet" href="{% static 'journal/responsive_overflow.css' %}" data-layout-styles="overflow">
+{% endblock %}
