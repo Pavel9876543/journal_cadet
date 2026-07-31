@@ -6933,7 +6933,6 @@ class UserCreationCredentialTests(JournalTestDataMixin, TestCase):
 
 
 
-@tag('slow', 'seed')
 class CacheConfigurationTests(SimpleTestCase):
     def test_cache_is_disabled_in_non_production_settings(self):
         self.assertFalse(settings.CACHE_ENABLED)
@@ -6984,6 +6983,7 @@ class PerformanceConfigurationTests(SimpleTestCase):
         self.assertIn("'CONN_HEALTH_CHECKS': IS_PRODUCTION_ENV", source)
 
 
+@tag('slow', 'seed')
 class SeedDataCommandTests(TestCase):
     @staticmethod
     def run_seed_data():
@@ -7057,15 +7057,24 @@ class SeedDataCommandTests(TestCase):
     def test_seed_data_uses_distinct_compact_cohorts_for_two_years(self):
         archived_year = AcademicYear.objects.get(name='2024/2025')
         active_year = AcademicYear.objects.get(name='2025/2026')
+        main_group_names = {
+            'Подготовительная группа',
+            '1 класс (начинающие)',
+            '2 класс (средний уровень)',
+            '3 класс (продвинутые)',
+            'Старший ансамбль',
+        }
         archived_names = set(
-            StudentEnrollment.objects.filter(academic_year=archived_year).values_list(
-                'full_name', flat=True,
-            )
+            StudentEnrollment.objects.filter(
+                academic_year=archived_year,
+                group__name__in=main_group_names,
+            ).values_list('full_name', flat=True)
         )
         active_names = set(
-            StudentEnrollment.objects.filter(academic_year=active_year).values_list(
-                'full_name', flat=True,
-            )
+            StudentEnrollment.objects.filter(
+                academic_year=active_year,
+                group__name__in=main_group_names,
+            ).values_list('full_name', flat=True)
         )
 
         self.assertTrue(archived_names)
@@ -7627,10 +7636,14 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             subject=other_subject,
             academic_year=self.year,
         )
+        other_element = AssessmentElement.objects.create(
+            subject=other_subject,
+            title=self.item.title,
+            description=self.item.description,
+        )
         form = AssessmentItemAdminForm(
             data={
-                'title': self.item.title,
-                'description': self.item.description,
+                'element': other_element.pk,
                 'subject': self.subject.pk,
                 'academic_year': self.year.pk,
                 'group': other_group.pk,
@@ -8576,7 +8589,6 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
             full_name='Дирижёр Экспорта',
             username='export_conductor',
         )
-        TeacherEnrollment.objects.create(teacher=teacher, academic_year=year)
         TeacherSubject.objects.create(teacher=teacher, subject=subject)
         GroupSubject.objects.create(group=group, subject=subject, teacher=teacher)
         element = AssessmentElement.objects.create(

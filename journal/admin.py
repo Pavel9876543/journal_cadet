@@ -1476,6 +1476,8 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         elements = AssessmentElement.objects.filter(is_active=True)
         if subject is not None:
             elements = elements.filter(subject=subject)
+        if group is not None:
+            elements = elements.exclude(group_placements__group=group)
         self._set_queryset('element', self._include_selected(
             elements.select_related('subject').order_by('subject__name', 'title'),
             AssessmentElement,

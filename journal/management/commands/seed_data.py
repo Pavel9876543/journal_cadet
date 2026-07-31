@@ -112,11 +112,13 @@ class Command(BaseCommand):
         # его активным и позволяет безопасно сформировать все связанные записи.
         archived_year = self._create_archived_academic_year()
         self._assign_existing_admins_to_academic_year(archived_year)
-        CourseRegistrationSettings.objects.create(
+        CourseRegistrationSettings.objects.update_or_create(
             academic_year=archived_year,
-            telegram_group_url='https://t.me/cadet_journal_archive_demo',
-            minimum_registration_age=14,
-            registration_mode=CourseRegistrationSettings.REGISTRATION_MODE_CLOSED,
+            defaults={
+                'telegram_group_url': 'https://t.me/cadet_journal_archive_demo',
+                'minimum_registration_age': 14,
+                'registration_mode': CourseRegistrationSettings.REGISTRATION_MODE_CLOSED,
+            },
         )
 
         instruments = self._create_instruments()
@@ -143,10 +145,13 @@ class Command(BaseCommand):
         # Более новый год автоматически становится единственным активным.
         academic_year = self._create_current_academic_year()
         self._assign_existing_admins_to_academic_year(academic_year)
-        CourseRegistrationSettings.objects.create(
+        CourseRegistrationSettings.objects.update_or_create(
             academic_year=academic_year,
-            telegram_group_url='https://t.me/cadet_journal_demo',
-            minimum_registration_age=14,
+            defaults={
+                'telegram_group_url': 'https://t.me/cadet_journal_demo',
+                'minimum_registration_age': 14,
+                'registration_mode': CourseRegistrationSettings.REGISTRATION_MODE_OPEN,
+            },
         )
         self._assign_teachers_to_academic_year(teachers, academic_year)
         groups = self._create_groups(academic_year)
@@ -160,6 +165,16 @@ class Command(BaseCommand):
         )
         self._create_course_applications()
         self._create_course_group_assignments(academic_year, subjects, teachers)
+        students = list(
+            Student.objects
+            .filter(
+                enrollments__academic_year=academic_year,
+                enrollments__is_active=True,
+            )
+            .select_related('group', 'instrument')
+            .distinct()
+            .order_by('id')
+        )
         self._create_grades_and_results(students, academic_year)
         self._create_assessment_demo_data(students, academic_year, subjects, teachers)
 
