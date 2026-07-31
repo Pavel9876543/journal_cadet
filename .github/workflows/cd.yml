@@ -1,12 +1,7 @@
 name: CD
 
 on:
-  create:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: ["main"]
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -17,25 +12,58 @@ concurrency:
 
 jobs:
   deploy:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'create' &&
-        github.event.ref_type == 'tag' &&
-        startsWith(github.event.ref, 'deploy-')
-      ) ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    name: SSH deployment
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     environment: production
 
     steps:
-      - name: Deploy on server via SSH
-        uses: appleboy/ssh-action@v1.2.4
+      - name: Checkout verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate deployment configuration
         env:
-          APP_DIR: ${{ vars.APP_DIR || '/opt/cadet_journal' }}
-          REPO_CLONE_URL: ${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}
-          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
+          DJANGO_CSRF_TRUSTED_ORIGINS: ${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DJANGO_SUPERUSER_USERNAME: ${{ secrets.DJANGO_SUPERUSER_USERNAME }}
+          DJANGO_SUPERUSER_PASSWORD: ${{ secrets.DJANGO_SUPERUSER_PASSWORD }}
+        run: |
+          required=(
+            SSH_HOST SSH_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS
+            DJANGO_SECRET_KEY DJANGO_ALLOWED_HOSTS DJANGO_CSRF_TRUSTED_ORIGINS
+            POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
+            DJANGO_SUPERUSER_USERNAME DJANGO_SUPERUSER_PASSWORD
+          )
+          for variable_name in "${required[@]}"; do
+            if [[ -z "${!variable_name:-}" ]]; then
+              echo "Required GitHub secret is missing: $variable_name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Render production env
+        env:
           DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
           DJANGO_CSRF_TRUSTED_ORIGINS: ${{ secrets.DJANGO_CSRF_TRUSTED_ORIGINS }}
@@ -46,219 +74,57 @@ jobs:
           DJANGO_SUPERUSER_EMAIL: ${{ secrets.DJANGO_SUPERUSER_EMAIL }}
           DJANGO_SUPERUSER_PASSWORD: ${{ secrets.DJANGO_SUPERUSER_PASSWORD }}
           DATA_TOOLS_PASSWORD: ${{ secrets.DATA_TOOLS_PASSWORD }}
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: ${{ secrets.SSH_PORT || '22' }}
-          command_timeout: 25m
-          envs: APP_DIR,REPO_CLONE_URL,DEPLOY_SHA,DJANGO_SECRET_KEY,DJANGO_ALLOWED_HOSTS,DJANGO_CSRF_TRUSTED_ORIGINS,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,DJANGO_SUPERUSER_USERNAME,DJANGO_SUPERUSER_EMAIL,DJANGO_SUPERUSER_PASSWORD,DATA_TOOLS_PASSWORD
-          script: |
-            set -eu
+          APP_PORT: ${{ vars.APP_PORT || '8000' }}
+          TRUSTED_PROXY_COUNT: ${{ vars.TRUSTED_PROXY_COUNT || '1' }}
+          DB_CONN_MAX_AGE: ${{ vars.DB_CONN_MAX_AGE || '60' }}
+          CACHE_DEFAULT_TIMEOUT: ${{ vars.CACHE_DEFAULT_TIMEOUT || '300' }}
+          CACHE_KEY_PREFIX: ${{ vars.CACHE_KEY_PREFIX || 'cadet-journal' }}
+          REDIS_MAXMEMORY: ${{ vars.REDIS_MAXMEMORY || '256mb' }}
+          REDIS_MAXMEMORY_POLICY: ${{ vars.REDIS_MAXMEMORY_POLICY || 'allkeys-lru' }}
+          WEB_CONCURRENCY: ${{ vars.WEB_CONCURRENCY || '3' }}
+          WEB_TIMEOUT_KEEP_ALIVE: ${{ vars.WEB_TIMEOUT_KEEP_ALIVE || '5' }}
+          WEB_LOG_LEVEL: ${{ vars.WEB_LOG_LEVEL || 'info' }}
+          WEB_ACCESS_LOG: ${{ vars.WEB_ACCESS_LOG || '1' }}
+          DB_WAIT_TIMEOUT: ${{ vars.DB_WAIT_TIMEOUT || '60' }}
+          DEPLOY_WAIT_TIMEOUT: ${{ vars.DEPLOY_WAIT_TIMEOUT || '240' }}
+          BACKUP_INTERVAL_SECONDS: ${{ vars.BACKUP_INTERVAL_SECONDS || '86400' }}
+          BACKUP_RETENTION_DAYS: ${{ vars.BACKUP_RETENTION_DAYS || '30' }}
+        run: python scripts/render_prod_env.py --output "$RUNNER_TEMP/cadet-journal.env"
 
-            require_value() {
-              value="$1"
-              variable_name="$2"
-              if [ -z "$value" ]; then
-                echo "Ошибка: обязательная переменная $variable_name не задана."
-                exit 1
-              fi
-            }
+      - name: Upload env and deploy verified SHA
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/cadet_journal' }}
+          REPO_CLONE_URL: ${{ vars.REPO_CLONE_URL || format('https://github.com/{0}.git', github.repository) }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          remote_env="/tmp/cadet-journal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          ssh_options=(
+            -i ~/.ssh/id_ed25519
+            -p "$SSH_PORT"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=20
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+          )
 
-            write_env_line() {
-              key="$1"
-              value="$2"
-              sanitized_value="$(printf '%s' "$value" | tr -d '\r\n')"
-              if [ "$sanitized_value" != "$value" ]; then
-                echo "Ошибка: значение $key содержит перевод строки."
-                exit 1
-              fi
-              escaped_value="$(printf '%s' "$value" | sed "s/'/\\\\'/g")"
-              printf "%s='%s'\n" "$key" "$escaped_value" >> "$env_tmp"
-            }
+          scp -i ~/.ssh/id_ed25519 \
+            -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            "$RUNNER_TEMP/cadet-journal.env" \
+            "$SSH_USER@$SSH_HOST:$remote_env"
 
-            require_value "${APP_DIR:-}" APP_DIR
-            require_value "${REPO_CLONE_URL:-}" REPO_CLONE_URL
-            require_value "${DEPLOY_SHA:-}" DEPLOY_SHA
-            require_value "${DJANGO_SECRET_KEY:-}" DJANGO_SECRET_KEY
-            require_value "${DJANGO_ALLOWED_HOSTS:-}" DJANGO_ALLOWED_HOSTS
-            require_value "${POSTGRES_DB:-}" POSTGRES_DB
-            require_value "${POSTGRES_USER:-}" POSTGRES_USER
-            require_value "${POSTGRES_PASSWORD:-}" POSTGRES_PASSWORD
-            require_value "${DJANGO_SUPERUSER_USERNAME:-}" DJANGO_SUPERUSER_USERNAME
-            require_value "${DJANGO_SUPERUSER_PASSWORD:-}" DJANGO_SUPERUSER_PASSWORD
+          printf -v remote_command \
+            'APP_DIR=%q REPO_CLONE_URL=%q DEPLOY_SHA=%q ENV_UPLOAD_PATH=%q bash -s' \
+            "$APP_DIR" "$REPO_CLONE_URL" "$DEPLOY_SHA" "$remote_env"
 
-            echo "=== Проверка прав пользователя ==="
-
-            if [ "$(id -u)" -eq 0 ]; then
-              SUDO=""
-            else
-              if ! command -v sudo >/dev/null 2>&1; then
-                echo "Ошибка: пользователь не root и sudo не установлен."
-                echo "Зайдите на сервер под root или установите sudo."
-                exit 1
-              fi
-
-              if ! sudo -n true >/dev/null 2>&1; then
-                echo "Ошибка: пользователю нужен sudo без интерактивного ввода пароля."
-                echo "Решение: используйте SSH_USER=root или настройте NOPASSWD для deploy-пользователя."
-                exit 1
-              fi
-
-              SUDO="sudo -n"
-            fi
-
-            if ! command -v apt-get >/dev/null 2>&1; then
-              echo "Ошибка: workflow поддерживает Debian/Ubuntu серверы с apt-get."
-              exit 1
-            fi
-
-            echo "=== Установка базовых зависимостей ==="
-            export DEBIAN_FRONTEND=noninteractive
-            $SUDO apt-get update -y
-            $SUDO apt-get install -y ca-certificates curl gnupg git
-
-            echo "=== Проверка и установка Docker ==="
-
-            if command -v docker >/dev/null 2>&1 && (
-              docker compose version >/dev/null 2>&1 ||
-              $SUDO docker compose version >/dev/null 2>&1
-            ); then
-              echo "Docker Compose уже установлен."
-            else
-              . /etc/os-release
-
-              case "${ID:-}" in
-                ubuntu|debian)
-                  DOCKER_DISTRO="$ID"
-                  ;;
-                *)
-                  echo "Ошибка: Docker-репозиторий не настроен для системы ${ID:-unknown}."
-                  exit 1
-                  ;;
-              esac
-
-              DOCKER_CODENAME="${VERSION_CODENAME:-}"
-              if [ -z "$DOCKER_CODENAME" ]; then
-                echo "Ошибка: не удалось определить codename системы."
-                exit 1
-              fi
-
-              $SUDO install -m 0755 -d /etc/apt/keyrings
-              curl -fsSL "https://download.docker.com/linux/$DOCKER_DISTRO/gpg" | \
-                $SUDO gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
-              $SUDO chmod a+r /etc/apt/keyrings/docker.gpg
-
-              echo \
-                "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$DOCKER_DISTRO $DOCKER_CODENAME stable" | \
-                $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
-
-              $SUDO apt-get update -y
-              $SUDO apt-get install -y \
-                docker-ce \
-                docker-ce-cli \
-                containerd.io \
-                docker-buildx-plugin \
-                docker-compose-plugin
-
-              $SUDO systemctl enable docker
-              $SUDO systemctl start docker
-            fi
-
-            if docker version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-              DOCKER_CMD="docker"
-            else
-              DOCKER_CMD="$SUDO docker"
-            fi
-
-            echo "=== Версии Docker ==="
-            $DOCKER_CMD --version
-            $DOCKER_CMD compose version
-
-            echo "=== Подготовка директории приложения ==="
-            $SUDO mkdir -p "$APP_DIR"
-
-            if [ ! -w "$APP_DIR" ]; then
-              $SUDO chown -R "$USER":"$USER" "$APP_DIR"
-            fi
-
-            echo "=== Получение кода проекта ==="
-
-            if [ ! -d "$APP_DIR/.git" ]; then
-              git clone "$REPO_CLONE_URL" "$APP_DIR"
-            elif [ ! -w "$APP_DIR/.git" ]; then
-              $SUDO chown -R "$USER":"$USER" "$APP_DIR"
-            fi
-
-            cd "$APP_DIR"
-            git config --global --add safe.directory "$APP_DIR"
-
-            echo "=== Сброс к проверенному CI-коммиту ==="
-            git fetch origin main
-            git reset --hard
-            git clean -fd
-            git checkout -B main "$DEPLOY_SHA"
-
-            if [ "$(git rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
-              echo "Ошибка: не удалось переключиться на проверенный коммит $DEPLOY_SHA."
-              exit 1
-            fi
-
-            echo "=== Создание .env.prod ==="
-            umask 077
-            env_tmp=""
-            cleanup_env_tmp() {
-              if [ -n "$env_tmp" ]; then
-                rm -f "$env_tmp"
-              fi
-            }
-            trap cleanup_env_tmp EXIT HUP INT TERM
-            env_tmp="$(mktemp .env.prod.XXXXXX)"
-
-            : > "$env_tmp"
-            write_env_line DJANGO_ENV production
-            write_env_line DEBUG 0
-            write_env_line ALLOW_EMBEDDED_PREVIEW 0
-            write_env_line SECRET_KEY "$DJANGO_SECRET_KEY"
-            write_env_line ALLOWED_HOSTS "$DJANGO_ALLOWED_HOSTS"
-            write_env_line CSRF_TRUSTED_ORIGINS "${DJANGO_CSRF_TRUSTED_ORIGINS:-}"
-            write_env_line SECURE_SSL_REDIRECT 1
-            write_env_line SESSION_COOKIE_SECURE 1
-            write_env_line CSRF_COOKIE_SECURE 1
-            write_env_line SECURE_HSTS_SECONDS 31536000
-            write_env_line SECURE_HSTS_INCLUDE_SUBDOMAINS 1
-            write_env_line SECURE_HSTS_PRELOAD 1
-            write_env_line USE_X_FORWARDED_PROTO 1
-            write_env_line TRUST_X_FORWARDED_FOR 1
-            write_env_line TRUSTED_PROXY_COUNT 1
-            write_env_line DB_ENGINE django.db.backends.postgresql
-            write_env_line DB_NAME "$POSTGRES_DB"
-            write_env_line DB_USER "$POSTGRES_USER"
-            write_env_line DB_PASSWORD "$POSTGRES_PASSWORD"
-            write_env_line DB_HOST db
-            write_env_line DB_PORT 5432
-            write_env_line WAIT_FOR_DB 1
-            write_env_line POSTGRES_DB "$POSTGRES_DB"
-            write_env_line POSTGRES_USER "$POSTGRES_USER"
-            write_env_line POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
-            write_env_line DJANGO_SUPERUSER_USERNAME "$DJANGO_SUPERUSER_USERNAME"
-            write_env_line DJANGO_SUPERUSER_EMAIL "${DJANGO_SUPERUSER_EMAIL:-}"
-            write_env_line DJANGO_SUPERUSER_PASSWORD "$DJANGO_SUPERUSER_PASSWORD"
-            write_env_line DATA_TOOLS_PASSWORD "${DATA_TOOLS_PASSWORD:-}"
-            write_env_line ENABLE_DESTRUCTIVE_DATA_TOOLS 0
-            write_env_line BACKUP_RETENTION_DAYS 30
-            write_env_line APP_IMAGE cadet-journal:web
-            write_env_line RELEASE_REVISION "$DEPLOY_SHA"
-
-            mv "$env_tmp" .env.prod
-            env_tmp=""
-            trap - EXIT HUP INT TERM
-
-            echo "=== Запуск production-стека ==="
-            chmod +x ./scripts/run-prod.sh
-            ./scripts/run-prod.sh
-
-            echo "=== Очистка старых Docker-образов ==="
-            $DOCKER_CMD image prune -f || true
-
-            echo "=== Деплой завершён успешно ==="
+          ssh "${ssh_options[@]}" \
+            "$SSH_USER@$SSH_HOST" \
+            "$remote_command" < scripts/remote-deploy.sh

@@ -60,7 +60,7 @@ trap show_failure_logs ERR
 
 "${COMPOSE[@]}" config --quiet
 "${COMPOSE[@]}" pull db redis backup
-"${COMPOSE[@]}" build web
+"${COMPOSE[@]}" build --pull web
 "${COMPOSE[@]}" up \
   -d \
   --remove-orphans \
