@@ -60,6 +60,19 @@ def _env_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _env_nonnegative_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ImproperlyConfigured(f'{name} must be a non-negative integer.') from exc
+    if value < 0:
+        raise ImproperlyConfigured(f'{name} must be a non-negative integer.')
+    return value
+
+
 DEBUG = _env_bool('DEBUG', not IS_PRODUCTION_ENV)
 SECRET_KEY = os.getenv('SECRET_KEY', '')
 if not SECRET_KEY:
@@ -277,6 +290,13 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
         'HOST': os.getenv('DB_HOST', ''),
         'PORT': os.getenv('DB_PORT', ''),
+        # Persistent PostgreSQL connections reduce connection setup overhead in production.
+        # Development and tests keep the default short-lived connections.
+        'CONN_MAX_AGE': _env_nonnegative_int(
+            'DB_CONN_MAX_AGE',
+            60 if IS_PRODUCTION_ENV else 0,
+        ),
+        'CONN_HEALTH_CHECKS': IS_PRODUCTION_ENV,
     }
 }
 

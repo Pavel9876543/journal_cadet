@@ -1134,6 +1134,10 @@ class StudentEnrollment(models.Model):
             models.Index(fields=['academic_year', 'group'], name='enroll_year_group_idx'),
             models.Index(fields=['student', 'academic_year'], name='enroll_student_year_idx'),
             models.Index(fields=['is_active'], name='enroll_active_idx'),
+            models.Index(
+                fields=['academic_year', 'is_active', 'group'],
+                name='enroll_year_active_group_idx',
+            ),
         ]
 
     def __str__(self):
@@ -1372,6 +1376,10 @@ class StudentSubject(models.Model):
             models.Index(fields=['student', 'is_active'], name='student_subject_active_idx'),
             models.Index(fields=['teacher', 'subject'], name='student_subject_teacher_idx'),
             models.Index(fields=['subject', 'student'], name='subject_student_idx'),
+            models.Index(
+                fields=['academic_year', 'is_active', 'student'],
+                name='stud_subj_year_active_idx',
+            ),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -1603,6 +1611,10 @@ class Grade(models.Model):
             models.Index(fields=['subject', '-date'], name='grade_subject_date_idx'),
             models.Index(fields=['academic_year', 'subject'], name='grade_year_subject_idx'),
             models.Index(fields=['date'], name='grade_date_idx'),
+            models.Index(
+                fields=['enrollment', 'subject', '-date'],
+                name='grade_enroll_subj_date_idx',
+            ),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -1828,6 +1840,10 @@ class SubjectResult(models.Model):
             models.Index(fields=['academic_year', 'subject'], name='result_year_subject_idx'),
             models.Index(fields=['student', 'academic_year'], name='result_student_year_idx'),
             models.Index(fields=['subject', 'student'], name='result_subject_student_idx'),
+            models.Index(
+                fields=['enrollment', 'subject'],
+                name='result_enroll_subject_idx',
+            ),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -1966,6 +1982,10 @@ class AssessmentGroup(models.Model):
         indexes = [
             models.Index(fields=['academic_year', 'subject'], name='assess_group_year_subject_idx'),
             models.Index(fields=['is_active', 'sort_order'], name='assess_group_active_order_idx'),
+            models.Index(
+                fields=['academic_year', 'is_active', 'sort_order'],
+                name='assess_group_year_active_idx',
+            ),
         ]
 
     def __str__(self) -> str:
@@ -2686,6 +2706,12 @@ class PasswordRecoveryContact(models.Model):
         verbose_name = 'Контакт администратора'
         verbose_name_plural = 'Настройки восстановления пароля'
         ordering = ['display_order', 'name', 'pk']
+        indexes = [
+            models.Index(
+                fields=['is_active', 'display_order'],
+                name='recovery_active_order_idx',
+            ),
+        ]
 
     def __str__(self) -> str:
         return f'{self.name}: {self.phone}'
@@ -2980,6 +3006,10 @@ class CourseApplication(models.Model):
             models.Index(fields=['student_phone'], name='course_app_phone_idx'),
             models.Index(fields=['academic_year', 'student_phone'], name='course_app_year_phone_idx'),
             models.Index(fields=['generated_login'], name='course_app_login_idx'),
+            models.Index(
+                fields=['academic_year', 'status', '-registration_date'],
+                name='course_app_year_status_idx',
+            ),
         ]
         constraints = [
             models.UniqueConstraint(

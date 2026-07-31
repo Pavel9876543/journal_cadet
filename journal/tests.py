@@ -6946,6 +6946,39 @@ class CacheConfigurationTests(SimpleTestCase):
         self.assertIn('django.core.cache.backends.dummy.DummyCache', source)
 
 
+class PerformanceConfigurationTests(SimpleTestCase):
+    def test_frequent_queries_have_composite_indexes(self):
+        expected_indexes = {
+            StudentEnrollment: 'enroll_year_active_group_idx',
+            StudentSubject: 'stud_subj_year_active_idx',
+            Grade: 'grade_enroll_subj_date_idx',
+            SubjectResult: 'result_enroll_subject_idx',
+            AssessmentGroup: 'assess_group_year_active_idx',
+            PasswordRecoveryContact: 'recovery_active_order_idx',
+            CourseApplication: 'course_app_year_status_idx',
+        }
+
+        for model, expected_name in expected_indexes.items():
+            with self.subTest(model=model.__name__):
+                self.assertIn(expected_name, {index.name for index in model._meta.indexes})
+
+    def test_production_compose_provides_healthy_redis(self):
+        compose = Path('docker-compose.prod.yml').read_text(encoding='utf-8')
+        requirements = Path('requirements.txt').read_text(encoding='utf-8')
+
+        self.assertIn('redis:7.4.10-alpine', compose)
+        self.assertIn('["CMD", "redis-cli", "ping"]', compose)
+        self.assertIn('allkeys-lru', compose)
+        self.assertIn('redis==7.4.0', requirements)
+
+    def test_database_connection_reuse_is_production_only(self):
+        source = Path('config/settings.py').read_text(encoding='utf-8')
+
+        self.assertIn("'DB_CONN_MAX_AGE'", source)
+        self.assertIn('60 if IS_PRODUCTION_ENV else 0', source)
+        self.assertIn("'CONN_HEALTH_CHECKS': IS_PRODUCTION_ENV", source)
+
+
 class SeedDataCommandTests(TestCase):
     @staticmethod
     def run_seed_data():
