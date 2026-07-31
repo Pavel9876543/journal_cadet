@@ -4065,13 +4065,14 @@ class PasswordRecoveryContactAdmin(JournalAdminDescriptionMixin, admin.ModelAdmi
         'name',
         'phone',
         'messengers',
+        'messenger_username',
         'is_active',
         'display_order',
         'updated_at',
     )
     list_editable = ('is_active', 'display_order')
     list_filter = ('is_active', 'messengers')
-    search_fields = ('name', 'phone', 'messengers')
+    search_fields = ('name', 'phone', 'messengers', 'messenger_username')
     readonly_fields = ('updated_at',)
     ordering = ('display_order', 'name')
     fieldsets = (
@@ -4080,6 +4081,7 @@ class PasswordRecoveryContactAdmin(JournalAdminDescriptionMixin, admin.ModelAdmi
                 'name',
                 'phone',
                 'messengers',
+                'messenger_username',
                 'is_active',
                 'display_order',
                 'updated_at',

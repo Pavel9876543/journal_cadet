@@ -1,4 +1,5 @@
 from datetime import date
+from urllib.parse import quote
 from hashlib import blake2b
 
 from django.conf import settings
@@ -2579,6 +2580,15 @@ class PasswordRecoveryContact(models.Model):
         max_length=255,
         help_text='Укажите один или несколько мессенджеров, например: Telegram, WhatsApp.',
     )
+    messenger_username = models.CharField(
+        'Имя пользователя в мессенджере',
+        max_length=100,
+        blank=True,
+        help_text=(
+            'Укажите имя без символа @. Оно используется для прямой ссылки, '
+            'когда выбранный мессенджер поддерживает имена пользователей.'
+        ),
+    )
     is_active = models.BooleanField('Показывать пользователям', default=True)
     display_order = models.PositiveSmallIntegerField('Порядок показа', default=0)
     updated_at = models.DateTimeField('Дата изменения', auto_now=True)
@@ -2599,16 +2609,48 @@ class PasswordRecoveryContact(models.Model):
         if self.phone:
             self.phone = normalize_phone_number(self.phone)
         if self.messengers:
-            self.messengers = self.messengers.strip()
+            self.messengers = ', '.join(
+                item.strip()
+                for item in self.messengers.split(',')
+                if item.strip()
+            )
+        if self.messenger_username:
+            self.messenger_username = self.messenger_username.strip().lstrip('@')
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
 
     @property
+    def phone_digits(self) -> str:
+        return ''.join(character for character in self.phone if character.isdigit())
+
+    @property
     def phone_uri(self) -> str:
-        digits = ''.join(character for character in self.phone if character.isdigit())
-        return f'tel:+{digits}' if digits else ''
+        return f'tel:+{self.phone_digits}' if self.phone_digits else ''
+
+    @property
+    def messenger_links(self) -> list[dict[str, str]]:
+        username = quote(self.messenger_username, safe='._-') if self.messenger_username else ''
+        digits = self.phone_digits
+        links = []
+        for raw_name in self.messengers.split(','):
+            name = raw_name.strip()
+            if not name:
+                continue
+            normalized = name.casefold().replace('ё', 'е')
+            if 'telegram' in normalized or normalized in {'tg', 'телеграм'}:
+                url = f'https://t.me/{username}' if username else (
+                    f'tg://resolve?phone={digits}' if digits else self.phone_uri
+                )
+            elif 'whatsapp' in normalized or 'ватсап' in normalized or 'вотсап' in normalized:
+                url = f'https://wa.me/{digits}' if digits else self.phone_uri
+            elif 'viber' in normalized or 'вайбер' in normalized:
+                url = f'viber://chat?number=%2B{digits}' if digits else self.phone_uri
+            else:
+                url = self.phone_uri
+            links.append({'name': name, 'url': url})
+        return links
 
 
 class AccountProfile(models.Model):

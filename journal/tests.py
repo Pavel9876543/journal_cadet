@@ -5681,6 +5681,7 @@ class PasswordRecoveryViewTests(TestCase):
             name='Первый администратор',
             phone='+7 (999) 111-22-33',
             messengers='Telegram, MAX',
+            messenger_username='first_admin',
             display_order=10,
         )
         PasswordRecoveryContact.objects.create(
@@ -5696,7 +5697,9 @@ class PasswordRecoveryViewTests(TestCase):
         self.assertEqual(list(response.context['contacts']), [first, second])
         self.assertContains(response, 'Первый администратор')
         self.assertContains(response, '+7 (999) 111-22-33')
-        self.assertContains(response, 'Telegram, MAX')
+        self.assertContains(response, 'Telegram')
+        self.assertContains(response, 'href="https://t.me/first_admin"')
+        self.assertContains(response, '@first_admin')
         self.assertContains(response, 'Второй администратор')
         self.assertNotContains(response, 'Скрытый администратор')
 
@@ -5711,12 +5714,16 @@ class PasswordRecoveryViewTests(TestCase):
             name='  Администратор  ',
             phone='8 999 123 45 67',
             messengers='  Telegram, WhatsApp  ',
+            messenger_username='  @journal_admin  ',
         )
 
         self.assertEqual(contact.name, 'Администратор')
         self.assertEqual(contact.phone, '+7 (999) 123-45-67')
         self.assertEqual(contact.messengers, 'Telegram, WhatsApp')
+        self.assertEqual(contact.messenger_username, 'journal_admin')
         self.assertEqual(contact.phone_uri, 'tel:+79991234567')
+        self.assertEqual(contact.messenger_links[0]['url'], 'https://t.me/journal_admin')
+        self.assertEqual(contact.messenger_links[1]['url'], 'https://wa.me/79991234567')
 
 
 class CourseRegistrationViewTests(JournalTestDataMixin, TestCase):

@@ -94,12 +94,14 @@ class Command(BaseCommand):
                 'name': 'Дежурный администратор',
                 'phone': '+7 (900) 000-00-01',
                 'messengers': 'Telegram, WhatsApp',
+                'messenger_username': 'cadet_journal_admin',
                 'display_order': 10,
             },
             {
                 'name': 'Учебная часть',
                 'phone': '+7 (900) 000-00-02',
                 'messengers': 'Telegram',
+                'messenger_username': 'cadet_study_office',
                 'display_order': 20,
             },
         ):
