@@ -280,6 +280,31 @@ DATABASES = {
     }
 }
 
+# Кэш намеренно отключён во всех непроизводственных окружениях.
+# Это исключает устаревшие данные во время разработки и делает поведение тестов
+# детерминированным. В production используется отдельная база Redis.
+CACHE_ENABLED = IS_PRODUCTION_ENV
+if CACHE_ENABLED:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': os.getenv('REDIS_URL', 'redis://redis:6379/1'),
+            'TIMEOUT': _env_positive_int('CACHE_DEFAULT_TIMEOUT', 300),
+            'OPTIONS': {
+                'socket_connect_timeout': 3,
+                'socket_timeout': 3,
+                'retry_on_timeout': True,
+            },
+            'KEY_PREFIX': os.getenv('CACHE_KEY_PREFIX', 'cadet-journal'),
+        },
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        },
+    }
+
 DATA_TOOLS_PASSWORD = os.getenv('pas_key_data') or os.getenv('DATA_TOOLS_PASSWORD', '')
 ENABLE_DESTRUCTIVE_DATA_TOOLS = _env_bool(
     'ENABLE_DESTRUCTIVE_DATA_TOOLS',

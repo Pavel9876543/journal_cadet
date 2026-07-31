@@ -6929,6 +6929,23 @@ class UserCreationCredentialTests(JournalTestDataMixin, TestCase):
 
 
 @tag('slow', 'seed')
+class CacheConfigurationTests(SimpleTestCase):
+    def test_cache_is_disabled_in_non_production_settings(self):
+        self.assertFalse(settings.CACHE_ENABLED)
+        self.assertEqual(
+            settings.CACHES['default']['BACKEND'],
+            'django.core.cache.backends.dummy.DummyCache',
+        )
+
+    def test_production_cache_source_uses_redis(self):
+        source = Path('config/settings.py').read_text(encoding='utf-8')
+
+        self.assertIn('CACHE_ENABLED = IS_PRODUCTION_ENV', source)
+        self.assertIn('django.core.cache.backends.redis.RedisCache', source)
+        self.assertIn("os.getenv('REDIS_URL', 'redis://redis:6379/1')", source)
+        self.assertIn('django.core.cache.backends.dummy.DummyCache', source)
+
+
 class SeedDataCommandTests(TestCase):
     @staticmethod
     def run_seed_data():
