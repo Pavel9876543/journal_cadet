@@ -141,3 +141,300 @@
     }
 
 }
+
+/* Телефон: общая доводка кабинета и административной панели. */
+@media (max-width: 767.98px),
+       (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
+    :root {
+        --journal-mobile-gap: 10px;
+        --journal-mobile-radius: 12px;
+        --journal-mobile-control-height: 44px;
+    }
+
+    body {
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
+
+    .main,
+    .topbar-inner,
+    .wrap,
+    .auth-shell,
+    body.change-form #content,
+    body.change-list #content,
+    body.dashboard #content {
+        padding-left: max(10px, env(safe-area-inset-left));
+        padding-right: max(10px, env(safe-area-inset-right));
+    }
+
+    .card,
+    .panel,
+    .module,
+    .table-panel,
+    .quick-entry,
+    .journal-dashboard-card,
+    details.workspace-section {
+        max-width: 100%;
+        border-radius: var(--journal-mobile-radius);
+        box-sizing: border-box;
+    }
+
+    .filter-form,
+    .grade-form,
+    .workspace-search-bar,
+    .journal-year-selector__form,
+    .form-row,
+    .aligned .form-row,
+    .submit-row,
+    .table-actions {
+        gap: var(--journal-mobile-gap);
+    }
+
+    .topbar-actions,
+    .object-tools,
+    .submit-row,
+    .table-actions,
+    .related-widget-wrapper {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+    }
+
+    .related-widget-wrapper {
+        gap: 6px;
+    }
+
+    .related-widget-wrapper > select,
+    .related-widget-wrapper > .select2-container {
+        flex: 1 1 100%;
+    }
+
+    .related-widget-wrapper-link,
+    .related-lookup,
+    .selector-add,
+    .selector-remove {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        flex: 1 1 44px;
+        min-width: 44px;
+        min-height: var(--journal-mobile-control-height);
+        box-sizing: border-box;
+    }
+
+    body.change-form .aligned label,
+    body.change-form .form-row > div,
+    body.change-form .form-row .flex-container,
+    body.change-form .form-row .fieldBox {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
+    body.change-form .aligned label {
+        float: none;
+        display: block;
+        margin-bottom: 6px;
+    }
+
+    body.change-form .help,
+    body.change-form .helptext,
+    body.change-form ul.errorlist,
+    body.change-form .readonly {
+        margin-left: 0 !important;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+    }
+
+    body.change-form .submit-row,
+    .table-actions {
+        position: sticky;
+        bottom: 0;
+        z-index: 30;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    body.change-form .submit-row input,
+    body.change-form .submit-row a,
+    .table-actions button,
+    .table-actions .button {
+        flex: 1 1 100%;
+        min-height: var(--journal-mobile-control-height);
+    }
+
+    body.change-form .inline-group,
+    body.change-form .inline-related,
+    body.change-form fieldset.module,
+    body.change-list #changelist,
+    body.change-list #toolbar,
+    body.change-list .actions {
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
+    body.change-list #toolbar form,
+    body.change-list .actions,
+    body.change-list .actions label {
+        display: flex;
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 8px;
+    }
+
+    body.change-list #searchbar,
+    body.change-list .actions select,
+    body.change-list .actions button {
+        flex: 1 1 100%;
+    }
+
+    #header,
+    #branding,
+    #user-tools,
+    .breadcrumbs,
+    #nav-sidebar,
+    .main > #nav-sidebar,
+    .toggle-nav-sidebar {
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
+    #header {
+        min-height: 0;
+        height: auto;
+        align-items: stretch;
+        flex-wrap: wrap;
+    }
+
+    #branding,
+    #user-tools {
+        width: 100%;
+        margin: 0;
+    }
+
+    #user-tools {
+        white-space: normal;
+        line-height: 1.5;
+    }
+
+    #nav-sidebar {
+        position: static;
+        width: 100%;
+        max-height: min(52dvh, 420px);
+        overflow: auto;
+    }
+
+    .messagelist,
+    .errornote,
+    ul.errorlist,
+    .journal-save-toast,
+    .save-toast {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+
+    .responsive-admin-modal,
+    .responsive-admin-modal__dialog,
+    dialog,
+    [role="dialog"] {
+        max-width: calc(100vw - 20px) !important;
+        max-height: calc(100dvh - 20px) !important;
+        margin: auto;
+        box-sizing: border-box;
+    }
+}
+
+/* Телефон в портретной ориентации: одна спокойная вертикальная колонка. */
+@media (max-width: 767.98px) and (orientation: portrait) {
+    .journal-dashboard-hero,
+    .workspace-heading,
+    .section-head,
+    .table-panel-head,
+    .quick-entry-head,
+    details.workspace-section > summary {
+        gap: 8px;
+    }
+
+    .summary-grid,
+    .journal-stat-grid,
+    .journal-link-grid,
+    .journal-dashboard-layout {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .object-tools,
+    .topbar-actions,
+    .journal-tabs {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        width: 100%;
+        gap: 8px;
+    }
+
+    .object-tools li,
+    .object-tools a,
+    .journal-tabs a,
+    .journal-tabs button {
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    body.change-form .inline-related h3,
+    body.change-form .inline-group h2,
+    body.change-list #changelist-filter h2,
+    body.change-list #changelist-filter h3 {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+    }
+}
+
+/* Телефон в альбомной ориентации: используем ширину, но сохраняем touch-эргономику. */
+@media (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
+    .filter-form,
+    .grade-form,
+    .workspace-search-bar,
+    .journal-year-selector__form,
+    .summary-grid,
+    .journal-stat-grid,
+    .journal-link-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .form-action,
+    .filter-actions,
+    .grade-actions,
+    .workspace-search-bar__actions {
+        grid-column: 1 / -1;
+    }
+
+    .topbar-inner,
+    .workspace-heading,
+    .section-head,
+    .table-panel-head,
+    .journal-dashboard-hero {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    body.change-form .submit-row input,
+    body.change-form .submit-row a,
+    .table-actions button,
+    .table-actions .button {
+        flex: 1 1 calc(50% - 8px);
+    }
+
+    .responsive-admin-modal,
+    .responsive-admin-modal__dialog,
+    dialog,
+    [role="dialog"] {
+        max-width: calc(100vw - 32px) !important;
+        max-height: calc(100dvh - 16px) !important;
+    }
+}

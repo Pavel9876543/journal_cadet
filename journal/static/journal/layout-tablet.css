@@ -67,3 +67,145 @@
     }
 
 }
+
+/* Планшет: общая доводка форм, админки и кабинета. */
+@media (min-width: 768px) and (max-width: 1023.98px) {
+    :root {
+        --journal-tablet-gap: 14px;
+        --journal-tablet-control-height: 42px;
+    }
+
+    body {
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
+
+    .main,
+    .topbar-inner,
+    .wrap,
+    body.change-form #content,
+    body.change-list #content,
+    body.dashboard #content {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+    }
+
+    input,
+    select,
+    textarea,
+    button,
+    .button,
+    .btn {
+        min-height: var(--journal-tablet-control-height);
+    }
+
+    .related-widget-wrapper {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .related-widget-wrapper > select,
+    .related-widget-wrapper > .select2-container {
+        flex: 1 1 320px;
+    }
+
+    .related-widget-wrapper-link,
+    .related-lookup {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        min-width: var(--journal-tablet-control-height);
+        min-height: var(--journal-tablet-control-height);
+    }
+
+    body.change-form .submit-row {
+        position: sticky;
+        bottom: 0;
+        z-index: 25;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    body.change-form .submit-row input,
+    body.change-form .submit-row a {
+        flex: 1 1 220px;
+    }
+
+    #header {
+        height: auto;
+        min-height: 0;
+        flex-wrap: wrap;
+    }
+
+    #nav-sidebar {
+        max-width: min(320px, 38vw);
+    }
+
+    .responsive-admin-modal,
+    .responsive-admin-modal__dialog,
+    dialog,
+    [role="dialog"] {
+        max-width: calc(100vw - 48px) !important;
+        max-height: calc(100dvh - 48px) !important;
+        margin: auto;
+        box-sizing: border-box;
+    }
+}
+
+@media (min-width: 768px) and (max-width: 1023.98px) and (orientation: portrait) {
+    .filter-form,
+    .grade-form,
+    .workspace-search-bar,
+    .journal-year-selector__form,
+    .journal-link-grid,
+    .journal-dashboard-layout {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: var(--journal-tablet-gap);
+    }
+
+    .form-action,
+    .filter-actions,
+    .grade-actions,
+    .workspace-search-bar__actions {
+        grid-column: 1 / -1;
+    }
+
+    .summary-grid,
+    .journal-stat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 768px) and (max-width: 1023.98px) and (orientation: landscape) {
+    .filter-form,
+    .grade-form,
+    .workspace-search-bar,
+    .journal-year-selector__form {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        gap: var(--journal-tablet-gap);
+    }
+
+    .summary-grid,
+    .journal-stat-grid,
+    .journal-link-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .journal-dashboard-layout {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .form-action,
+    .filter-actions,
+    .grade-actions,
+    .workspace-search-bar__actions {
+        grid-column: auto;
+        align-self: end;
+    }
+}

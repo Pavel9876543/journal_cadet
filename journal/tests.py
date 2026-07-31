@@ -4231,6 +4231,11 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('.grade-form > *', mobile_css)
         self.assertIn('.field > .select-search-input', mobile_css)
         self.assertIn('min-height: 100dvh;', mobile_css)
+        self.assertIn('env(safe-area-inset-bottom)', mobile_css)
+        self.assertIn('(max-width: 767.98px) and (orientation: portrait)', mobile_css)
+        self.assertIn('grid-template-columns: repeat(2, minmax(0, 1fr)) !important;', mobile_css)
+        self.assertIn('body.change-form .submit-row', mobile_css)
+        self.assertIn('.related-widget-wrapper-link', mobile_css)
         self.assertNotIn('max-height: 500px', mobile_css)
         self.assertIn(
             '(max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse)',
@@ -4254,6 +4259,10 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         self.assertIn('(min-width: 768px) and (max-width: 1023.98px)', tablet_css)
         self.assertIn('grid-template-columns: minmax(0, 1fr) !important;', tablet_css)
         self.assertIn('.filter-form > *', tablet_css)
+        self.assertIn('(orientation: portrait)', tablet_css)
+        self.assertIn('(orientation: landscape)', tablet_css)
+        self.assertIn('repeat(3, minmax(0, 1fr))', tablet_css)
+        self.assertIn('env(safe-area-inset-bottom)', tablet_css)
 
         overflow_css = Path(
             'journal/static/journal/responsive_overflow.css'
