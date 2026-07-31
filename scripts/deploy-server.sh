@@ -3,11 +3,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-git fetch origin
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-git checkout "${CURRENT_BRANCH}"
-git pull --ff-only origin "${CURRENT_BRANCH}"
+if [[ -n "$(git status --short)" ]]; then
+  echo "Отказ: рабочее дерево содержит незакоммиченные изменения." >&2
+  exit 1
+fi
 
-./scripts/run-prod.sh
+cat <<'WARNING'
+Этот скрипт не получает новый код и не заменяет GitHub CD.
+Он только повторно собирает уже проверенный и находящийся на сервере commit.
+Новые версии должны попадать на production через CI -> CD в GitHub Actions.
+WARNING
 
-echo "Деплой завершен в ветке ${CURRENT_BRANCH}."
+RELEASE_REVISION="$(git rev-parse HEAD)" ./scripts/run-prod.sh

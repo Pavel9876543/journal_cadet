@@ -4,14 +4,35 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     env_file:
       - .env.prod
     environment:
+      DJANGO_ENV: production
+      DEBUG: "0"
+      ALLOW_EMBEDDED_PREVIEW: "0"
+      SECURE_SSL_REDIRECT: "1"
+      SESSION_COOKIE_SECURE: "1"
+      CSRF_COOKIE_SECURE: "1"
+      SECURE_HSTS_SECONDS: "31536000"
+      SECURE_HSTS_INCLUDE_SUBDOMAINS: "1"
+      SECURE_HSTS_PRELOAD: "1"
+      USE_X_FORWARDED_PROTO: "1"
+      TRUST_X_FORWARDED_FOR: "1"
+      ENABLE_DESTRUCTIVE_DATA_TOOLS: "0"
+      MIGRATION_MODE: check
       REDIS_URL: redis://redis:6379/1
+      RELEASE_REVISION: ${RELEASE_REVISION:-manual}
     depends_on:
       redis:
         condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   redis:
     image: redis:7.4.10-alpine
@@ -22,24 +43,43 @@ services:
       - --appendonly
       - "no"
       - --maxmemory
-      - 256mb
+      - ${REDIS_MAXMEMORY:-256mb}
       - --maxmemory-policy
-      - allkeys-lru
+      - ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 5s
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /data:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - backend
 
   backup:
     image: postgres:16-alpine
     env_file:
       - .env.prod
     environment:
+      DB_NAME: ${POSTGRES_DB:-journal_db}
+      DB_USER: ${POSTGRES_USER:-journal_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.prod}
       DB_HOST: db
       DB_PORT: "5432"
-      BACKUP_INTERVAL_SECONDS: "86400"
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
     depends_on:
       db:
         condition: service_healthy
@@ -48,6 +88,20 @@ services:
       - ./docker/backup-postgres.sh:/usr/local/bin/backup-postgres:ro
     command: ["/usr/local/bin/backup-postgres", "--loop"]
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - backend
 
 volumes:
   pg_backups:

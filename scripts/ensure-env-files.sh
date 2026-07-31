@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [[ $# -ne 1 ]]; then
-  echo "Использование: $0 <.env.dev|.env.prod>"
+  echo "Использование: $0 <.env.dev|.env.prod|.env.test>"
   exit 1
 fi
 
@@ -13,9 +13,10 @@ TARGET_ENV_FILE="$1"
 case "$TARGET_ENV_FILE" in
   .env.dev) EXAMPLE_ENV_FILE=".env.dev.example" ;;
   .env.prod) EXAMPLE_ENV_FILE=".env.prod.example" ;;
+  .env.test) EXAMPLE_ENV_FILE=".env.test.example" ;;
   *)
     echo "Неподдерживаемый env-файл: $TARGET_ENV_FILE"
-    echo "Допустимые значения: .env.dev или .env.prod"
+    echo "Допустимые значения: .env.dev, .env.prod или .env.test"
     exit 1
     ;;
 esac

@@ -3,18 +3,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: cadet-journal:web
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     env_file:
       - .env.dev
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
     environment:
+      DJANGO_ENV: development
       DEBUG: "1"
       MIGRATION_MODE: create
+      MAKEMIGRATIONS_APP: journal
 
   db:
     ports:
-      - "5432:5432"
+      - "${POSTGRES_EXPOSE_PORT:-5432}:5432"

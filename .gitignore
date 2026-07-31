@@ -12,6 +12,7 @@ logs.txt
 .env
 .env.dev
 .env.prod
+.env.test.local
 .idea
 staticfiles/
 

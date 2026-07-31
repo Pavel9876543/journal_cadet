@@ -1,4 +1,10 @@
-from .settings import *  # noqa: F403
+import os
+
+
+os.environ.setdefault('DJANGO_ENV', 'test')
+os.environ.setdefault('DJANGO_ENV_FILE', '.env.test')
+
+from .settings import *  # noqa: E402,F403
 
 
 # Password semantics are covered by the suite; production-strength hashing only
@@ -6,4 +12,3 @@ from .settings import *  # noqa: F403
 PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.MD5PasswordHasher',
 ]
-

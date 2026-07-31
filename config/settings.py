@@ -23,15 +23,27 @@ def _load_env_file(env_filename: str) -> None:
 # Явные переменные окружения всегда имеют приоритет над значениями из файла.
 _load_env_file('.env')
 
+DJANGO_ENV = os.getenv('DJANGO_ENV', 'development').strip().lower()
+SUPPORTED_ENVIRONMENTS = {'development', 'dev', 'test', 'testing', 'production', 'prod'}
+if DJANGO_ENV not in SUPPORTED_ENVIRONMENTS:
+    raise ImproperlyConfigured(
+        'DJANGO_ENV must be one of: development, dev, test, testing, production, prod.'
+    )
+
 env_file = os.getenv('DJANGO_ENV_FILE')
 if env_file:
     _load_env_file(env_file)
-elif os.getenv('DJANGO_ENV', '').lower() in {'production', 'prod'}:
+elif DJANGO_ENV in {'production', 'prod'}:
     _load_env_file('.env.prod')
+elif DJANGO_ENV in {'test', 'testing'}:
+    _load_env_file('.env.test')
 else:
     _load_env_file('.env.dev')
 
-IS_PRODUCTION_ENV = os.getenv('DJANGO_ENV', '').lower() in {'production', 'prod'}
+# DJANGO_ENV may be supplied by the selected env file itself.
+DJANGO_ENV = os.getenv('DJANGO_ENV', DJANGO_ENV).strip().lower()
+IS_PRODUCTION_ENV = DJANGO_ENV in {'production', 'prod'}
+IS_TEST_ENV = DJANGO_ENV in {'test', 'testing'}
 RELEASE_REVISION = os.getenv('RELEASE_REVISION', '').strip()
 
 
@@ -343,7 +355,7 @@ AUTHENTICATION_BACKENDS = [
 ]
 
 LANGUAGE_CODE = 'ru-ru'
-TIME_ZONE = 'UTC'
+TIME_ZONE = os.getenv('TIME_ZONE', 'UTC')
 USE_I18N = True
 USE_TZ = True
 
@@ -383,7 +395,7 @@ CSRF_FAILURE_VIEW = 'journal.views.csrf_failure_view'
 SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', False)
 SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', not DEBUG)
 CSRF_COOKIE_SECURE = _env_bool('CSRF_COOKIE_SECURE', not DEBUG)
-SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_SECONDS = _env_nonnegative_int('SECURE_HSTS_SECONDS', 0)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
 SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', False)
 

@@ -4,8 +4,16 @@ set -eu
 if [ "${WAIT_FOR_DB:-0}" = "1" ]; then
   DB_HOST="${DB_HOST:-db}"
   DB_PORT="${DB_PORT:-5432}"
+  DB_WAIT_TIMEOUT="${DB_WAIT_TIMEOUT:-60}"
+  elapsed=0
+
   echo "Waiting for database at ${DB_HOST}:${DB_PORT}..."
   until nc -z "$DB_HOST" "$DB_PORT"; do
+    elapsed=$((elapsed + 1))
+    if [ "$elapsed" -ge "$DB_WAIT_TIMEOUT" ]; then
+      echo "Database did not become available within ${DB_WAIT_TIMEOUT} seconds." >&2
+      exit 1
+    fi
     sleep 1
   done
 fi
@@ -31,17 +39,18 @@ case "$MIGRATION_MODE" in
     ;;
 esac
 
-# This command always targets the runtime database and therefore runs only
-# after WAIT_FOR_DB has confirmed that PostgreSQL accepts connections.
 python manage.py migrate --noinput
 python manage.py ensure_superuser
 
-STATIC_ROOT="${STATIC_ROOT:-/var/lib/cadet-journal/staticfiles}"
-if ! mkdir -p "$STATIC_ROOT" 2>/dev/null || [ ! -w "$STATIC_ROOT" ]; then
-  echo "Static files directory is not writable: $STATIC_ROOT" >&2
-  echo "Do not place STATIC_ROOT inside a Windows bind mount; use a container-writable path." >&2
-  exit 1
-fi
-python manage.py collectstatic --noinput --clear
+# Static files are generated during the image build. The development bind
+# mount intentionally hides them, so the manifest is mandatory only in production.
+case "${DJANGO_ENV:-development}" in
+  production|prod)
+    if [ ! -f "${STATIC_ROOT:-/app/staticfiles}/staticfiles.json" ]; then
+      echo "Static manifest is missing from the production image." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 exec "$@"

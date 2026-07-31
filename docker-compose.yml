@@ -2,34 +2,63 @@ name: cadet-journal
 
 services:
   web:
-    image: ${APP_IMAGE:-cadet-journal:web}
+    image: cadet-journal:${RELEASE_REVISION:-local}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
+    init: true
     environment:
-      STATIC_ROOT: /var/lib/cadet-journal/staticfiles
+      DB_ENGINE: django.db.backends.postgresql
+      DB_NAME: ${POSTGRES_DB:-journal_db}
+      DB_USER: ${POSTGRES_USER:-journal_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the selected env file}
+      DB_HOST: db
+      DB_PORT: "5432"
+      WAIT_FOR_DB: "1"
+      STATIC_ROOT: /app/staticfiles
     healthcheck:
       test: ["CMD", "python", "/app/docker/healthcheck.py"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    networks:
+      - backend
 
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-journal_db}
       POSTGRES_USER: ${POSTGRES_USER:-journal_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the selected env file}
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-journal_user} -d ${POSTGRES_DB:-journal_db}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    networks:
+      - backend
 
 volumes:
   pg_data:
+
+networks:
+  backend:
+    driver: bridge
