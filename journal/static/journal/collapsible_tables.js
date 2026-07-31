@@ -38,14 +38,19 @@
     function updateControls(target) {
         var details = detailsFor(target);
         var allClosed = details.length > 0 && details.every(function (item) { return !item.open; });
-        document.querySelectorAll('[data-collapse-target="' + target.id + '"]').forEach(function (control) {
-            var action = allClosed ? 'expand' : 'collapse';
-            control.dataset.collapseAction = action;
-            control.disabled = details.length === 0;
-            control.textContent = action === 'expand'
-                ? (control.dataset.expandLabel || 'Развернуть все таблицы')
-                : (control.dataset.collapseLabel || 'Свернуть все таблицы');
-        });
+        Array.prototype.forEach.call(
+            document.querySelectorAll('[data-collapse-target="' + target.id + '"]'),
+            function (control) {
+                var action = allClosed ? 'expand' : 'collapse';
+                control.dataset.collapseAction = action;
+                control.disabled = details.length === 0;
+                control.setAttribute('aria-controls', target.id);
+                control.setAttribute('aria-expanded', allClosed ? 'false' : 'true');
+                control.textContent = action === 'expand'
+                    ? (control.dataset.expandLabel || 'Развернуть все таблицы')
+                    : (control.dataset.collapseLabel || 'Свернуть все таблицы');
+            }
+        );
     }
 
     function initializeGroup(target) {
@@ -63,21 +68,32 @@
             });
         });
 
-        document.querySelectorAll('[data-collapse-target="' + target.id + '"]').forEach(function (button) {
-            button.addEventListener('click', function () {
-                var open = button.dataset.collapseAction === 'expand';
-                details.forEach(function (item) {
-                    item.open = open;
-                    writeState(item);
+        Array.prototype.forEach.call(
+            document.querySelectorAll('[data-collapse-target="' + target.id + '"]'),
+            function (button) {
+                button.addEventListener('click', function () {
+                    // Derive the next action from the tables themselves. This
+                    // keeps the only bulk button usable even when its data
+                    // attribute came from an older cached page.
+                    var open = details.length > 0 && details.every(function (item) {
+                        return !item.open;
+                    });
+                    details.forEach(function (item) {
+                        item.open = open;
+                        writeState(item);
+                    });
+                    updateControls(target);
                 });
-                updateControls(target);
-            });
-        });
+            }
+        );
         updateControls(target);
     }
 
     function start() {
-        document.querySelectorAll('[data-collapsible-group][id]').forEach(initializeGroup);
+        Array.prototype.forEach.call(
+            document.querySelectorAll('[data-collapsible-group][id]'),
+            initializeGroup
+        );
     }
 
     if (document.readyState === 'loading') {

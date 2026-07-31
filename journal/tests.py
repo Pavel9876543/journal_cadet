@@ -7306,6 +7306,20 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             is_auto_calculated=True,
         ).exists())
 
+        self.client.force_login(orchestra_student.user)
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [section['subject'] for section in response.context['assessment_subject_sections']],
+            [orchestra_subject],
+        )
+        self.assertContains(response, orchestra_item.title)
+        self.assertContains(response, orchestra_group.name)
+
         assignment.delete()
         self.assertFalse(
             available_assessment_items_for_student(orchestra_student, self.year).exists()
@@ -8110,6 +8124,34 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             ),
             html=False,
         )
+
+    def test_student_collapse_all_uses_reliable_single_button_script(self):
+        self.client.force_login(self.student.user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'journal/collapsible_tables.js')
+        self.assertNotContains(response, 'journal/collapse_controls.js')
+        self.assertContains(
+            response,
+            'data-collapse-target="student-assessment-blocks"',
+            count=1,
+        )
+        self.assertNotContains(response, 'data-collapse-action="collapse"')
+
+        script = Path(
+            'journal/static/journal/collapsible_tables.js'
+        ).read_text(encoding='utf-8')
+        self.assertIn(
+            'var open = details.length > 0 && details.every',
+            script,
+        )
+        self.assertIn("control.setAttribute('aria-expanded'", script)
+        self.assertNotIn('target.hidden', script)
 
 
 class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):

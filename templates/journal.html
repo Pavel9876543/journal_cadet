@@ -1866,7 +1866,7 @@
                         </section>
                     {% endif %}
                     <div class="assessment-bulk-actions" aria-label="Управление блоками сдачи произведений">
-                        <button type="button" data-collapse-target="teacher-assessment-blocks" data-collapse-action="collapse" data-collapse-label="Свернуть все таблицы сдачи произведений" data-expand-label="Развернуть все таблицы сдачи произведений">Свернуть все таблицы сдачи произведений</button>
+                        <button type="button" data-collapse-target="teacher-assessment-blocks" data-collapse-label="Свернуть все таблицы сдачи произведений" data-expand-label="Развернуть все таблицы сдачи произведений">Свернуть все таблицы сдачи произведений</button>
                     </div>
                     <div id="teacher-assessment-blocks" data-collapsible-group>
                     <div class="assessment-summary-grid" aria-label="Сводка по сдаче произведений">
@@ -1954,7 +1954,7 @@
                         <p>Прогресс сгруппирован по предметам и сформирован из назначенных вам групп произведений.</p>
                     </div>
                     <div class="assessment-bulk-actions" aria-label="Управление блоками произведений">
-                        <button type="button" data-collapse-target="student-assessment-blocks" data-collapse-action="collapse" data-collapse-label="Свернуть все таблицы моих произведений" data-expand-label="Развернуть все таблицы моих произведений">Свернуть все таблицы моих произведений</button>
+                        <button type="button" data-collapse-target="student-assessment-blocks" data-collapse-label="Свернуть все таблицы моих произведений" data-expand-label="Развернуть все таблицы моих произведений">Свернуть все таблицы моих произведений</button>
                     </div>
                     <div id="student-assessment-blocks" data-collapsible-group>
                     {% for section in assessment_subject_sections %}
@@ -2040,7 +2040,7 @@
                 </section>
             {% else %}
                 <div class="assessment-bulk-actions" aria-label="Управление таблицами предметов">
-                    <button type="button" data-collapse-target="journal-subject-blocks" data-collapse-action="collapse" data-collapse-label="Свернуть все таблицы оценок по предметам" data-expand-label="Развернуть все таблицы оценок по предметам">Свернуть все таблицы оценок по предметам</button>
+                    <button type="button" data-collapse-target="journal-subject-blocks" data-collapse-label="Свернуть все таблицы оценок по предметам" data-expand-label="Развернуть все таблицы оценок по предметам">Свернуть все таблицы оценок по предметам</button>
                 </div>
                 {% if journal_tables|length > 1 %}
                     <nav class="journal-tabs" aria-label="Быстрый переход между журналами">
@@ -2209,7 +2209,7 @@
 <script src="{% static 'journal/assessment_filters.js' %}"></script>
 <script src="{% static 'journal/select_search.js' %}"></script>
 <script src="{% static 'journal/workspace_search.js' %}"></script>
-<script src="{% static 'journal/collapse_controls.js' %}"></script>
+<script src="{% static 'journal/collapsible_tables.js' %}"></script>
 <script src="{% static 'journal/form_state.js' %}"></script>
 </body>
 </html>
