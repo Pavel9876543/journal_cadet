@@ -353,6 +353,14 @@ def journal_admin_dashboard(context):
             'Произведения, назначения ученикам, результаты сдачи и правила итоговых оценок.',
             [
                 _item(
+                    'Произведения / элементы',
+                    _admin_url('journal', 'assessmentelement'),
+                    'fas fa-list-alt',
+                    'Справочник доступных произведений и элементов.',
+                    user,
+                    'journal.view_assessmentelement',
+                ),
+                _item(
                     'Группы произведений',
                     _admin_url('journal', 'assessmentgroup'),
                     'fas fa-layer-group',
@@ -361,10 +369,10 @@ def journal_admin_dashboard(context):
                     'journal.view_assessmentgroup',
                 ),
                 _item(
-                    'Произведения / элементы',
+                    'Произведения в группах',
                     _admin_url('journal', 'assessmentitem'),
                     'fas fa-music',
-                    'Произведения, обязательность и ответственные преподаватели.',
+                    'Связи справочника с группами, обязательность и дирижёры.',
                     user,
                     'journal.view_assessmentitem',
                 ),

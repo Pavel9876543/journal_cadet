@@ -3,8 +3,8 @@
 
     var CONFIG = {
         item: {
-            fields: ['subject', 'academic_year', 'group', 'responsible_teacher'],
-            payload: {subject: 'subjects', academic_year: 'academic_years', group: 'groups', responsible_teacher: 'teachers'}
+            fields: ['subject', 'academic_year', 'group', 'element', 'responsible_teacher'],
+            payload: {subject: 'subjects', academic_year: 'academic_years', group: 'groups', element: 'elements', responsible_teacher: 'teachers'}
         },
         student_group: {
             fields: ['student', 'academic_year', 'assessment_group'],

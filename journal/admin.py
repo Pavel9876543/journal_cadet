@@ -50,6 +50,7 @@ from .grade_options import (
 from .models import (
     AccountProfile,
     AcademicYear,
+    AssessmentElement,
     AssessmentGroup,
     AssessmentItem,
     AssessmentResult,
@@ -1389,7 +1390,7 @@ class AssessmentGroupAdminForm(forms.ModelForm):
 
 class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
     assessment_type = 'item'
-    dependency_fields = ('subject', 'academic_year', 'group', 'responsible_teacher')
+    dependency_fields = ('subject', 'academic_year', 'group', 'element', 'responsible_teacher')
 
     class Meta:
         model = AssessmentItem
@@ -1406,14 +1407,19 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         if group is not None:
             subject = group.subject
             year = group.academic_year
-        item_titles = AssessmentItem.objects.all()
-        if year is not None:
-            item_titles = item_titles.filter(academic_year=year)
+        elements = AssessmentElement.objects.filter(is_active=True)
         if subject is not None:
-            item_titles = item_titles.filter(subject=subject)
-        if 'title' in self.fields:
-            self.fields['title'].widget = ExistingValuesTextInput(
-                values=item_titles.order_by('title').values_list('title', flat=True).distinct(),
+            elements = elements.filter(subject=subject)
+        self._set_queryset('element', self._include_selected(
+            elements.select_related('subject').order_by('subject__name', 'title'),
+            AssessmentElement,
+            'element',
+        ))
+        if 'element' in self.fields:
+            self.fields['element'].required = True
+            self.fields['element'].help_text = (
+                'Выберите произведение только из справочника. Новое значение '
+                'добавляется через кнопку «+» рядом с полем.'
             )
         self._set_queryset('subject', self._include_selected(
             Subject.objects.filter(
@@ -2171,7 +2177,7 @@ class AssessmentItemForGroupInline(
     form = AssessmentItemAdminForm
     fk_name = 'group'
     extra = 0
-    fields = ('title', 'responsible_teacher', 'sort_order', 'is_required', 'is_active')
+    fields = ('element', 'responsible_teacher', 'sort_order', 'is_required', 'is_active')
     show_change_link = True
     verbose_name = 'Произведение / элемент'
     verbose_name_plural = 'Произведения и ответственные дирижёры'
@@ -2184,7 +2190,7 @@ class AssessmentItemForGroupInline(
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related(
-            'subject', 'academic_year', 'responsible_teacher'
+            'element', 'element__subject', 'subject', 'academic_year', 'responsible_teacher'
         )
 
 
@@ -2319,7 +2325,7 @@ class AssessmentItemForTeacherInline(
     fk_name = 'responsible_teacher'
     academic_year_lookup = 'academic_year'
     extra = 0
-    fields = ('title', 'group', 'subject', 'academic_year', 'sort_order', 'is_required', 'is_active')
+    fields = ('element', 'group', 'subject', 'academic_year', 'sort_order', 'is_required', 'is_active')
     show_change_link = True
     verbose_name = 'Произведение под руководством преподавателя'
     verbose_name_plural = 'Произведения, где преподаватель назначен дирижёром'
@@ -2330,7 +2336,7 @@ class AssessmentItemForTeacherInline(
         }
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('group', 'subject', 'academic_year')
+        return super().get_queryset(request).select_related('element', 'group', 'subject', 'academic_year')
 
 
 class AcademicYearParentInlineMixin:
@@ -4161,6 +4167,36 @@ class AssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescrip
             obj._students_count,
         )
 
+@admin.register(AssessmentElement)
+class AssessmentElementAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    changelist_description = (
+        'Единый справочник произведений и элементов. В группу произведений можно '
+        'добавить только значение из этого списка.'
+    )
+    list_display = ('title', 'subject', 'is_active', 'placements_count_display')
+    list_filter = ('subject', 'is_active')
+    search_fields = ('title', 'description', 'subject__name')
+    list_select_related = ('subject',)
+    ordering = ('subject__name', 'title')
+    fields = ('title', 'description', 'subject', 'is_active')
+    autocomplete_fields = ('subject',)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _placements_count=Count('group_placements', distinct=True),
+        )
+
+    @admin.display(description='Использований', ordering='_placements_count')
+    def placements_count_display(self, obj):
+        url = reverse('admin:journal_assessmentitem_changelist')
+        return format_html(
+            '<a href="{}?element__id__exact={}">{}</a>',
+            url,
+            obj.pk,
+            obj._placements_count,
+        )
+
+
 @admin.register(AssessmentItem)
 class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
     form = AssessmentItemAdminForm
@@ -4170,15 +4206,15 @@ class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescript
         'текущего ответственного преподавателя-дирижёра.'
     )
     list_display = (
-        'title', 'group', 'subject', 'responsible_teacher', 'configuration_status',
+        'element', 'group', 'subject', 'responsible_teacher', 'configuration_status',
         'academic_year', 'sort_order', 'is_required', 'is_active', 'results_count_display',
     )
     list_filter = ('academic_year', 'subject', 'group', 'responsible_teacher', 'is_required', 'is_active')
-    search_fields = ('title', 'description', 'group__name', 'subject__name', 'responsible_teacher__full_name')
-    list_select_related = ('group', 'subject', 'responsible_teacher', 'academic_year')
+    search_fields = ('element__title', 'title', 'group__name', 'subject__name', 'responsible_teacher__full_name')
+    list_select_related = ('element', 'group', 'subject', 'responsible_teacher', 'academic_year')
     ordering = ('group__sort_order', 'sort_order', 'title')
     fields = (
-        'title', 'description', 'group', 'responsible_teacher',
+        'element', 'group', 'responsible_teacher',
         'sort_order', 'is_required', 'is_active',
     )
 

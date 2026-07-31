@@ -68,6 +68,7 @@ from .grade_options import (
 )
 from .models import (
     AcademicYear,
+    AssessmentElement,
     AssessmentGroup,
     AssessmentItem,
     CourseApplication,
@@ -512,12 +513,16 @@ def _assessment_options_api_sync(request):
         AssessmentGroup.objects.select_related('subject', 'academic_year'),
         request.GET.get('group') or request.GET.get('assessment_group'),
     )
+    element = _get_selected_object(
+        AssessmentElement.objects.select_related('subject'),
+        request.GET.get('element'),
+    )
     student = _get_selected_object(
         Student.objects.filter(is_active=True), request.GET.get('student')
     )
     item = _get_selected_object(
         AssessmentItem.objects.select_related(
-            'subject', 'academic_year', 'group', 'responsible_teacher'
+            'element', 'subject', 'academic_year', 'group', 'responsible_teacher'
         ),
         request.GET.get('item'),
     )
@@ -535,6 +540,9 @@ def _assessment_options_api_sync(request):
         subject = item.subject
         academic_year = item.academic_year
 
+    if element is not None and assessment_type == 'item' and group is None:
+        subject = element.subject
+
     if group is not None:
         group_field_name = 'assessment_group' if assessment_type in {'student_group', 'rule'} else 'group'
         if changed_field == group_field_name or subject is None:
@@ -550,10 +558,11 @@ def _assessment_options_api_sync(request):
         assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
     ).order_by('name')
     groups = AssessmentGroup.objects.filter(is_active=True).select_related('subject', 'academic_year')
+    elements = AssessmentElement.objects.filter(is_active=True).select_related('subject')
     teachers = Teacher.objects.filter(is_active=True)
     students = active_student_queryset()
     items = AssessmentItem.objects.filter(is_active=True, group__is_active=True).select_related(
-        'subject', 'academic_year', 'group', 'responsible_teacher'
+        'element', 'subject', 'academic_year', 'group', 'responsible_teacher'
     )
     enrollments = StudentEnrollment.objects.none()
 
@@ -570,6 +579,7 @@ def _assessment_options_api_sync(request):
         if assessment_type != 'item':
             groups = groups.filter(subject=subject)
             teachers = teachers.filter(qualified_subjects=subject)
+        elements = elements.filter(subject=subject)
         items = items.filter(subject=subject)
     if selected_teacher is not None and assessment_type == 'item':
         items = items.filter(responsible_teacher=selected_teacher)
@@ -607,6 +617,8 @@ def _assessment_options_api_sync(request):
         subjects = _include_selected_option(subjects, Subject, subject)
     if not strict_options or changed_field == 'student':
         students = _include_selected_option(students, Student, student)
+    if not strict_options or changed_field == 'element':
+        elements = _include_selected_option(elements, AssessmentElement, element)
     if not strict_options or changed_field == 'item':
         items = _include_selected_option(items, AssessmentItem, item)
     if not strict_options or changed_field == teacher_field_name:
@@ -618,6 +630,7 @@ def _assessment_options_api_sync(request):
         'subject__name', 'sort_order', 'name'
     )
     subjects = subjects.distinct().order_by('name')
+    elements = elements.distinct().order_by('subject__name', 'title')
     students = students.distinct().order_by('full_name')
     teachers = teachers.distinct().order_by('full_name')
     items = items.distinct().order_by(
@@ -639,6 +652,17 @@ def _assessment_options_api_sync(request):
             defaults['responsible_teacher_id'] = group.items.filter(
                 responsible_teacher__isnull=False
             ).values_list('responsible_teacher_id', flat=True).first()
+        available_elements = elements.exclude(
+            group_placements__group=group,
+        )
+        if element is not None:
+            available_elements = _include_selected_option(
+                available_elements,
+                AssessmentElement,
+                element,
+            )
+        elements = available_elements
+    elements = elements.distinct().order_by('subject__name', 'title')
     if item is not None and item.responsible_teacher_id:
         defaults['assessed_by_id'] = item.responsible_teacher_id
 
@@ -650,6 +674,14 @@ def _assessment_options_api_sync(request):
         'subjects': [
             {'id': item.pk, 'label': item.name}
             for item in subjects
+        ],
+        'elements': [
+            {
+                'id': catalog_item.pk,
+                'label': catalog_item.title,
+                'subject_id': catalog_item.subject_id,
+            }
+            for catalog_item in elements
         ],
         'groups': [
             {

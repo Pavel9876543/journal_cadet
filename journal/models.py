@@ -2013,9 +2013,71 @@ class AssessmentGroup(models.Model):
         return result
 
 
-class AssessmentItem(models.Model):
+class AssessmentElement(models.Model):
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        related_name='assessment_element_catalog',
+        verbose_name='Предмет',
+    )
     title = models.CharField('Произведение / элемент', max_length=255)
     description = models.TextField('Описание', blank=True)
+    is_active = models.BooleanField('Активно', default=True)
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Произведение / элемент'
+        verbose_name_plural = 'Произведения / элементы'
+        ordering = ['subject__name', 'title', 'pk']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['subject', 'title'],
+                name='unique_assessment_element_subject_title',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['subject', 'is_active', 'title'],
+                name='assess_element_subject_idx',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.title
+
+    def clean(self) -> None:
+        super().clean()
+        self.title = (self.title or '').strip()
+        self.description = (self.description or '').strip()
+        if not self.title:
+            raise ValidationError({'title': 'Введите название произведения или элемента.'})
+        if self.subject_id and not self.subject.uses_element_assessment:
+            raise ValidationError({
+                'subject': 'Каталог произведений доступен только для предмета со специальным режимом.'
+            })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class AssessmentItem(models.Model):
+    element = models.ForeignKey(
+        AssessmentElement,
+        on_delete=models.PROTECT,
+        related_name='group_placements',
+        verbose_name='Произведение / элемент',
+        null=True,
+        blank=True,
+        help_text='Выберите значение только из справочника произведений / элементов.',
+    )
+    title = models.CharField(
+        'Название произведения (снимок)',
+        max_length=255,
+        editable=False,
+    )
+    description = models.TextField('Описание (снимок)', blank=True, editable=False)
     subject = models.ForeignKey(
         Subject,
         on_delete=models.CASCADE,
@@ -2049,19 +2111,25 @@ class AssessmentItem(models.Model):
     updated_at = models.DateTimeField('Изменено', auto_now=True)
 
     class Meta:
-        verbose_name = 'Произведение / элемент аттестации'
-        verbose_name_plural = 'Произведения / элементы аттестации'
+        verbose_name = 'Произведение в группе'
+        verbose_name_plural = 'Произведения в группах'
         ordering = ['group__sort_order', 'sort_order', 'title', 'pk']
         constraints = [
             models.UniqueConstraint(
                 fields=['group', 'title'],
                 name='unique_assessment_item_group_title',
             ),
+            models.UniqueConstraint(
+                fields=['group', 'element'],
+                condition=Q(element__isnull=False),
+                name='unique_assessment_item_group_element',
+            ),
         ]
         indexes = [
             models.Index(fields=['academic_year', 'subject', 'group'], name='assess_item_year_subj_idx'),
             models.Index(fields=['responsible_teacher', 'is_active'], name='assess_item_teacher_active_idx'),
             models.Index(fields=['group', 'sort_order'], name='assess_item_group_order_idx'),
+            models.Index(fields=['group', 'element'], name='assess_item_group_element_idx'),
         ]
 
     def __str__(self) -> str:
@@ -2069,15 +2137,24 @@ class AssessmentItem(models.Model):
 
     def clean(self) -> None:
         super().clean()
-        self.title = (self.title or '').strip()
+        if self.element_id:
+            self.title = self.element.title
+            self.description = self.element.description
+        else:
+            self.title = (self.title or '').strip()
+            self.description = (self.description or '').strip()
         if not self.title:
-            raise ValidationError({'title': 'Введите название произведения или элемента.'})
+            raise ValidationError({'element': 'Выберите произведение или элемент из справочника.'})
         if self.group_id:
             # A work group owns its subject and academic year.  Synchronizing
             # these duplicated fields also makes reassignment safe when an
             # admin form still contains values from the previous group.
             self.subject = self.group.subject
             self.academic_year = self.group.academic_year
+        if self.element_id and self.subject_id and self.element.subject_id != self.subject_id:
+            raise ValidationError({
+                'element': 'Выбранное произведение относится к другому предмету.'
+            })
         if self.subject_id and not self.subject.uses_element_assessment:
             raise ValidationError({'subject': 'Произведения доступны только в специальном режиме предмета.'})
         if self.academic_year_id:
@@ -2093,6 +2170,17 @@ class AssessmentItem(models.Model):
                 })
 
     def save(self, *args, **kwargs):
+        if not self.element_id and self.title and (self.subject_id or self.group_id):
+            subject = self.group.subject if self.group_id else self.subject
+            element, _ = AssessmentElement.objects.get_or_create(
+                subject=subject,
+                title=self.title.strip(),
+                defaults={
+                    'description': (self.description or '').strip(),
+                    'is_active': True,
+                },
+            )
+            self.element = element
         previous_group_id = None
         previous_subject_id = None
         previous_year_id = None

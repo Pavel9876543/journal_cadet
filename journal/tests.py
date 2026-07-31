@@ -107,6 +107,7 @@ from journal.views import (
 from journal.models import (
     AccountProfile,
     AcademicYear,
+    AssessmentElement,
     AssessmentGroup,
     AssessmentItem,
     AssessmentResult,
@@ -7301,6 +7302,49 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
             grade='Зачёт',
             priority=10,
         )
+
+    def test_group_item_uses_catalog_element_and_snapshots_its_text(self):
+        catalog_item = AssessmentElement.objects.create(
+            subject=self.subject,
+            title='Каталожное произведение',
+            description='Описание из справочника',
+        )
+
+        placement = AssessmentItem.objects.create(
+            element=catalog_item,
+            subject=self.subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+        )
+
+        self.assertEqual(placement.title, catalog_item.title)
+        self.assertEqual(placement.description, catalog_item.description)
+        self.assertEqual(placement.element, catalog_item)
+
+    def test_item_admin_form_limits_elements_to_group_subject(self):
+        other_subject = Subject.objects.create(
+            name='Другой оркестровый предмет',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+        )
+        allowed = AssessmentElement.objects.create(
+            subject=self.subject,
+            title='Допустимое произведение',
+        )
+        AssessmentElement.objects.create(
+            subject=other_subject,
+            title='Чужое произведение',
+        )
+
+        form_class = type(
+            'GroupScopedAssessmentItemAdminForm',
+            (AssessmentItemAdminForm,),
+            {'parent_assessment_group': self.assessment_group},
+        )
+        form = form_class()
+
+        self.assertEqual(list(form.fields['element'].queryset), [allowed])
+        self.assertTrue(form.fields['element'].required)
 
     def test_student_sees_only_items_from_assigned_assessment_groups(self):
         other_group = AssessmentGroup.objects.create(

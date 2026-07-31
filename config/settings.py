@@ -164,6 +164,7 @@ JAZZMIN_SETTINGS = {
         'journal.Grade',
         'journal.SubjectResult',
         # Сдача произведений: настройка -> назначение -> результат -> итог.
+        'journal.AssessmentElement',
         'journal.AssessmentGroup',
         'journal.AssessmentItem',
         'journal.StudentAssessmentGroup',
@@ -203,6 +204,7 @@ JAZZMIN_SETTINGS = {
         'journal.teachersubject': 'fas fa-chalkboard',
         'journal.grade': 'fas fa-pen',
         'journal.subjectresult': 'fas fa-clipboard-check',
+        'journal.assessmentelement': 'fas fa-list-alt',
         'journal.assessmentgroup': 'fas fa-object-group',
         'journal.assessmentitem': 'fas fa-music',
         'journal.studentassessmentgroup': 'fas fa-user-plus',

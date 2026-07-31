@@ -23,6 +23,7 @@ from journal.account_utils import (
 )
 from journal.models import (
     AcademicYear,
+    AssessmentElement,
     AssessmentGroup,
     AssessmentItem,
     AssessmentResult,
@@ -153,6 +154,7 @@ class Command(BaseCommand):
             f'индивидуальных предметов: {StudentSubject.objects.count()}, '
             f'оценок: {Grade.objects.count()}, '
             f'итогов: {SubjectResult.objects.count()}, '
+            f'справочных произведений: {AssessmentElement.objects.count()}, '
             f'групп произведений: {AssessmentGroup.objects.count()}, '
             f'произведений: {AssessmentItem.objects.count()}, '
             f'результатов сдачи: {AssessmentResult.objects.count()}, '
@@ -205,6 +207,7 @@ class Command(BaseCommand):
         StudentAssessmentGroup.objects.all().delete()
         FinalGradeRule.objects.all().delete()
         AssessmentItem.objects.all().delete()
+        AssessmentElement.objects.all().delete()
         AssessmentGroup.objects.all().delete()
         StudentSubject.objects.all().delete()
         GroupSubject.objects.all().delete()
