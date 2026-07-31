@@ -240,6 +240,9 @@ JAZZMIN_SETTINGS = {
 HAS_WHITENOISE = find_spec('whitenoise') is not None
 if HAS_WHITENOISE:
     MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
+if DEBUG:
+    # This must wrap WhiteNoise so local static responses cannot bypass it.
+    MIDDLEWARE.insert(1, 'journal.middleware.NoCacheDevelopmentStaticMiddleware')
 
 ROOT_URLCONF = 'config.urls'
 
@@ -306,19 +309,22 @@ STATIC_ROOT = (
 )
 if not STATIC_ROOT.is_absolute():
     STATIC_ROOT = BASE_DIR / STATIC_ROOT
-if HAS_WHITENOISE:
-    STORAGES = {
-        'default': {
-            'BACKEND': 'django.core.files.storage.FileSystemStorage',
-        },
-        'staticfiles': {
-            'BACKEND': (
-                'whitenoise.storage.CompressedStaticFilesStorage'
-                if DEBUG
-                else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-            ),
-        },
-    }
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': (
+            'journal.static_storage.DevelopmentStaticFilesStorage'
+            if DEBUG
+            else (
+                'whitenoise.storage.CompressedManifestStaticFilesStorage'
+                if HAS_WHITENOISE
+                else 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+            )
+        ),
+    },
+}
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGIN_URL = '/accounts/login/'
