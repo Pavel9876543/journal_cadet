@@ -1,7 +1,7 @@
 @import url("layout-desktop.css");
 @import url("layout-laptop.css");
-@import url("layout-tablet.css");
-@import url("layout-mobile.css");
+@import url("layout-tablet.css?v=20260731-1");
+@import url("layout-mobile.css?v=20260731-1");
 
 :root {
     --journal-admin-bg: #f4f7fb;

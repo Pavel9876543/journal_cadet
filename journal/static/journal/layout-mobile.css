@@ -134,7 +134,130 @@
     .results table,
     .inline-group table {
         width: max-content;
-        min-width: 680px;
+        min-width: 100%;
+        table-layout: auto;
+    }
+
+    .table-scroll table,
+    .results table,
+    .inline-group table,
+    .journal-responsive-table table {
+        font-size: 0.72rem;
+        line-height: 1.22;
+    }
+
+    .table-scroll th,
+    .table-scroll td,
+    .results th,
+    .results td,
+    .inline-group th,
+    .inline-group td,
+    .journal-responsive-table th,
+    .journal-responsive-table td {
+        min-width: 0;
+        padding: 5px 6px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: normal;
+    }
+
+    .table-scroll thead th,
+    .results thead th,
+    .inline-group thead th,
+    .journal-responsive-table thead th {
+        font-size: 0.68rem;
+        line-height: 1.15;
+    }
+
+    #journal-subject-blocks table tr > :first-child,
+    #teacher-assessment-blocks table tr > :first-child {
+        width: 112px;
+        min-width: 112px;
+        max-width: 112px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    #student-assessment-blocks table tr > :first-child {
+        width: 128px;
+        min-width: 128px;
+        max-width: 128px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    #journal-subject-blocks .student-col,
+    #journal-subject-blocks .student-name,
+    #journal-subject-blocks .student-name > span {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: normal;
+    }
+
+    #journal-subject-blocks .student-name {
+        display: block;
+        font-size: 0.7rem;
+        line-height: 1.18;
+    }
+
+    #journal-subject-blocks .grade-cell {
+        width: 42px;
+        min-width: 42px;
+        max-width: 42px;
+        padding: 3px 4px;
+    }
+
+    #journal-subject-blocks .grade-cell input {
+        width: 32px;
+        min-width: 32px !important;
+        max-width: 32px;
+        min-height: 32px;
+        padding: 3px;
+        font-size: 0.78rem !important;
+    }
+
+    #journal-subject-blocks .average-cell {
+        width: 58px;
+        min-width: 58px;
+        max-width: 58px;
+    }
+
+    #journal-subject-blocks .result-cell {
+        width: 76px;
+        min-width: 76px;
+        max-width: 76px;
+    }
+
+    #journal-subject-blocks .result-cell select {
+        min-height: 34px;
+        padding: 3px 4px;
+        font-size: 0.72rem !important;
+    }
+
+    #teacher-assessment-blocks .assessment-actions {
+        width: 164px;
+        min-width: 164px;
+        max-width: 164px;
+        gap: 4px;
+    }
+
+    #teacher-assessment-blocks .assessment-actions select,
+    #teacher-assessment-blocks .assessment-actions input,
+    #teacher-assessment-blocks .assessment-actions button {
+        min-height: 34px;
+        padding: 4px 6px;
+        font-size: 0.72rem !important;
+        line-height: 1.15;
+    }
+
+    .table-scroll .assessment-status {
+        min-height: 24px;
+        padding: 3px 6px;
+        white-space: normal;
+        text-align: center;
     }
 
     body.change-form .content,
@@ -148,6 +271,41 @@
     .related-widget-wrapper select {
         width: 100% !important;
         max-width: 100% !important;
+    }
+
+    body.change-list #changelist .results,
+    body.change-list #changelist table,
+    body.change-form .inline-group .tabular,
+    body.change-form .inline-group table {
+        width: max-content;
+        min-width: 100% !important;
+        table-layout: auto;
+        font-size: 0.72rem !important;
+        line-height: 1.22;
+    }
+
+    body.change-list #result_list th,
+    body.change-list #result_list td,
+    body.change-form .inline-group table th,
+    body.change-form .inline-group table td {
+        min-width: 0 !important;
+        padding: 5px 6px !important;
+        font-size: 0.72rem !important;
+        line-height: 1.22;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+        word-break: normal;
+    }
+
+    body.change-list #result_list th[class*="column-student"],
+    body.change-list #result_list td[class*="field-student"],
+    body.change-form .inline-group table th[class*="column-student"],
+    body.change-form .inline-group table td[class*="field-student"] {
+        width: 112px;
+        min-width: 112px !important;
+        max-width: 112px;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
     }
 }
 
