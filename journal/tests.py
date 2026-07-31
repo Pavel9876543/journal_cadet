@@ -6082,14 +6082,22 @@ class DockerMigrationBootstrapTests(SimpleTestCase):
         self.assertIn('MIGRATION_MODE=check', production)
         self.assertIn('MIGRATION_MODE: create', development_compose)
 
-    def test_environment_examples_use_postgresql(self):
-        examples = (
-            self.project_root / '.env.example',
+    def test_environment_examples_use_configured_databases(self):
+        local_environment = (
+            self.project_root / '.env.example'
+        ).read_text(encoding='utf-8')
+        self.assertIn(
+            'DB_ENGINE=django.db.backends.sqlite3',
+            local_environment,
+        )
+        self.assertIn('DB_NAME=journal_db', local_environment)
+
+        postgres_examples = (
             self.project_root / '.env.dev.example',
             self.project_root / '.env.prod.example',
         )
 
-        for env_path in examples:
+        for env_path in postgres_examples:
             with self.subTest(env_path=env_path.name):
                 environment = env_path.read_text(encoding='utf-8')
                 self.assertIn(
