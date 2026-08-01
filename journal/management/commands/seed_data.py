@@ -13,6 +13,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Count, Q
+from django.utils import timezone
 
 from journal.account_utils import (
     build_username_from_full_name,
@@ -132,7 +133,7 @@ class Command(BaseCommand):
             instruments,
             subjects,
             teachers,
-            cohort='archive',
+            academic_year=archived_year,
         )
         self._create_grades_and_results(archived_students, archived_year)
         self._create_assessment_demo_data(
@@ -156,12 +157,11 @@ class Command(BaseCommand):
         self._assign_teachers_to_academic_year(teachers, academic_year)
         groups = self._create_groups(academic_year)
         self._create_group_subjects(groups, subjects, teachers)
-        students = self._create_students(
-            groups,
-            instruments,
-            subjects,
-            teachers,
-            cohort='active',
+        self._reenroll_students(
+            archived_students,
+            source_year=archived_year,
+            target_year=academic_year,
+            groups=groups,
         )
         self._create_course_applications()
         self._create_course_group_assignments(academic_year, subjects, teachers)
@@ -383,19 +383,35 @@ class Command(BaseCommand):
             return 'student'
         return 'user'
 
+    @staticmethod
+    def _demo_academic_year_periods() -> tuple[tuple[date, date], tuple[date, date]]:
+        """Return two adjacent, non-overlapping periods of exactly 14 days."""
+        today = timezone.localdate()
+        active_start = today
+        active_end = active_start + timedelta(days=13)
+        archived_end = active_start - timedelta(days=1)
+        archived_start = archived_end - timedelta(days=13)
+        return (archived_start, archived_end), (active_start, active_end)
+
+    @staticmethod
+    def _demo_academic_year_name(prefix: str, starts_on: date, ends_on: date) -> str:
+        return f'{prefix} {starts_on:%d.%m}-{ends_on:%d.%m.%y}'
+
     def _create_archived_academic_year(self) -> AcademicYear:
+        (starts_on, ends_on), _active_period = self._demo_academic_year_periods()
         return AcademicYear.objects.create(
-            name='2024/2025',
-            starts_on=date(2024, 9, 1),
-            ends_on=date(2025, 8, 31),
+            name=self._demo_academic_year_name('Арх', starts_on, ends_on),
+            starts_on=starts_on,
+            ends_on=ends_on,
             is_active=True,
         )
 
     def _create_current_academic_year(self) -> AcademicYear:
+        _archived_period, (starts_on, ends_on) = self._demo_academic_year_periods()
         return AcademicYear.objects.create(
-            name='2025/2026',
-            starts_on=date(2025, 9, 1),
-            ends_on=date(2026, 8, 31),
+            name=self._demo_academic_year_name('Акт', starts_on, ends_on),
+            starts_on=starts_on,
+            ends_on=ends_on,
             is_active=True,
         )
 
@@ -491,7 +507,7 @@ class Command(BaseCommand):
     def _create_teachers(self, subjects: dict[str, Subject]) -> dict[str, Teacher]:
         teacher_specs = [
             {
-                'full_name': 'Анна Морозова',
+                'full_name': 'Морозова Анна Сергеевна',
                 'birth_date': date(1981, 2, 21),
                 'phone': '+7 (900) 100-00-01',
                 'email': 'anna.morozova@cadet-journal.local',
@@ -502,7 +518,7 @@ class Command(BaseCommand):
                 'subjects': ['Сольфеджио', 'Музыкальная литература', 'Слушание музыки', 'Ритмика'],
             },
             {
-                'full_name': 'Дмитрий Ковалёв',
+                'full_name': 'Ковалёв Дмитрий Андреевич',
                 'birth_date': date(1979, 4, 12),
                 'phone': '+7 (900) 100-00-02',
                 'email': 'dmitry.kovalev@cadet-journal.local',
@@ -513,7 +529,7 @@ class Command(BaseCommand):
                 'subjects': ['Фортепиано', 'Гармония', 'Ансамбль', 'Импровизация', 'Специальность'],
             },
             {
-                'full_name': 'Елена Серова',
+                'full_name': 'Серова Елена Викторовна',
                 'birth_date': date(1985, 7, 8),
                 'phone': '+7 (900) 100-00-03',
                 'email': 'elena.serova@cadet-journal.local',
@@ -524,7 +540,7 @@ class Command(BaseCommand):
                 'subjects': ['Вокал', 'Сольфеджио', 'Хор', 'Специальность'],
             },
             {
-                'full_name': 'Игорь Романов',
+                'full_name': 'Романов Игорь Павлович',
                 'birth_date': date(1982, 9, 17),
                 'phone': '+7 (900) 100-00-04',
                 'email': 'igor.romanov@cadet-journal.local',
@@ -535,7 +551,7 @@ class Command(BaseCommand):
                 'subjects': ['Гитара', 'Музыкальная литература', 'Ансамбль', 'Оркестр', 'Специальность'],
             },
             {
-                'full_name': 'Марина Белова',
+                'full_name': 'Белова Марина Олеговна',
                 'birth_date': date(1976, 12, 3),
                 'phone': '+7 (900) 100-00-05',
                 'email': 'marina.belova@cadet-journal.local',
@@ -546,7 +562,7 @@ class Command(BaseCommand):
                 'subjects': ['Фортепиано', 'Вокал', 'Хор', 'Музыкальная литература', 'Специальность'],
             },
             {
-                'full_name': 'Сергей Аксёнов',
+                'full_name': 'Аксёнов Сергей Николаевич',
                 'birth_date': date(1974, 5, 25),
                 'phone': '+7 (900) 100-00-06',
                 'email': 'sergey.aksyonov@cadet-journal.local',
@@ -557,7 +573,7 @@ class Command(BaseCommand):
                 'subjects': ['Специальность', 'Ансамбль', 'Сольфеджио', 'Импровизация'],
             },
             {
-                'full_name': 'Наталья Лебедева',
+                'full_name': 'Лебедева Наталья Игоревна',
                 'birth_date': date(1988, 1, 30),
                 'phone': '+7 (900) 100-00-07',
                 'email': 'natalia.lebedeva@cadet-journal.local',
@@ -568,7 +584,7 @@ class Command(BaseCommand):
                 'subjects': ['Оркестр', 'Ансамбль', 'Слушание музыки', 'Специальность'],
             },
             {
-                'full_name': 'Алексей Ветров',
+                'full_name': 'Ветров Алексей Михайлович',
                 'birth_date': date(1983, 10, 14),
                 'phone': '+7 (900) 100-00-08',
                 'email': 'alexey.vetrov@cadet-journal.local',
@@ -579,7 +595,7 @@ class Command(BaseCommand):
                 'subjects': ['Ритмика', 'Оркестр', 'Ансамбль', 'Специальность'],
             },
             {
-                'full_name': 'Ольга Захарова',
+                'full_name': 'Захарова Ольга Петровна',
                 'birth_date': date(1977, 8, 6),
                 'phone': '+7 (900) 100-00-09',
                 'email': 'olga.zakharova@cadet-journal.local',
@@ -645,40 +661,40 @@ class Command(BaseCommand):
         teachers: dict[str, Teacher],
     ) -> None:
         assignment_specs = [
-            ('Подготовительная группа', 'Ритмика', 'Алексей Ветров', 10, True),
-            ('Подготовительная группа', 'Слушание музыки', 'Анна Морозова', 20, True),
-            ('Подготовительная группа', 'Хор', 'Елена Серова', 30, True),
-            ('Подготовительная группа', 'Фортепиано', 'Дмитрий Ковалёв', 40, True),
+            ('Подготовительная группа', 'Ритмика', 'Ветров Алексей Михайлович', 10, True),
+            ('Подготовительная группа', 'Слушание музыки', 'Морозова Анна Сергеевна', 20, True),
+            ('Подготовительная группа', 'Хор', 'Серова Елена Викторовна', 30, True),
+            ('Подготовительная группа', 'Фортепиано', 'Ковалёв Дмитрий Андреевич', 40, True),
 
-            ('1 класс (начинающие)', 'Ритмика', 'Алексей Ветров', 10, True),
-            ('1 класс (начинающие)', 'Сольфеджио', 'Анна Морозова', 20, True),
-            ('1 класс (начинающие)', 'Слушание музыки', 'Анна Морозова', 30, True),
-            ('1 класс (начинающие)', 'Хор', 'Марина Белова', 40, True),
-            ('1 класс (начинающие)', 'Фортепиано', 'Дмитрий Ковалёв', 50, True),
+            ('1 класс (начинающие)', 'Ритмика', 'Ветров Алексей Михайлович', 10, True),
+            ('1 класс (начинающие)', 'Сольфеджио', 'Морозова Анна Сергеевна', 20, True),
+            ('1 класс (начинающие)', 'Слушание музыки', 'Морозова Анна Сергеевна', 30, True),
+            ('1 класс (начинающие)', 'Хор', 'Белова Марина Олеговна', 40, True),
+            ('1 класс (начинающие)', 'Фортепиано', 'Ковалёв Дмитрий Андреевич', 50, True),
 
-            ('2 класс (средний уровень)', 'Сольфеджио', 'Елена Серова', 10, True),
-            ('2 класс (средний уровень)', 'Музыкальная литература', 'Игорь Романов', 20, True),
-            ('2 класс (средний уровень)', 'Хор', 'Марина Белова', 30, True),
-            ('2 класс (средний уровень)', 'Ансамбль', 'Игорь Романов', 40, True),
-            ('2 класс (средний уровень)', 'Гитара', 'Игорь Романов', 50, True),
-            ('2 класс (средний уровень)', 'Импровизация', 'Сергей Аксёнов', 60, True),
-            ('2 класс (средний уровень)', 'Оркестр', 'Алексей Ветров', 70, True),
+            ('2 класс (средний уровень)', 'Сольфеджио', 'Серова Елена Викторовна', 10, True),
+            ('2 класс (средний уровень)', 'Музыкальная литература', 'Романов Игорь Павлович', 20, True),
+            ('2 класс (средний уровень)', 'Хор', 'Белова Марина Олеговна', 30, True),
+            ('2 класс (средний уровень)', 'Ансамбль', 'Романов Игорь Павлович', 40, True),
+            ('2 класс (средний уровень)', 'Гитара', 'Романов Игорь Павлович', 50, True),
+            ('2 класс (средний уровень)', 'Импровизация', 'Аксёнов Сергей Николаевич', 60, True),
+            ('2 класс (средний уровень)', 'Оркестр', 'Ветров Алексей Михайлович', 70, True),
 
-            ('3 класс (продвинутые)', 'Сольфеджио', 'Сергей Аксёнов', 10, True),
-            ('3 класс (продвинутые)', 'Гармония', 'Дмитрий Ковалёв', 20, True),
-            ('3 класс (продвинутые)', 'Музыкальная литература', 'Марина Белова', 30, True),
-            ('3 класс (продвинутые)', 'Ансамбль', 'Сергей Аксёнов', 40, True),
-            ('3 класс (продвинутые)', 'Оркестр', 'Наталья Лебедева', 50, True),
-            ('3 класс (продвинутые)', 'Дирижирование', 'Ольга Захарова', 60, True),
+            ('3 класс (продвинутые)', 'Сольфеджио', 'Аксёнов Сергей Николаевич', 10, True),
+            ('3 класс (продвинутые)', 'Гармония', 'Ковалёв Дмитрий Андреевич', 20, True),
+            ('3 класс (продвинутые)', 'Музыкальная литература', 'Белова Марина Олеговна', 30, True),
+            ('3 класс (продвинутые)', 'Ансамбль', 'Аксёнов Сергей Николаевич', 40, True),
+            ('3 класс (продвинутые)', 'Оркестр', 'Лебедева Наталья Игоревна', 50, True),
+            ('3 класс (продвинутые)', 'Дирижирование', 'Захарова Ольга Петровна', 60, True),
 
-            ('Старший ансамбль', 'Сольфеджио', 'Ольга Захарова', 10, True),
-            ('Старший ансамбль', 'Гармония', 'Дмитрий Ковалёв', 20, True),
-            ('Старший ансамбль', 'История церковной музыки', 'Ольга Захарова', 30, True),
-            ('Старший ансамбль', 'Оркестр', 'Игорь Романов', 40, True),
-            ('Старший ансамбль', 'Ансамбль', 'Наталья Лебедева', 50, True),
-            ('Старший ансамбль', 'Дирижирование', 'Ольга Захарова', 60, True),
+            ('Старший ансамбль', 'Сольфеджио', 'Захарова Ольга Петровна', 10, True),
+            ('Старший ансамбль', 'Гармония', 'Ковалёв Дмитрий Андреевич', 20, True),
+            ('Старший ансамбль', 'История церковной музыки', 'Захарова Ольга Петровна', 30, True),
+            ('Старший ансамбль', 'Оркестр', 'Романов Игорь Павлович', 40, True),
+            ('Старший ансамбль', 'Ансамбль', 'Лебедева Наталья Игоревна', 50, True),
+            ('Старший ансамбль', 'Дирижирование', 'Захарова Ольга Петровна', 60, True),
 
-            ('Архивная группа', 'Сольфеджио', 'Анна Морозова', 10, False),
+            ('Архивная группа', 'Сольфеджио', 'Морозова Анна Сергеевна', 10, False),
         ]
 
         for assignment_spec in assignment_specs:
@@ -702,59 +718,55 @@ class Command(BaseCommand):
         subjects: dict[str, Subject],
         teachers: dict[str, Teacher],
         *,
-        cohort: str,
+        academic_year: AcademicYear,
     ) -> list[Student]:
         student_specs = [
-            ('Лев Андреев', Student.GENDER_MALE, 'Подготовительная группа', 'Фортепиано', 'Дмитрий Ковалёв'),
-            ('Ева Богданова', Student.GENDER_FEMALE, 'Подготовительная группа', 'Вокал', 'Елена Серова'),
-            ('Матвей Денисов', Student.GENDER_MALE, 'Подготовительная группа', 'Баян', 'Сергей Аксёнов'),
-            ('Варвара Ким', Student.GENDER_FEMALE, 'Подготовительная группа', 'Скрипка', 'Наталья Лебедева'),
-            ('Тимур Осипов', Student.GENDER_MALE, 'Подготовительная группа', 'Ударные', 'Алексей Ветров'),
-            ('Злата Миронова', Student.GENDER_FEMALE, 'Подготовительная группа', 'Флейта', 'Алексей Ветров'),
+            ('Андреев Лев Максимович', Student.GENDER_MALE, 'Подготовительная группа', 'Фортепиано', 'Ковалёв Дмитрий Андреевич'),
+            ('Богданова Ева Ильинична', Student.GENDER_FEMALE, 'Подготовительная группа', 'Вокал', 'Серова Елена Викторовна'),
+            ('Денисов Матвей Олегович', Student.GENDER_MALE, 'Подготовительная группа', 'Баян', 'Аксёнов Сергей Николаевич'),
+            ('Ким Варвара Романовна', Student.GENDER_FEMALE, 'Подготовительная группа', 'Скрипка', 'Лебедева Наталья Игоревна'),
+            ('Осипов Тимур Артёмович', Student.GENDER_MALE, 'Подготовительная группа', 'Ударные', 'Ветров Алексей Михайлович'),
+            ('Миронова Злата Павловна', Student.GENDER_FEMALE, 'Подготовительная группа', 'Флейта', 'Ветров Алексей Михайлович'),
 
-            ('Артём Соколов', Student.GENDER_MALE, '1 класс (начинающие)', 'Фортепиано', 'Дмитрий Ковалёв'),
-            ('Ксения Ильина', Student.GENDER_FEMALE, '1 класс (начинающие)', 'Баян', 'Сергей Аксёнов'),
-            ('Павел Громов', Student.GENDER_MALE, '1 класс (начинающие)', 'Гитара', 'Игорь Романов'),
-            ('София Фролова', Student.GENDER_FEMALE, '1 класс (начинающие)', 'Вокал', 'Елена Серова'),
-            ('Михаил Титов', Student.GENDER_MALE, '1 класс (начинающие)', 'Фортепиано', 'Марина Белова'),
-            ('Алиса Рябова', Student.GENDER_FEMALE, '1 класс (начинающие)', 'Домра', 'Сергей Аксёнов'),
+            ('Соколов Артём Денисович', Student.GENDER_MALE, '1 класс (начинающие)', 'Фортепиано', 'Ковалёв Дмитрий Андреевич'),
+            ('Ильина Ксения Андреевна', Student.GENDER_FEMALE, '1 класс (начинающие)', 'Баян', 'Аксёнов Сергей Николаевич'),
+            ('Громов Павел Игоревич', Student.GENDER_MALE, '1 класс (начинающие)', 'Гитара', 'Романов Игорь Павлович'),
+            ('Фролова София Максимовна', Student.GENDER_FEMALE, '1 класс (начинающие)', 'Вокал', 'Серова Елена Викторовна'),
+            ('Титов Михаил Сергеевич', Student.GENDER_MALE, '1 класс (начинающие)', 'Фортепиано', 'Белова Марина Олеговна'),
+            ('Рябова Алиса Олеговна', Student.GENDER_FEMALE, '1 класс (начинающие)', 'Домра', 'Аксёнов Сергей Николаевич'),
 
-            ('Виктория Орлова', Student.GENDER_FEMALE, '2 класс (средний уровень)', 'Вокал', 'Елена Серова'),
-            ('Роман Карпов', Student.GENDER_MALE, '2 класс (средний уровень)', 'Гитара', 'Игорь Романов'),
-            ('Алина Жукова', Student.GENDER_FEMALE, '2 класс (средний уровень)', 'Фортепиано', 'Дмитрий Ковалёв'),
-            ('Тимофей Фадеев', Student.GENDER_MALE, '2 класс (средний уровень)', 'Баян', 'Сергей Аксёнов'),
-            ('Дарья Никитина', Student.GENDER_FEMALE, '2 класс (средний уровень)', 'Гитара', 'Игорь Романов'),
-            ('Семён Крылов', Student.GENDER_MALE, '2 класс (средний уровень)', 'Кларнет', 'Алексей Ветров'),
+            ('Орлова Виктория Романовна', Student.GENDER_FEMALE, '2 класс (средний уровень)', 'Вокал', 'Серова Елена Викторовна'),
+            ('Карпов Роман Павлович', Student.GENDER_MALE, '2 класс (средний уровень)', 'Гитара', 'Романов Игорь Павлович'),
+            ('Жукова Алина Денисовна', Student.GENDER_FEMALE, '2 класс (средний уровень)', 'Фортепиано', 'Ковалёв Дмитрий Андреевич'),
+            ('Фадеев Тимофей Ильич', Student.GENDER_MALE, '2 класс (средний уровень)', 'Баян', 'Аксёнов Сергей Николаевич'),
+            ('Никитина Дарья Андреевна', Student.GENDER_FEMALE, '2 класс (средний уровень)', 'Гитара', 'Романов Игорь Павлович'),
+            ('Крылов Семён Максимович', Student.GENDER_MALE, '2 класс (средний уровень)', 'Кларнет', 'Ветров Алексей Михайлович'),
 
-            ('Никита Мельников', Student.GENDER_MALE, '3 класс (продвинутые)', 'Баян', 'Сергей Аксёнов'),
-            ('Полина Егорова', Student.GENDER_FEMALE, '3 класс (продвинутые)', 'Флейта', 'Алексей Ветров'),
-            ('Глеб Воронов', Student.GENDER_MALE, '3 класс (продвинутые)', 'Фортепиано', 'Дмитрий Ковалёв'),
-            ('Мария Ларионова', Student.GENDER_FEMALE, '3 класс (продвинутые)', 'Вокал', 'Елена Серова'),
-            ('Яна Тарасова', Student.GENDER_FEMALE, '3 класс (продвинутые)', 'Домра', 'Сергей Аксёнов'),
-            ('Кирилл Гусев', Student.GENDER_MALE, '3 класс (продвинутые)', 'Скрипка', 'Наталья Лебедева'),
+            ('Мельников Никита Олегович', Student.GENDER_MALE, '3 класс (продвинутые)', 'Баян', 'Аксёнов Сергей Николаевич'),
+            ('Егорова Полина Игоревна', Student.GENDER_FEMALE, '3 класс (продвинутые)', 'Флейта', 'Ветров Алексей Михайлович'),
+            ('Воронов Глеб Романович', Student.GENDER_MALE, '3 класс (продвинутые)', 'Фортепиано', 'Ковалёв Дмитрий Андреевич'),
+            ('Ларионова Мария Павловна', Student.GENDER_FEMALE, '3 класс (продвинутые)', 'Вокал', 'Серова Елена Викторовна'),
+            ('Тарасова Яна Сергеевна', Student.GENDER_FEMALE, '3 класс (продвинутые)', 'Домра', 'Аксёнов Сергей Николаевич'),
+            ('Гусев Кирилл Андреевич', Student.GENDER_MALE, '3 класс (продвинутые)', 'Скрипка', 'Лебедева Наталья Игоревна'),
 
-            ('Вероника Павлова', Student.GENDER_FEMALE, 'Старший ансамбль', 'Виолончель', 'Наталья Лебедева'),
-            ('Егор Комаров', Student.GENDER_MALE, 'Старший ансамбль', 'Саксофон', 'Алексей Ветров'),
-            ('Милана Савина', Student.GENDER_FEMALE, 'Старший ансамбль', 'Фортепиано', 'Марина Белова'),
-            ('Арсений Фомин', Student.GENDER_MALE, 'Старший ансамбль', 'Аккордеон', 'Сергей Аксёнов'),
-            ('Лидия Кузьмина', Student.GENDER_FEMALE, 'Старший ансамбль', 'Хоровая партия', 'Ольга Захарова'),
-            ('Степан Захаров', Student.GENDER_MALE, 'Старший ансамбль', 'Балалайка', 'Сергей Аксёнов'),
+            ('Павлова Вероника Денисовна', Student.GENDER_FEMALE, 'Старший ансамбль', 'Виолончель', 'Лебедева Наталья Игоревна'),
+            ('Комаров Егор Ильич', Student.GENDER_MALE, 'Старший ансамбль', 'Саксофон', 'Ветров Алексей Михайлович'),
+            ('Савина Милана Олеговна', Student.GENDER_FEMALE, 'Старший ансамбль', 'Фортепиано', 'Белова Марина Олеговна'),
+            ('Фомин Арсений Романович', Student.GENDER_MALE, 'Старший ансамбль', 'Аккордеон', 'Аксёнов Сергей Николаевич'),
+            ('Кузьмина Лидия Павловна', Student.GENDER_FEMALE, 'Старший ансамбль', 'Хоровая партия', 'Захарова Ольга Петровна'),
+            ('Захаров Степан Сергеевич', Student.GENDER_MALE, 'Старший ансамбль', 'Балалайка', 'Аксёнов Сергей Николаевич'),
         ]
-        if cohort not in {'active', 'archive'}:
-            raise CommandError(f'Неизвестный набор учеников: {cohort}.')
 
-        # В исходном наборе по шесть учеников на группу. Для каждого учебного
-        # года берём отдельную половину, поэтому данные компактны и не повторяются.
-        cohort_start = 0 if cohort == 'active' else 3
-        students_per_group: dict[str, int] = {}
-        reduced_student_specs = []
+        # Берём по три ученика на каждую основную группу. Эти же карточки затем
+        # зачисляются в следующий учебный год, сохраняя архивные снимки данных.
+        positions: dict[str, int] = {}
+        compact_specs = []
         for student_spec in student_specs:
             group_name = student_spec[2]
-            group_position = students_per_group.get(group_name, 0)
-            students_per_group[group_name] = group_position + 1
-            if cohort_start <= group_position < cohort_start + 3:
-                reduced_student_specs.append(student_spec)
-        student_specs = reduced_student_specs
+            position = positions.get(group_name, 0)
+            positions[group_name] = position + 1
+            if position < 3:
+                compact_specs.append(student_spec)
 
         students: list[Student] = []
         specialty_subject = subjects['Специальность']
@@ -773,22 +785,24 @@ class Command(BaseCommand):
             'Калуга / Музыкальное служение',
         ]
         extra_subject_specs = [
-            ('Индивидуальная импровизация', 'Дмитрий Ковалёв'),
-            ('Индивидуальное дирижирование', 'Ольга Захарова'),
-            ('Индивидуальный оркестр', 'Алексей Ветров'),
-            ('Индивидуальная история церковной музыки', 'Ольга Захарова'),
-            ('Индивидуальный ансамбль', 'Наталья Лебедева'),
+            ('Индивидуальная импровизация', 'Ковалёв Дмитрий Андреевич'),
+            ('Индивидуальное дирижирование', 'Захарова Ольга Петровна'),
+            ('Индивидуальный оркестр', 'Ветров Алексей Михайлович'),
+            ('Индивидуальная история церковной музыки', 'Захарова Ольга Петровна'),
+            ('Индивидуальный ансамбль', 'Лебедева Наталья Игоревна'),
         ]
 
         for index, (full_name, gender, group_name, instrument_name, specialty_teacher_name) in enumerate(
-            student_specs,
+            compact_specs,
             start=1,
         ):
-            email_prefix = 'student' if cohort == 'active' else 'archive-student'
-            contact_index = index if cohort == 'active' else index + 50
-            user_email = f'{email_prefix}{index:02d}@cadet-journal.local'
+            user_email = f'student{index:02d}@cadet-journal.local'
             user, password = self._create_user_for_full_name(full_name, email=user_email)
             self._assign_user_role(user, self.STUDENT_GROUP_NAME)
+            instrument = instruments[instrument_name]
+            orchestra_part = (
+                instrument.orchestra_parts.filter(is_active=True).order_by('name').first()
+            )
 
             student = Student.objects.create(
                 full_name=full_name,
@@ -796,18 +810,18 @@ class Command(BaseCommand):
                 birth_date=date(2008 + index % 8, (index % 12) + 1, min(8 + index, 28)),
                 city_church=city_church_values[(index - 1) % len(city_church_values)],
                 group=groups[group_name],
-                instrument=instruments[instrument_name],
+                instrument=instrument,
+                orchestra_part=orchestra_part,
                 music_education=education_values[(index - 1) % len(education_values)],
-                student_phone=f'+7 (901) 200-00-{contact_index:02d}',
+                student_phone=f'+7 (901) 200-00-{index:02d}',
                 parent_contacts=(
-                    f'Отец ученика {contact_index} - +7 (902) 300-00-{contact_index:02d}\n'
-                    f'Мама ученика {contact_index} — +7 (903) 400-00-{contact_index:02d}'
+                    f'Отец ученика {index} — +7 (902) 300-00-{index:02d}\n'
+                    f'Мама ученика {index} — +7 (903) 400-00-{index:02d}'
                 ),
                 comments=(
-                    f'Демо-карточка набора {cohort}. Инструмент: {instrument_name}. '
+                    f'Демо-карточка общего набора. Инструмент: {instrument_name}. '
                     f'Предпочтительное время занятий: {"утро" if index % 2 else "вечер"}. '
-                    'Можно использовать для проверки длинных комментариев, переносов строк '
-                    'и отображения контактов в админке.'
+                    'Эта карточка используется в обоих демонстрационных учебных годах.'
                 ),
                 user=user,
                 is_active=True,
@@ -816,6 +830,7 @@ class Command(BaseCommand):
                 student=student,
                 subject=specialty_subject,
                 teacher=teachers[specialty_teacher_name],
+                academic_year=academic_year,
                 is_active=True,
             )
 
@@ -826,6 +841,7 @@ class Command(BaseCommand):
                 student=student,
                 subject=subjects[extra_subject_name],
                 teacher=teachers[extra_teacher_name],
+                academic_year=academic_year,
                 is_active=True,
             )
 
@@ -833,8 +849,9 @@ class Command(BaseCommand):
                 StudentSubject.objects.create(
                     student=student,
                     subject=subjects['Индивидуальная гитара'],
-                    teacher=teachers['Игорь Романов'],
-                        is_active=False,
+                    teacher=teachers['Романов Игорь Павлович'],
+                    academic_year=academic_year,
+                    is_active=False,
                 )
 
             TemporaryCredential.objects.create(
@@ -847,6 +864,41 @@ class Command(BaseCommand):
             students.append(student)
 
         return students
+
+    def _reenroll_students(
+        self,
+        students: list[Student],
+        *,
+        source_year: AcademicYear,
+        target_year: AcademicYear,
+        groups: dict[str, StudyGroup],
+    ) -> None:
+        """Reuse the same student profiles while creating a new yearly history."""
+        for student in students:
+            source_enrollment = StudentEnrollment.objects.select_related('group').get(
+                student=student,
+                academic_year=source_year,
+            )
+            source_assignments = list(
+                StudentSubject.objects.filter(
+                    student=student,
+                    academic_year=source_year,
+                ).select_related('subject', 'teacher')
+            )
+            if source_enrollment.group is None:
+                raise CommandError(f'У ученика {student} отсутствует архивная группа.')
+
+            student.group = groups[source_enrollment.group.name]
+            student.save(update_fields=['group'])
+
+            for assignment in source_assignments:
+                StudentSubject.objects.create(
+                    student=student,
+                    subject=assignment.subject,
+                    teacher=assignment.teacher,
+                    academic_year=target_year,
+                    is_active=assignment.is_active,
+                )
 
     def _create_course_group_assignments(
         self,
@@ -862,11 +914,11 @@ class Command(BaseCommand):
             return
 
         course_group_subjects = [
-            ('Сольфеджио', 'Анна Морозова', 10),
-            ('Ритмика', 'Алексей Ветров', 20),
-            ('Хор', 'Елена Серова', 30),
-            ('Ансамбль', 'Наталья Лебедева', 40),
-            ('Слушание музыки', 'Анна Морозова', 50),
+            ('Сольфеджио', 'Морозова Анна Сергеевна', 10),
+            ('Ритмика', 'Ветров Алексей Михайлович', 20),
+            ('Хор', 'Серова Елена Викторовна', 30),
+            ('Ансамбль', 'Лебедева Наталья Игоревна', 40),
+            ('Слушание музыки', 'Морозова Анна Сергеевна', 50),
         ]
         for subject_name, teacher_name, sort_order in course_group_subjects:
             GroupSubject.objects.create(
@@ -878,16 +930,16 @@ class Command(BaseCommand):
             )
 
         specialty_teachers = [
-            'Дмитрий Ковалёв',
-            'Елена Серова',
-            'Игорь Романов',
-            'Наталья Лебедева',
-            'Сергей Аксёнов',
+            'Ковалёв Дмитрий Андреевич',
+            'Серова Елена Викторовна',
+            'Романов Игорь Павлович',
+            'Лебедева Наталья Игоревна',
+            'Аксёнов Сергей Николаевич',
         ]
         extra_subjects = [
-            ('Индивидуальная импровизация', 'Дмитрий Ковалёв'),
-            ('Индивидуальный оркестр', 'Алексей Ветров'),
-            ('Индивидуальная история церковной музыки', 'Ольга Захарова'),
+            ('Индивидуальная импровизация', 'Ковалёв Дмитрий Андреевич'),
+            ('Индивидуальный оркестр', 'Ветров Алексей Михайлович'),
+            ('Индивидуальная история церковной музыки', 'Захарова Ольга Петровна'),
         ]
         course_students = course_group.students.filter(is_active=True).order_by('id')
 
@@ -907,8 +959,9 @@ class Command(BaseCommand):
             )
 
     def _create_grades_and_results(self, students: list[Student], academic_year: AcademicYear) -> None:
-        rng = Random(2026)
-        first_grade_date = academic_year.starts_on + timedelta(days=14)
+        rng = Random(2026 + academic_year.starts_on.toordinal())
+        period_days = (academic_year.ends_on - academic_year.starts_on).days
+        grade_offsets = (1, max(2, period_days // 2), max(3, period_days - 1))
         grade_values_source = [
             Grade.GRADE_1,
             Grade.GRADE_2,
@@ -921,20 +974,20 @@ class Command(BaseCommand):
         results_to_create: list[SubjectResult] = []
 
         for student in students:
-            enrollment = StudentEnrollment.objects.get(
+            enrollment = StudentEnrollment.objects.select_related('group').get(
                 student=student,
                 academic_year=academic_year,
             )
             group_assignments = list(
                 GroupSubject.objects
                 .select_related('subject', 'teacher')
-                .filter(group=student.group, is_active=True)
+                .filter(group=enrollment.group, is_active=True)
                 .order_by('sort_order', 'subject__name')
             )
             individual_assignments = list(
                 StudentSubject.objects
                 .select_related('subject', 'teacher')
-                .filter(student=student, is_active=True)
+                .filter(student=student, academic_year=academic_year, is_active=True)
                 .order_by('subject__name')
             )
 
@@ -942,10 +995,11 @@ class Command(BaseCommand):
                 (assignment.subject, assignment.teacher)
                 for assignment in group_assignments
             ]
+            assigned_subject_ids = {subject.id for subject, _teacher in assignment_items}
             assignment_items.extend(
                 (assignment.subject, assignment.teacher)
                 for assignment in individual_assignments
-                if assignment.subject_id not in {subject.id for subject, _teacher in assignment_items}
+                if assignment.subject_id not in assigned_subject_ids
             )
 
             for subject_index, (subject, teacher) in enumerate(assignment_items, start=1):
@@ -954,9 +1008,7 @@ class Command(BaseCommand):
                 grade_offset = (student.pk + subject_index) % len(grade_values_source)
                 grade_values = grade_values_source[grade_offset:] + grade_values_source[:grade_offset]
                 for index, grade_value in enumerate(grade_values[:3]):
-                    grade_date = first_grade_date + timedelta(
-                        days=index * 18 + subject_index,
-                    )
+                    grade_date = academic_year.starts_on + timedelta(days=grade_offsets[index])
                     grades_to_create.append(
                         Grade(
                             student=student,
@@ -1014,7 +1066,7 @@ class Command(BaseCommand):
             {
                 'name': 'Младший оркестр',
                 'study_group_name': '2 класс (средний уровень)',
-                'teacher': teachers['Алексей Ветров'],
+                'teacher': teachers['Ветров Алексей Михайлович'],
                 'sort_order': 10,
                 'items': [
                     ('Ритмический этюд', True),
@@ -1025,7 +1077,7 @@ class Command(BaseCommand):
             {
                 'name': 'Продвинутый оркестр',
                 'study_group_name': '3 класс (продвинутые)',
-                'teacher': teachers['Наталья Лебедева'],
+                'teacher': teachers['Лебедева Наталья Игоревна'],
                 'sort_order': 20,
                 'items': [
                     ('Торжественная увертюра', True),
@@ -1036,7 +1088,7 @@ class Command(BaseCommand):
             {
                 'name': 'Старший оркестр',
                 'study_group_name': 'Старший ансамбль',
-                'teacher': teachers['Игорь Романов'],
+                'teacher': teachers['Романов Игорь Павлович'],
                 'sort_order': 30,
                 'items': [
                     ('Симфоническая миниатюра', True),
@@ -1180,7 +1232,7 @@ class Command(BaseCommand):
                 subject=subject,
                 academic_year=academic_year,
                 group=combined_group,
-                responsible_teacher=teachers['Наталья Лебедева'],
+                responsible_teacher=teachers['Лебедева Наталья Игоревна'],
                 sort_order=10,
                 is_required=True,
             ),
@@ -1190,7 +1242,7 @@ class Command(BaseCommand):
                 subject=subject,
                 academic_year=academic_year,
                 group=combined_group,
-                responsible_teacher=teachers['Игорь Романов'],
+                responsible_teacher=teachers['Романов Игорь Павлович'],
                 sort_order=20,
                 is_required=False,
             ),
@@ -1235,10 +1287,25 @@ class Command(BaseCommand):
             errors.append('Должен быть ровно один активный учебный год.')
         if active_year is None:
             errors.append('Не найден активный учебный год.')
-        elif active_year.name != '2025/2026':
-            errors.append('Активным должен быть учебный год 2025/2026.')
-        if not AcademicYear.objects.filter(name='2024/2025', is_active=False).exists():
-            errors.append('Не найден архивный учебный год 2024/2025.')
+        elif active_year != max(years, key=lambda year: (year.starts_on, year.pk)):
+            errors.append('Активным должен быть самый новый демонстрационный учебный год.')
+
+        for academic_year in years:
+            if (academic_year.ends_on - academic_year.starts_on).days != 13:
+                errors.append(f'Учебный период {academic_year} должен длиться ровно 14 дней.')
+        for previous, current in zip(years, years[1:]):
+            if previous.ends_on >= current.starts_on:
+                errors.append(f'Учебные периоды {previous} и {current} пересекаются.')
+
+        shared_students_count = (
+            StudentEnrollment.objects
+            .values('student_id')
+            .annotate(years_count=Count('academic_year_id', distinct=True))
+            .filter(years_count=2)
+            .count()
+        )
+        if shared_students_count < 15:
+            errors.append('Одни и те же демонстрационные ученики должны быть зачислены в оба года.')
 
         for academic_year in years:
             if not CourseRegistrationSettings.objects.filter(
@@ -1431,7 +1498,7 @@ class Command(BaseCommand):
                 'gender': CourseApplication.GENDER_MALE,
                 'birth_date': date(2013, 11, 5),
                 'city_church': 'Тверь / Молодежная группа',
-                'instrument': 'Баян',
+                'instrument': 'Гусли',
                 'music_education': CourseApplication.MUSIC_EDUCATION_NONE,
                 'student_phone': '+7 904 222-33-44',
                 'parent_contacts': (
@@ -1439,7 +1506,7 @@ class Command(BaseCommand):
                     'Игорь Кузнецов - +7 904 222-33-46'
                 ),
                 'comments': (
-                    'Нужен начальный уровень. Родители просят поставить в группу '
+                    'Нужен начальный уровень на собственном инструменте. Родители просят поставить в группу '
                     'с вечерним расписанием.'
                 ),
                 'status': CourseApplication.STATUS_CONFIRMED,
