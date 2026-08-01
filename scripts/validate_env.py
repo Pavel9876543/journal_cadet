@@ -11,6 +11,7 @@ PRODUCTION_KEYS = {
     'SECRET_KEY',
     'ALLOWED_HOSTS',
     'CSRF_TRUSTED_ORIGINS',
+    'TIME_ZONE',
     'APP_PORT',
     'POSTGRES_DB',
     'POSTGRES_USER',
@@ -44,6 +45,7 @@ TEST_KEYS = {
     'SECRET_KEY',
     'ALLOWED_HOSTS',
     'CSRF_TRUSTED_ORIGINS',
+    'TIME_ZONE',
     'DB_ENGINE',
     'DB_NAME',
     'DB_USER',
@@ -125,6 +127,20 @@ def _nonnegative_int(values: dict[str, str], key: str, errors: list[str]) -> Non
         errors.append(f'{key} не может быть отрицательным')
 
 
+
+
+def _valid_time_zone(values: dict[str, str], errors: list[str]) -> None:
+    value = values.get('TIME_ZONE', 'Europe/Moscow').strip() or 'Europe/Moscow'
+    aliases = {'Moscow', 'UTC+3', 'UTC+03:00', '+03:00', 'Europe/Moscow'}
+    if value in aliases:
+        return
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(value)
+    except Exception:
+        errors.append('TIME_ZONE должен содержать корректную IANA-зону, например Europe/Moscow')
+
+
 def validate_production(
     values: dict[str, str],
     *,
@@ -198,6 +214,7 @@ def validate_production(
         _nonnegative_int(values, key, errors)
 
     _positive_int(values, 'ERROR_LOG_MAX_RECORDS', errors)
+    _valid_time_zone(values, errors)
     error_log_limit = values.get('ERROR_LOG_MAX_RECORDS')
     if error_log_limit and error_log_limit.isdigit() and int(error_log_limit) > 1000:
         errors.append('ERROR_LOG_MAX_RECORDS не может быть больше 1000')
@@ -300,6 +317,8 @@ def validate_test(values: dict[str, str]) -> list[str]:
         'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL',
     }:
         errors.append('DJANGO_LOG_LEVEL содержит неподдерживаемое значение')
+    _valid_time_zone(values, errors)
+
     return errors
 
 

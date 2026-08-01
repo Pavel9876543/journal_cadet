@@ -4,6 +4,8 @@ import logging
 import traceback
 from typing import Any
 
+from .user_error_messages import default_user_error_message
+
 
 def _exception_text(exception: BaseException | None = None, exc_info=None) -> str:
     if exc_info:
@@ -23,6 +25,7 @@ def persist_error(
     *,
     request=None,
     message: str,
+    user_message: str | None = None,
     exception: BaseException | None = None,
     exc_info=None,
     level: str = 'ERROR',
@@ -57,6 +60,9 @@ def persist_error(
             level=str(level or 'ERROR')[:20],
             logger_name=str(logger_name or 'journal')[:255],
             message=str(message or 'Неизвестная ошибка'),
+            user_message=str(
+                user_message or default_user_error_message(status_code)
+            ),
             exception=_exception_text(exception, exc_info),
             request_id=str(request_id)[:64],
             status_code=status_code if isinstance(status_code, int) else None,
@@ -80,10 +86,12 @@ def log_handled_error(
     status_code: int = 400,
     logger_name: str = 'journal.handled',
     metadata: dict[str, Any] | None = None,
+    user_message: str | None = None,
 ) -> bool:
     return persist_error(
         request=request,
         message=str(exception) or exception.__class__.__name__,
+        user_message=user_message,
         exception=exception,
         status_code=status_code,
         logger_name=logger_name,

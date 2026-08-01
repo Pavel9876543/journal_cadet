@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from importlib.util import find_spec
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -361,7 +362,22 @@ AUTHENTICATION_BACKENDS = [
 ]
 
 LANGUAGE_CODE = 'ru-ru'
-TIME_ZONE = os.getenv('TIME_ZONE', 'UTC')
+
+_TIME_ZONE_ALIASES = {
+    'moscow': 'Europe/Moscow',
+    'utc+3': 'Europe/Moscow',
+    'utc+03:00': 'Europe/Moscow',
+    '+03:00': 'Europe/Moscow',
+}
+_time_zone_raw = os.getenv('TIME_ZONE', 'Europe/Moscow').strip() or 'Europe/Moscow'
+TIME_ZONE = _TIME_ZONE_ALIASES.get(_time_zone_raw.lower(), _time_zone_raw)
+try:
+    ZoneInfo(TIME_ZONE)
+except ZoneInfoNotFoundError as exc:
+    raise ImproperlyConfigured(
+        'TIME_ZONE must be a valid IANA time zone, for example Europe/Moscow.'
+    ) from exc
+
 USE_I18N = True
 USE_TZ = True
 

@@ -38,6 +38,7 @@ from .assignment_options import (
 )
 from .assessment_services import enrollments_for_assessment_item
 from .error_logging import log_handled_error
+from .user_error_messages import build_admin_form_user_message
 from .forms import (
     CourseApplicationAdminForm,
     CourseRegistrationSettingsForm,
@@ -148,10 +149,20 @@ class JournalAdminDescriptionMixin(RelatedRecordsAdminMixin):
                         ],
                     })
             if form_errors or inline_errors:
+                inline_formsets = [
+                    inline_admin_formset.formset
+                    for inline_admin_formset in context.get('inline_admin_formsets', ())
+                ]
+                user_message = build_admin_form_user_message(
+                    admin_form.form,
+                    inline_formsets,
+                )
+                context['journal_user_error_message'] = user_message
                 log_handled_error(
                     request,
                     ValidationError('Форма администратора содержит ошибки.'),
                     logger_name='journal.admin.form',
+                    user_message=user_message,
                     metadata={
                         'model': self.model._meta.label,
                         'object_id': object_id or '',
@@ -1817,15 +1828,32 @@ class AssessmentResultAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         if selected_year is not None:
             items = items.filter(academic_year=selected_year)
         if not (self.instance and self.instance.pk):
-            items = items.filter(is_active=True, group__is_active=True)
+            items = items.filter(
+                is_active=True,
+                group__is_active=True,
+                responsible_teacher__isnull=False,
+            )
         self._set_queryset('item', self._include_selected(
             items.order_by('subject__name', 'group__sort_order', 'sort_order', 'title'),
             AssessmentItem,
             'item',
         ))
 
-        enrollments = StudentEnrollment.objects.none()
-        teachers = Teacher.objects.none()
+        # The add page must remain usable even before JavaScript narrows the
+        # dependent fields after an item is selected.  Show all active
+        # year-scoped candidates initially, then reduce them to the exact item.
+        enrollments = StudentEnrollment.objects.filter(
+            is_active=True,
+            student__is_active=True,
+        ).select_related('student', 'group', 'academic_year')
+        if selected_year is not None:
+            enrollments = enrollments.filter(academic_year=selected_year)
+        teachers = Teacher.objects.filter(
+            is_active=True,
+            pk__in=items.exclude(
+                responsible_teacher__isnull=True,
+            ).values('responsible_teacher_id'),
+        )
         if item is not None:
             enrollments = enrollments_for_assessment_item(
                 item,
@@ -3974,6 +4002,7 @@ class ErrorLogAdmin(admin.ModelAdmin):
     search_fields = (
         'request_id',
         'message',
+        'user_message',
         'exception',
         'path',
         'user_label',
@@ -3984,6 +4013,7 @@ class ErrorLogAdmin(admin.ModelAdmin):
         'level',
         'logger_name',
         'message',
+        'user_message',
         'exception',
         'request_id',
         'status_code',

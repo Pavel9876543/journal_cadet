@@ -355,6 +355,14 @@
     }
 
     function adminValidationMessage(form) {
+        var friendly = form && form.querySelector('[data-user-friendly-error-message]');
+        if (friendly) {
+            var configured = friendly.getAttribute('data-user-friendly-error-message')
+                || adminMessageText(friendly);
+            if (configured) {
+                return configured;
+            }
+        }
         var details = adminFieldErrorDetails(form);
         if (!details.length) {
             return 'Не удалось сохранить запись. Проверьте выделенные поля и строки во всех вкладках.';

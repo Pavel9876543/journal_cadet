@@ -564,6 +564,11 @@ def _assessment_options_api_sync(request):
     items = AssessmentItem.objects.filter(is_active=True, group__is_active=True).select_related(
         'element', 'subject', 'academic_year', 'group', 'responsible_teacher'
     )
+    if assessment_type == 'result':
+        # A result can only be authored by the item's responsible teacher.
+        # Hide incomplete items instead of presenting a choice that can never
+        # pass model validation.
+        items = items.filter(responsible_teacher__isnull=False)
     enrollments = StudentEnrollment.objects.none()
 
     if academic_year is not None:
@@ -600,6 +605,10 @@ def _assessment_options_api_sync(request):
         if student is None:
             students = students.filter(is_active=True)
     if assessment_type == 'result':
+        if item is None:
+            teachers = teachers.filter(
+                pk__in=items.values('responsible_teacher_id'),
+            )
         if item is not None:
             enrollments = enrollments_for_assessment_item(
                 item,

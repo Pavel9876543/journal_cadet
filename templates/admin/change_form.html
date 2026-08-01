@@ -49,9 +49,12 @@
             {% block form_top %}{% endblock %}
 
             {% if errors %}
-                <div class="alert alert-danger" role="alert">
-                    Не удалось сохранить запись: найдено ошибок — {{ errors|length }}.
-                    Проверьте выделенные поля и строки во всех вкладках; точная причина указана рядом с каждым полем.
+                <div
+                    class="alert alert-danger"
+                    role="alert"
+                    data-user-friendly-error-message="{{ journal_user_error_message|default:'Не удалось сохранить запись. Проверьте выделенные поля и повторите попытку.' }}"
+                >
+                    {{ journal_user_error_message|default:'Не удалось сохранить запись. Проверьте выделенные поля и повторите попытку.' }}
                 </div>
                 {% for error in adminform.form.non_field_errors %}
                     <div class="alert alert-danger alert-dismissible">

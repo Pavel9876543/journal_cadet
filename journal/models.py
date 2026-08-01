@@ -1490,6 +1490,11 @@ def teacher_subject_is_used(teacher_id: int | None, subject_id: int | None) -> b
             subject_id=subject_id,
             is_active=True,
         ).exists()
+        or AssessmentItem.objects.filter(
+            responsible_teacher_id=teacher_id,
+            subject_id=subject_id,
+            is_active=True,
+        ).exists()
     )
 
 
@@ -2214,6 +2219,7 @@ class AssessmentItem(models.Model):
                 previous_year_id = previous['academic_year_id']
         self.full_clean()
         result = super().save(*args, **kwargs)
+        ensure_teacher_subject(self.responsible_teacher_id, self.subject_id)
         from .assessment_services import recalculate_group_finals, recalculate_subject_finals
         recalculate_group_finals(self.group)
         if previous_group_id and previous_group_id != self.group_id:
@@ -2850,7 +2856,12 @@ class ErrorLog(models.Model):
     created_at = models.DateTimeField('Дата и время', auto_now_add=True)
     level = models.CharField('Уровень', max_length=20, default='ERROR')
     logger_name = models.CharField('Источник', max_length=255, blank=True)
-    message = models.TextField('Сообщение')
+    message = models.TextField('Техническое сообщение')
+    user_message = models.TextField(
+        'Сообщение для пользователя',
+        blank=True,
+        default='',
+    )
     exception = models.TextField('Трассировка', blank=True)
     request_id = models.CharField('Код ошибки', max_length=64, blank=True, db_index=True)
     status_code = models.PositiveSmallIntegerField('HTTP-статус', null=True, blank=True)
