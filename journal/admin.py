@@ -987,7 +987,6 @@ class SubjectResultAdminForm(forms.ModelForm):
         )
 
         student = self._selected_object(Student.objects.select_related('group'), student_id)
-        subject = self._selected_object(Subject.objects.all(), subject_id)
         academic_year = fixed_academic_year or self._selected_object(
             AcademicYear.objects.all(), academic_year_id
         )
@@ -1540,6 +1539,7 @@ class AssessmentDependencyFormMixin:
             'parent_assessment_group': 'data-parent-assessment-group-id',
             'parent_assessment_item': 'data-parent-assessment-item-id',
             'parent_academic_year': 'data-parent-academic-year-id',
+            'parent_responsible_teacher': 'data-parent-responsible-teacher-id',
         }
         for field_name in self.dependency_fields:
             if field_name in self.fields:
@@ -1550,6 +1550,13 @@ class AssessmentDependencyFormMixin:
                 if self.assessment_type == 'item' and getattr(self.instance, 'pk', None):
                     update_widget_attrs(self.fields[field_name], {
                         'data-current-assessment-item-id': str(self.instance.pk),
+                    })
+                if (
+                    self.assessment_type == 'item'
+                    and getattr(self, 'allow_teacher_reassignment', False)
+                ):
+                    update_widget_attrs(self.fields[field_name], {
+                        'data-allow-teacher-reassignment': '1',
                     })
                 for attribute_name, data_attribute in parent_attrs.items():
                     parent = getattr(self, attribute_name, None)
@@ -1674,6 +1681,10 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        allow_teacher_reassignment = bool(
+            getattr(self, 'allow_teacher_reassignment', False)
+            and getattr(self, 'parent_responsible_teacher', None)
+        )
         group = (
             self._selected_object(AssessmentGroup.objects.all(), 'group')
             or getattr(self, 'parent_assessment_group', None)
@@ -1699,15 +1710,16 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
                 is_active=True,
                 subject=group.subject,
             )
-            occupied = AssessmentItem.objects.filter(
-                group=group,
-                element__isnull=False,
-            )
-            if self.instance and self.instance.pk:
-                occupied = occupied.exclude(pk=self.instance.pk)
-            elements = elements.exclude(
-                pk__in=occupied.values('element_id'),
-            )
+            if not allow_teacher_reassignment:
+                occupied = AssessmentItem.objects.filter(
+                    group=group,
+                    element__isnull=False,
+                )
+                if self.instance and self.instance.pk:
+                    occupied = occupied.exclude(pk=self.instance.pk)
+                elements = elements.exclude(
+                    pk__in=occupied.values('element_id'),
+                )
         # Keep only the value owned by the edited row.  A submitted value that
         # is already occupied by another row must not be silently reintroduced
         # into the dropdown, otherwise the database constraint is reached.
@@ -1732,7 +1744,7 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         groups = AssessmentGroup.objects.filter(is_active=True)
         if year is not None:
             groups = groups.filter(academic_year=year)
-        if selected_element is not None:
+        if selected_element is not None and not allow_teacher_reassignment:
             occupied_groups = AssessmentItem.objects.filter(
                 element=selected_element,
             )
@@ -1793,7 +1805,43 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             )
             if self.instance and self.instance.pk:
                 duplicate = duplicate.exclude(pk=self.instance.pk)
-            if duplicate.exists():
+            duplicate_item = duplicate.select_related('responsible_teacher').first()
+            parent_teacher = getattr(self, 'parent_responsible_teacher', None)
+            can_reassign = bool(
+                duplicate_item is not None
+                and getattr(self, 'allow_teacher_reassignment', False)
+                and parent_teacher is not None
+                and duplicate_item.responsible_teacher_id != parent_teacher.pk
+            )
+            if can_reassign:
+                if self.data.get('_confirm_existing_changes') == '1':
+                    self._reassignment_original_values = {
+                        'responsible_teacher_id': duplicate_item.responsible_teacher_id,
+                        'group_id': duplicate_item.group_id,
+                        'element_id': duplicate_item.element_id,
+                        'sort_order': duplicate_item.sort_order,
+                        'is_required': duplicate_item.is_required,
+                        'is_active': duplicate_item.is_active,
+                    }
+                    self._reassignment_target = duplicate_item
+                else:
+                    previous_teacher = (
+                        duplicate_item.responsible_teacher.full_name
+                        if duplicate_item.responsible_teacher_id
+                        else 'Не назначен'
+                    )
+                    # ``add_error`` removes the field from ``cleaned_data``.
+                    # Preserve it on the temporary instance so model cleaning
+                    # does not append a misleading second "choose an element"
+                    # error to the confirmation message.
+                    self.instance.element = element
+                    self.add_error(
+                        'element',
+                        'Подтвердите изменение существующего назначения: '
+                        f'ответственный преподаватель «{previous_teacher}» → '
+                        f'«{parent_teacher.full_name}».',
+                    )
+            elif duplicate_item is not None:
                 self.add_error(
                     'element',
                     'Это произведение уже добавлено в выбранную группу. '
@@ -1801,9 +1849,60 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
                 )
         return cleaned_data
 
+    def _post_clean(self):
+        target = getattr(self, '_reassignment_target', None)
+        if target is not None:
+            # The row was added in another teacher's inline, but the database
+            # object already exists. Reuse that object so Django performs an
+            # UPDATE (and preserves timestamps/results) instead of reaching a
+            # uniqueness constraint with a second INSERT.
+            parent_teacher = getattr(self.instance, 'responsible_teacher', None)
+            self.instance = target
+            if parent_teacher is not None:
+                self.instance.responsible_teacher = parent_teacher
+        super()._post_clean()
+
 
 class AssessmentItemInlineFormSet(BaseInlineFormSet):
     """Reject duplicate group/element pairs before database constraints."""
+
+    def save_new_objects(self, commit=True):
+        """Classify a confirmed teacher reassignment as a change, not an add."""
+        saved_objects = []
+        self.new_objects = []
+        if not hasattr(self, 'changed_objects'):
+            self.changed_objects = []
+        for form in self.extra_forms:
+            if not form.has_changed():
+                continue
+            if self.can_delete and self._should_delete_form(form):
+                continue
+            saved_object = self.save_new(form, commit=commit)
+            saved_objects.append(saved_object)
+            if getattr(form, '_reassignment_target', None) is not None:
+                original_values = getattr(form, '_reassignment_original_values', {})
+                audited_fields = (
+                    ('responsible_teacher', 'responsible_teacher_id'),
+                    ('group', 'group_id'),
+                    ('element', 'element_id'),
+                    ('sort_order', 'sort_order'),
+                    ('is_required', 'is_required'),
+                    ('is_active', 'is_active'),
+                )
+                changed_fields = [
+                    field_name
+                    for field_name, attribute_name in audited_fields
+                    if original_values.get(attribute_name) != getattr(
+                        saved_object,
+                        attribute_name,
+                    )
+                ]
+                self.changed_objects.append((saved_object, changed_fields))
+            else:
+                self.new_objects.append(saved_object)
+            if not commit:
+                self.saved_forms.append(form)
+        return saved_objects
 
     def clean(self):
         super().clean()
@@ -2158,7 +2257,10 @@ class GroupStudentInlineForm(forms.ModelForm):
             can_delete_related=True,
             can_view_related=True,
         )
-        self.fields['city_church'].disabled = True
+        # This is an automatically copied snapshot, not an unavailable form
+        # control. ``readonly`` keeps it visible/submittable and lets the
+        # dependency script refresh it immediately after the student changes.
+        self.fields['city_church'].disabled = False
         self.fields['city_church'].required = False
         self.fields['city_church'].initial = (
             self.instance.city_church
@@ -2169,6 +2271,8 @@ class GroupStudentInlineForm(forms.ModelForm):
             'data-student-city-target': '1',
             'class': 'city-church-field',
             'size': '80',
+            'readonly': True,
+            'aria-readonly': 'true',
         })
 
 
@@ -2831,6 +2935,8 @@ class AssessmentItemForTeacherInline(
     def get_form_context(self, request, obj=None):
         return {
             'parent_academic_year': get_selected_admin_academic_year(request) or AcademicYear.get_active(),
+            'parent_responsible_teacher': obj,
+            'allow_teacher_reassignment': True,
         }
 
     def get_queryset(self, request):

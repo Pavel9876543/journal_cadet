@@ -70,6 +70,7 @@ from .models import (
     AssessmentElement,
     AssessmentGroup,
     AssessmentItem,
+    AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
     Grade,
@@ -245,6 +246,51 @@ def _grade_options_api_sync(request):
         students = options['students']
         subjects = options['subjects']
         teachers = options['teachers']
+        try:
+            grade_date = date.fromisoformat(request.GET.get('date', ''))
+        except (TypeError, ValueError):
+            grade_date = None
+        existing_grade = None
+        if student is not None and subject is not None and grade_date is not None:
+            existing_grade = (
+                Grade.objects
+                .filter(student=student, subject=subject, date=grade_date)
+                .select_related('teacher', 'academic_year')
+                .first()
+            )
+        existing_change = None
+        if existing_grade is not None:
+            current_teacher = teacher
+            existing_change = {
+                'fields': {
+                    'value': {
+                        'label': 'Оценка',
+                        'field_name': 'value',
+                        'old_raw': existing_grade.value,
+                        'old_label': existing_grade.value,
+                    },
+                    'comment': {
+                        'label': 'Комментарий',
+                        'field_name': 'comment',
+                        'old_raw': existing_grade.comment,
+                        'old_label': existing_grade.comment,
+                    },
+                    'teacher': {
+                        'label': 'Преподаватель',
+                        'field_name': 'teacher',
+                        'old_raw': str(existing_grade.teacher_id),
+                        'old_label': existing_grade.teacher.full_name,
+                        'current_raw': str(getattr(current_teacher, 'pk', '') or ''),
+                        'current_label': getattr(current_teacher, 'full_name', '') or '',
+                    },
+                    'academic_year': {
+                        'label': 'Учебный год',
+                        'field_name': 'academic_year',
+                        'old_raw': str(existing_grade.academic_year_id or ''),
+                        'old_label': str(existing_grade.academic_year or 'Не указан'),
+                    },
+                },
+            }
         return JsonResponse({
             'groups': [
                 {
@@ -271,6 +317,7 @@ def _grade_options_api_sync(request):
                 for item in teachers
             ],
             'defaults': {},
+            'existing_change': existing_change,
         })
 
     if mode == 'subject_result':
@@ -522,6 +569,48 @@ def _assessment_filter_options_api_sync(request):
         # is chosen.
         payload['items'] = []
         payload['students'] = []
+    payload['existing_change'] = None
+    if (
+        editable_only
+        and selection.item is not None
+        and selection.student is not None
+        and any(row['id'] == selection.item.pk for row in payload['items'])
+        and any(row['id'] == selection.student.pk for row in payload['students'])
+    ):
+        enrollment = selection.student.enrollment_for_year(academic_year)
+        existing_result = None
+        if enrollment is not None:
+            existing_result = (
+                AssessmentResult.objects
+                .filter(enrollment=enrollment, item=selection.item)
+                .select_related('assessed_by')
+                .first()
+            )
+        if existing_result is not None:
+            current_teacher = fixed_teacher or selection.item.responsible_teacher
+            payload['existing_change'] = {
+                'fields': {
+                    'status': {
+                        'label': 'Зачёт / результат',
+                        'field_name': 'status',
+                        'old_raw': existing_result.status,
+                        'old_label': existing_result.get_status_display(),
+                    },
+                    'comment': {
+                        'label': 'Комментарий',
+                        'field_name': 'comment',
+                        'old_raw': existing_result.comment,
+                        'old_label': existing_result.comment,
+                    },
+                    'assessed_by': {
+                        'label': 'Преподаватель, выставивший результат',
+                        'old_raw': str(existing_result.assessed_by_id),
+                        'old_label': existing_result.assessed_by.full_name,
+                        'current_raw': str(getattr(current_teacher, 'pk', '') or ''),
+                        'current_label': getattr(current_teacher, 'full_name', '') or '',
+                    },
+                },
+            }
     return JsonResponse(payload)
 
 
@@ -538,6 +627,15 @@ def _assessment_options_api_sync(request):
 
     changed_field = request.GET.get('changed') or ''
     strict_options = request.GET.get('strict') == '1'
+    allow_teacher_reassignment = bool(
+        assessment_type == 'item'
+        and request.GET.get('allow_teacher_reassignment') == '1'
+        and request.user.is_staff
+    )
+    parent_responsible_teacher = _get_selected_object(
+        Teacher.objects.all(),
+        request.GET.get('parent_responsible_teacher'),
+    )
     selected_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
 
     group = _get_selected_object(
@@ -640,7 +738,7 @@ def _assessment_options_api_sync(request):
             items = items.filter(group=group)
         if selected_teacher is not None:
             items = items.filter(responsible_teacher=selected_teacher)
-        if element is not None:
+        if element is not None and not allow_teacher_reassignment:
             occupied_group_ids = AssessmentItem.objects.filter(element=element)
             if current_item is not None:
                 occupied_group_ids = occupied_group_ids.exclude(pk=current_item.pk)
@@ -712,7 +810,7 @@ def _assessment_options_api_sync(request):
     if not strict_options or changed_field == teacher_field:
         teachers = _include_selected_option(teachers, Teacher, selected_teacher)
 
-    if group is not None:
+    if group is not None and not allow_teacher_reassignment:
         occupied = AssessmentItem.objects.filter(group=group, element__isnull=False)
         if current_item is not None:
             occupied = occupied.exclude(pk=current_item.pk)
@@ -745,6 +843,45 @@ def _assessment_options_api_sync(request):
         defaults['assessed_by_id'] = item.responsible_teacher_id
         defaults['responsible_teacher_id'] = item.responsible_teacher_id
 
+    existing_assignment_by_element = {}
+    if assessment_type == 'item' and group is not None and allow_teacher_reassignment:
+        existing_assignment_by_element = {
+            row.element_id: row
+            for row in AssessmentItem.objects.filter(
+                group=group,
+                element__isnull=False,
+            ).select_related('responsible_teacher')
+        }
+
+    element_options = []
+    for row in elements:
+        option = {
+            'id': row.pk,
+            'label': row.title,
+            'subject_id': row.subject_id,
+        }
+        existing_assignment = existing_assignment_by_element.get(row.pk)
+        if existing_assignment is not None:
+            option['existing_assignment'] = {
+                'id': existing_assignment.pk,
+                'responsible_teacher_id': existing_assignment.responsible_teacher_id,
+                'responsible_teacher_label': (
+                    existing_assignment.responsible_teacher.full_name
+                    if existing_assignment.responsible_teacher_id
+                    else 'Не назначен'
+                ),
+                'target_teacher_id': getattr(parent_responsible_teacher, 'pk', None),
+                'target_teacher_label': (
+                    parent_responsible_teacher.full_name
+                    if parent_responsible_teacher is not None
+                    else ''
+                ),
+                'sort_order': existing_assignment.sort_order,
+                'is_required': existing_assignment.is_required,
+                'is_active': existing_assignment.is_active,
+            }
+        element_options.append(option)
+
     return JsonResponse({
         'academic_years': [
             {'id': row.pk, 'label': row.name}
@@ -754,10 +891,7 @@ def _assessment_options_api_sync(request):
             {'id': row.pk, 'label': row.name}
             for row in subjects
         ],
-        'elements': [
-            {'id': row.pk, 'label': row.title, 'subject_id': row.subject_id}
-            for row in elements
-        ],
+        'elements': element_options,
         'groups': [
             {
                 'id': row.pk,
@@ -1128,6 +1262,78 @@ def _handle_assessment_result_post(
         acting_teacher = fixed_teacher or item.responsible_teacher
         if acting_teacher is None:
             raise ValidationError('У произведения не назначен ответственный преподаватель.')
+        enrollment = student.enrollment_for_year(item.group.academic_year)
+        existing_result = None
+        if enrollment is not None:
+            existing_result = (
+                AssessmentResult.objects
+                .filter(enrollment=enrollment, item=item)
+                .select_related('assessed_by')
+                .first()
+            )
+
+        confirmation_changes = []
+        has_actual_changes = False
+        if existing_result is not None:
+            if status == 'clear':
+                has_actual_changes = True
+                confirmation_changes.append(
+                    'Зачёт / результат: '
+                    f'«{existing_result.get_status_display()}» → «Пусто»'
+                )
+                if existing_result.comment:
+                    confirmation_changes.append(
+                        f'Комментарий: «{existing_result.comment}» → «Пусто»'
+                    )
+            else:
+                comparisons = (
+                    (
+                        'Зачёт / результат',
+                        existing_result.status,
+                        status,
+                        existing_result.get_status_display(),
+                        dict(AssessmentResult.STATUS_CHOICES).get(status, status),
+                    ),
+                    (
+                        'Комментарий',
+                        existing_result.comment,
+                        comment,
+                        existing_result.comment,
+                        comment,
+                    ),
+                    (
+                        'Преподаватель, выставивший результат',
+                        existing_result.assessed_by_id,
+                        acting_teacher.pk,
+                        existing_result.assessed_by.full_name,
+                        acting_teacher.full_name,
+                    ),
+                )
+                for label, old_raw, new_raw, old_label, new_label in comparisons:
+                    if old_raw == new_raw:
+                        continue
+                    has_actual_changes = True
+                    if old_raw in (None, ''):
+                        continue
+                    confirmation_changes.append(
+                        f'{label}: «{old_label or "Пусто"}» → «{new_label or "Пусто"}»'
+                    )
+
+        if (
+            confirmation_changes
+            and request.POST.get('_confirm_existing_changes') != '1'
+        ):
+            messages.error(
+                request,
+                'Подтвердите изменение существующего зачёта: '
+                + '; '.join(confirmation_changes),
+            )
+            return _redirect_current_journal(request)
+
+        if existing_result is not None and not has_actual_changes:
+            messages.info(request, 'Значения зачёта не изменились.')
+            return _redirect_current_journal(request)
+
         if status == 'clear':
             clear_assessment_result(
                 item=item,
@@ -1479,6 +1685,115 @@ def _save_inline_grades(
             )
             .values_list('student_id', 'subject_id')
         )
+
+    if request.POST.get('_confirm_existing_changes') != '1':
+        confirmation_changes = []
+        for field_name, raw_value in request.POST.items():
+            if not (
+                field_name.startswith('grade__')
+                or field_name.startswith('exam__')
+                or field_name.startswith('final__')
+            ):
+                continue
+            value = str(raw_value or '').strip()
+
+            if field_name.startswith('exam__') or field_name.startswith('final__'):
+                field_mode = 'exam' if field_name.startswith('exam__') else 'final'
+                parts = field_name.split('__')
+                if len(parts) != 3:
+                    continue
+                try:
+                    subject_id = int(parts[1])
+                    student_id = int(parts[2])
+                except (TypeError, ValueError):
+                    continue
+                student = student_map.get(student_id)
+                subject = subject_map.get(subject_id)
+                if student is None or subject is None or selected_academic_year is None:
+                    continue
+                if (
+                    role_mode == 'teacher'
+                    and (
+                        (
+                            enrollment_group_by_student.get(student_id),
+                            subject_id,
+                        ) not in teacher_group_subject_pairs
+                        and (student_id, subject_id) not in teacher_individual_subject_pairs
+                    )
+                ):
+                    continue
+                try:
+                    normalized_value = _normalize_final_grade_value(subject, value)
+                except ValidationError:
+                    continue
+                result = SubjectResult.objects.filter(
+                    student=student,
+                    subject=subject,
+                    academic_year=selected_academic_year,
+                ).first()
+                if result is None:
+                    continue
+                old_value = (
+                    result.exam_grade if field_mode == 'exam'
+                    else result.final_grade
+                )
+                if old_value in (None, '') or old_value == normalized_value:
+                    continue
+                field_label = 'Экзамен' if field_mode == 'exam' else 'Итоговая оценка'
+                confirmation_changes.append(
+                    f'{field_label} — {student.full_name} — {subject.name}: '
+                    f'«{old_value}» → «{normalized_value or "Пусто"}»'
+                )
+                continue
+
+            parts = field_name.split('__')
+            if len(parts) != 4:
+                continue
+            try:
+                subject_id = int(parts[1])
+                student_id = int(parts[2])
+                grade_date = date.fromisoformat(parts[3])
+            except (TypeError, ValueError):
+                continue
+            student = student_map.get(student_id)
+            subject = subject_map.get(subject_id)
+            if student is None or subject is None:
+                continue
+            if role_mode == 'teacher':
+                if teacher is None:
+                    continue
+                if (
+                    (
+                        enrollment_group_by_student.get(student_id),
+                        subject_id,
+                    ) not in teacher_group_subject_pairs
+                    and (student_id, subject_id) not in teacher_individual_subject_pairs
+                ):
+                    continue
+            grade = Grade.objects.filter(
+                student_id=student_id,
+                subject_id=subject_id,
+                date=grade_date,
+                academic_year=selected_academic_year,
+            ).first()
+            if grade is None:
+                continue
+            normalized_value = _normalize_grade_value(value)
+            if grade.value == normalized_value:
+                continue
+            confirmation_changes.append(
+                f'Оценка — {student.full_name} — {subject.name} — '
+                f'{grade_date:%d.%m.%Y}: «{grade.value}» → '
+                f'«{normalized_value or "Пусто"}»'
+            )
+
+        if confirmation_changes:
+            messages.error(
+                request,
+                'Подтвердите изменение существующих значений: '
+                + '; '.join(confirmation_changes),
+            )
+            return False
 
     with transaction.atomic():
         for field_name, raw_value in request.POST.items():
@@ -2136,12 +2451,22 @@ def _handle_grade_form(
             posted_date = None
 
         existing_grade = None
+        existing_snapshot = None
         if posted_student is not None and posted_subject is not None and posted_date is not None:
             existing_grade = Grade.objects.filter(
                 student=posted_student,
                 subject=posted_subject,
                 date=posted_date,
-            ).first()
+            ).select_related('teacher', 'academic_year').first()
+            if existing_grade is not None:
+                existing_snapshot = {
+                    'value': existing_grade.value,
+                    'comment': existing_grade.comment,
+                    'teacher_id': existing_grade.teacher_id,
+                    'teacher_label': existing_grade.teacher.full_name,
+                    'academic_year_id': existing_grade.academic_year_id,
+                    'academic_year_label': str(existing_grade.academic_year or 'Не указан'),
+                }
 
         form_data = request.POST.copy()
         if posted_group is not None and 'group' not in form_data:
@@ -2155,7 +2480,67 @@ def _handle_grade_form(
             academic_year=selected_academic_year,
         )
         if grade_form.is_valid():
-            grade_form.save()
+            grade = grade_form.save(commit=False)
+            changed_values = []
+            has_actual_changes = False
+            if existing_snapshot is not None:
+                comparisons = (
+                    (
+                        'Оценка',
+                        existing_snapshot['value'],
+                        grade.value,
+                        existing_snapshot['value'],
+                        grade.value,
+                    ),
+                    (
+                        'Комментарий',
+                        existing_snapshot['comment'],
+                        grade.comment,
+                        existing_snapshot['comment'],
+                        grade.comment,
+                    ),
+                    (
+                        'Преподаватель',
+                        existing_snapshot['teacher_id'],
+                        grade.teacher_id,
+                        existing_snapshot['teacher_label'],
+                        grade.teacher.full_name if grade.teacher_id else 'Не назначен',
+                    ),
+                    (
+                        'Учебный год',
+                        existing_snapshot['academic_year_id'],
+                        grade.academic_year_id,
+                        existing_snapshot['academic_year_label'],
+                        str(grade.academic_year or 'Не указан'),
+                    ),
+                )
+                for label, old_raw, new_raw, old_label, new_label in comparisons:
+                    if old_raw == new_raw:
+                        continue
+                    has_actual_changes = True
+                    if old_raw in (None, ''):
+                        continue
+                    changed_values.append(
+                        f'{label}: «{old_label or "Пусто"}» → «{new_label or "Пусто"}»'
+                    )
+
+            if (
+                existing_grade is not None
+                and changed_values
+                and request.POST.get('_confirm_existing_changes') != '1'
+            ):
+                grade_form.add_error(
+                    None,
+                    'Подтвердите изменение существующей оценки: '
+                    + '; '.join(changed_values),
+                )
+                return grade_form
+
+            if existing_grade is not None and not has_actual_changes:
+                messages.info(request, 'Значения оценки не изменились.')
+                return _redirect_current_journal(request)
+
+            grade.save()
             if existing_grade is None:
                 messages.success(request, 'Оценка успешно добавлена.')
             else:

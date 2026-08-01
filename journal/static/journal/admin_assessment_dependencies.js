@@ -20,6 +20,13 @@
         }
     };
 
+    function adminJQuery() {
+        if (window.django && window.django.jQuery) {
+            return window.django.jQuery;
+        }
+        return window.jQuery || null;
+    }
+
     function inlinePrefix(name) {
         var match = String(name || '').match(/^(.*-\d+)-[^-]+$/);
         return match ? match[1] : '';
@@ -63,14 +70,47 @@
 
         var sequence = 0;
         var controller = null;
+        var pendingChange = null;
+
+        function queueLoad(name) {
+            if (pendingChange) {
+                window.clearTimeout(pendingChange);
+            }
+            pendingChange = window.setTimeout(function () {
+                pendingChange = null;
+                load(name, true);
+            }, 0);
+        }
+
+        function handleChange(name) {
+            if (type === 'item') {
+                if (name === 'element') {
+                    updateTeacherReassignmentPreview(true);
+                } else if (name === 'group') {
+                    delete scope.dataset.changeConfirmationFields;
+                }
+            }
+            queueLoad(name);
+        }
 
         config.fields.forEach(function (name) {
             if (!fields[name]) {
                 return;
             }
             fields[name].addEventListener('change', function () {
-                load(name, true);
+                handleChange(name);
             });
+            var jq = adminJQuery();
+            if (jq) {
+                jq(fields[name])
+                    .off('.journalAssessmentDependencies')
+                    .on(
+                        'change.journalAssessmentDependencies '
+                        + 'select2:select.journalAssessmentDependencies '
+                        + 'select2:clear.journalAssessmentDependencies',
+                        function () { handleChange(name); }
+                    );
+            }
         });
 
         function selectedOption(select) {
@@ -122,6 +162,15 @@
             if (source.dataset.parentAcademicYearId && !url.searchParams.has('academic_year')) {
                 url.searchParams.set('academic_year', source.dataset.parentAcademicYearId);
             }
+            if (source.dataset.parentResponsibleTeacherId) {
+                url.searchParams.set(
+                    'parent_responsible_teacher',
+                    source.dataset.parentResponsibleTeacherId
+                );
+            }
+            if (source.dataset.allowTeacherReassignment === '1') {
+                url.searchParams.set('allow_teacher_reassignment', '1');
+            }
             if (source.dataset.currentAssessmentItemId) {
                 url.searchParams.set('current_item', source.dataset.currentAssessmentItemId);
             }
@@ -136,6 +185,90 @@
             ['subject_id', 'academic_year_id'].forEach(function (name) {
                 if (item[name]) {
                     option.dataset[name.replace('_id', 'Id')] = String(item[name]);
+                }
+            });
+            if (item.existing_assignment) {
+                option.dataset.existingAssignment = JSON.stringify(item.existing_assignment);
+            }
+        }
+
+        function updateTeacherReassignmentPreview(populateValues) {
+            if (
+                type !== 'item'
+                || source.dataset.allowTeacherReassignment !== '1'
+                || !fields.element
+            ) {
+                return;
+            }
+            var option = selectedOption(fields.element);
+            var assignment = null;
+            try {
+                assignment = option && option.dataset.existingAssignment
+                    ? JSON.parse(option.dataset.existingAssignment)
+                    : null;
+            } catch (_error) {
+                assignment = null;
+            }
+            if (
+                !assignment
+                || !assignment.target_teacher_id
+                || String(assignment.responsible_teacher_id || '')
+                    === String(assignment.target_teacher_id)
+            ) {
+                delete scope.dataset.changeConfirmationFields;
+                return;
+            }
+
+            function fullName(name) {
+                return prefix ? prefix + '-' + name : name;
+            }
+
+            function relatedField(name) {
+                return scope.querySelector('[name="' + fullName(name) + '"]');
+            }
+
+            if (populateValues && !source.dataset.currentAssessmentItemId) {
+                var order = relatedField('sort_order');
+                var required = relatedField('is_required');
+                var active = relatedField('is_active');
+                if (order) {
+                    order.value = String(assignment.sort_order);
+                }
+                if (required) {
+                    required.checked = Boolean(assignment.is_required);
+                }
+                if (active) {
+                    active.checked = Boolean(assignment.is_active);
+                }
+            }
+
+            scope.dataset.changeConfirmationFields = JSON.stringify({
+                fields: {
+                    responsible_teacher: {
+                        label: 'Ответственный преподаватель-дирижёр',
+                        old_raw: String(assignment.responsible_teacher_id || ''),
+                        old_label: assignment.responsible_teacher_label || 'Не назначен',
+                        current_raw: String(assignment.target_teacher_id || ''),
+                        current_label: assignment.target_teacher_label || ''
+                    },
+                    sort_order: {
+                        label: 'Порядок отображения',
+                        field_name: fullName('sort_order'),
+                        old_raw: String(assignment.sort_order),
+                        old_label: String(assignment.sort_order)
+                    },
+                    is_required: {
+                        label: 'Обязательное произведение',
+                        field_name: fullName('is_required'),
+                        old_raw: assignment.is_required ? '1' : '0',
+                        old_label: assignment.is_required ? 'Да' : 'Нет'
+                    },
+                    is_active: {
+                        label: 'Активно',
+                        field_name: fullName('is_active'),
+                        old_raw: assignment.is_active ? '1' : '0',
+                        old_label: assignment.is_active ? 'Да' : 'Нет'
+                    }
                 }
             });
         }
@@ -258,6 +391,7 @@
                     });
                     reload = applyDefaults(payload.defaults || {}, changed) || reload;
                     reload = applyLocalDefaults(changed) || reload;
+                    updateTeacherReassignmentPreview(false);
                     status('', false);
                     if (reload) {
                         load(changed, true);

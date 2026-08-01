@@ -3,6 +3,13 @@
 
     var SELECT_FIELDS = ['group', 'student', 'subject', 'teacher'];
 
+    function adminJQuery() {
+        if (window.django && window.django.jQuery) {
+            return window.django.jQuery;
+        }
+        return window.jQuery || null;
+    }
+
     function inlinePrefix(name) {
         var match = String(name || '').match(/^(.*-\d+)-[^-]+$/);
         return match ? match[1] : '';
@@ -68,6 +75,18 @@
 
         var activeRequest = null;
         var requestSequence = 0;
+        var pendingChange = null;
+
+        function queueLoad(name) {
+            if (pendingChange) {
+                window.clearTimeout(pendingChange);
+            }
+            pendingChange = window.setTimeout(function () {
+                pendingChange = null;
+                applyLocalDefaults(name);
+                loadOptions(name);
+            }, 0);
+        }
 
         SELECT_FIELDS.forEach(function (name) {
             var field = fields[name];
@@ -75,9 +94,19 @@
                 return;
             }
             field.addEventListener('change', function () {
-                applyLocalDefaults(name);
-                loadOptions(name);
+                queueLoad(name);
             });
+            var jq = adminJQuery();
+            if (jq) {
+                jq(field)
+                    .off('.journalAssignmentDependencies')
+                    .on(
+                        'change.journalAssignmentDependencies '
+                        + 'select2:select.journalAssignmentDependencies '
+                        + 'select2:clear.journalAssignmentDependencies',
+                        function () { queueLoad(name); }
+                    );
+            }
         });
 
         function buildUrl(changedField) {

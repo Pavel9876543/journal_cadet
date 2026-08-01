@@ -3,6 +3,14 @@
 
     var OPTION_FIELDS = ['group', 'student', 'subject', 'teacher'];
     var ALL_FIELDS = ['academic_year'].concat(OPTION_FIELDS);
+    var REQUEST_FIELDS = ALL_FIELDS.concat(['date']);
+
+    function adminJQuery() {
+        if (window.django && window.django.jQuery) {
+            return window.django.jQuery;
+        }
+        return window.jQuery || null;
+    }
 
     function inlinePrefix(name) {
         var match = String(name || '').match(/^(.*-\d+)-[^-]+$/);
@@ -51,7 +59,7 @@
 
         var fields = {};
         var placeholders = {};
-        ALL_FIELDS.forEach(function (name) {
+        REQUEST_FIELDS.forEach(function (name) {
             fields[name] = scope.querySelector(selector(name));
             if (fields[name] && fields[name].tagName === 'SELECT') {
                 var empty = Array.prototype.find.call(fields[name].options, function (option) {
@@ -69,6 +77,7 @@
         var yearFilter = yearFilterSelector ? document.querySelector(yearFilterSelector) : null;
         var requestSequence = 0;
         var activeRequest = null;
+        var pendingChange = null;
 
         function setStatus(message, isError) {
             var status = scope.querySelector('[data-grade-options-status]')
@@ -107,7 +116,7 @@
 
         function buildUrl(changedField) {
             var url = new URL(endpoint, window.location.origin);
-            ALL_FIELDS.forEach(function (name) {
+            REQUEST_FIELDS.forEach(function (name) {
                 if (fields[name] && fields[name].value) {
                     url.searchParams.set(name, fields[name].value);
                 }
@@ -218,6 +227,13 @@
                         var preserveMissing = mode !== 'grade' && (!changedField || changedField === name);
                         replaceOptions(name, payload[name + 's'] || [], preserveMissing);
                     });
+                    if (payload.existing_change) {
+                        form.dataset.changeConfirmationFields = JSON.stringify(
+                            payload.existing_change
+                        );
+                    } else {
+                        delete form.dataset.changeConfirmationFields;
+                    }
                     setBusy(false);
                     setStatus('', false);
                 })
@@ -230,21 +246,42 @@
                 });
         }
 
-        ALL_FIELDS.forEach(function (name) {
+        function changed(name) {
+            if (name === 'academic_year' && fields[name].dataset.gradeYearAutoSubmit === '1') {
+                if (typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    form.submit();
+                }
+                return;
+            }
+            if (pendingChange) {
+                window.clearTimeout(pendingChange);
+            }
+            pendingChange = window.setTimeout(function () {
+                pendingChange = null;
+                loadOptions(name);
+            }, 0);
+        }
+
+        REQUEST_FIELDS.forEach(function (name) {
             if (!fields[name]) {
                 return;
             }
             fields[name].addEventListener('change', function () {
-                if (name === 'academic_year' && fields[name].dataset.gradeYearAutoSubmit === '1') {
-                    if (typeof form.requestSubmit === 'function') {
-                        form.requestSubmit();
-                    } else {
-                        form.submit();
-                    }
-                    return;
-                }
-                loadOptions(name);
+                changed(name);
             });
+            var jq = adminJQuery();
+            if (jq) {
+                jq(fields[name])
+                    .off('.journalGradeDependencies')
+                    .on(
+                        'change.journalGradeDependencies '
+                        + 'select2:select.journalGradeDependencies '
+                        + 'select2:clear.journalGradeDependencies',
+                        function () { changed(name); }
+                    );
+            }
         });
 
         if (yearFilter && fields.academic_year) {

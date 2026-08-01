@@ -33,6 +33,19 @@
             select.addEventListener('change', function () {
                 updateCityChurch(select);
             });
+            var jq = window.django && window.django.jQuery
+                ? window.django.jQuery
+                : window.jQuery;
+            if (jq) {
+                jq(select)
+                    .off('.journalStudentCity')
+                    .on(
+                        'change.journalStudentCity '
+                        + 'select2:select.journalStudentCity '
+                        + 'select2:clear.journalStudentCity',
+                        function () { updateCityChurch(select); }
+                    );
+            }
         });
     }
 

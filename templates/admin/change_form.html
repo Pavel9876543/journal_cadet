@@ -5,6 +5,7 @@
 {% block extrastyle %}
     {{ block.super }}
     <link rel="stylesheet" href="{% static 'vendor/select2/css/select2.min.css' %}">
+    <link rel="stylesheet" href="{% static 'journal/change_confirmation.css' %}">
 {% endblock %}
 
 {% block extrahead %}
@@ -44,7 +45,7 @@
 
 {% block content %}
     <div id="content-main" class="col-12">
-        <form {% if has_file_field %}enctype="multipart/form-data" {% endif %}action="{{ form_url }}" method="post" id="{{ opts.model_name }}_form" novalidate>
+        <form {% if has_file_field %}enctype="multipart/form-data" {% endif %}action="{{ form_url }}" method="post" id="{{ opts.model_name }}_form" novalidate data-confirm-existing-changes="{% if change %}1{% else %}0{% endif %}">
             {% csrf_token %}
             {% block form_top %}{% endblock %}
 
@@ -126,4 +127,5 @@
         <script type="text/javascript" src="{% static 'jazzmin/plugins/bootstrap-show-modal/bootstrap-show-modal.min.js' %}"></script>
         <script type="text/javascript" src="{% static 'jazzmin/js/related-modal.js' %}"></script>
     {% endif %}
+    <script type="text/javascript" src="{% static 'journal/change_confirmation.js' %}"></script>
 {% endblock %}

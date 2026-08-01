@@ -14,12 +14,12 @@ except ImportError:  # Local Python may intentionally omit production WhiteNoise
 
 
 class DevelopmentStaticFilesStorage(CompressedStaticFilesStorage):
-    """Give locally served CSS a URL that changes with its contents."""
+    """Give locally served CSS/JavaScript a content-versioned URL."""
 
     def url(self, name):
         url = super().url(name)
         clean_name = name.split('?', 1)[0].split('#', 1)[0]
-        if not clean_name.lower().endswith('.css'):
+        if not clean_name.lower().endswith(('.css', '.js')):
             return url
 
         source_path = finders.find(clean_name)

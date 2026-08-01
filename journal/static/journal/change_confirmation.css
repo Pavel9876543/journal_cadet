@@ -1,0 +1,163 @@
+.journal-change-confirmation {
+    width: min(680px, calc(100vw - 32px));
+    max-height: min(760px, calc(100vh - 32px));
+    margin: auto;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 12px;
+    background: #fff;
+    color: #17202a;
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.3);
+}
+
+.journal-change-confirmation::backdrop {
+    background: rgba(15, 23, 42, 0.58);
+    backdrop-filter: blur(2px);
+}
+
+.journal-change-confirmation__panel {
+    display: grid;
+    gap: 16px;
+    max-height: min(760px, calc(100vh - 32px));
+    padding: 22px;
+    overflow: auto;
+}
+
+.journal-change-confirmation__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.journal-change-confirmation h2,
+.journal-change-confirmation p {
+    margin: 0;
+}
+
+.journal-change-confirmation h2 {
+    font-size: 1.3rem;
+    line-height: 1.25;
+}
+
+.journal-change-confirmation__close {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    background: #fff;
+    color: #344054;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.journal-change-confirmation__list {
+    display: grid;
+    gap: 10px;
+}
+
+.journal-change-confirmation__change {
+    display: grid;
+    gap: 7px;
+    padding: 12px;
+    border: 1px solid #e4e7ec;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+
+.journal-change-confirmation__change strong {
+    color: #344054;
+    font-size: 0.9rem;
+}
+
+.journal-change-confirmation__values {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+}
+
+.journal-change-confirmation__old,
+.journal-change-confirmation__new {
+    min-width: 0;
+    padding: 8px 10px;
+    overflow-wrap: anywhere;
+    border-radius: 7px;
+}
+
+.journal-change-confirmation__old {
+    background: #fef3f2;
+    color: #b42318;
+    text-decoration: line-through;
+}
+
+.journal-change-confirmation__new {
+    background: #ecfdf3;
+    color: #067647;
+    font-weight: 700;
+}
+
+.journal-change-confirmation__arrow {
+    color: #667085;
+    font-size: 1.2rem;
+    font-weight: 800;
+}
+
+.journal-change-confirmation__hint {
+    color: #667085;
+    font-size: 0.9rem;
+}
+
+.journal-change-confirmation__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.journal-change-confirmation__actions button {
+    min-height: 42px;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.journal-change-confirmation__cancel {
+    border: 1px solid #d0d5dd;
+    background: #fff;
+    color: #344054;
+}
+
+.journal-change-confirmation__submit {
+    border: 1px solid #175cd3;
+    background: #175cd3;
+    color: #fff;
+}
+
+@media (max-width: 560px) {
+    .journal-change-confirmation__panel {
+        padding: 16px;
+    }
+
+    .journal-change-confirmation__values {
+        grid-template-columns: 1fr;
+    }
+
+    .journal-change-confirmation__arrow {
+        transform: rotate(90deg);
+        justify-self: center;
+    }
+
+    .journal-change-confirmation__actions {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+
+    .journal-change-confirmation__submit {
+        order: -1;
+    }
+}

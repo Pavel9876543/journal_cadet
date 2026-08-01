@@ -1292,6 +1292,7 @@
             }
         }
 </style>
+    <link rel="stylesheet" href="{% static 'journal/change_confirmation.css' %}">
 {% include "journal/device_styles.html" %}
 </head>
 <body class="journal-workspace journal-workspace--{{ role_mode|default:'unknown' }}">
@@ -1689,6 +1690,17 @@
                                     </div>
                                 {% endif %}
                             </div>
+                            <div class="field">
+                                <label for="id_comment">Комментарий</label>
+                                {{ grade_form.comment }}
+                                {% if grade_form.comment.errors %}
+                                    <div class="field-errors">
+                                        {% for error in grade_form.comment.errors %}
+                                            <div class="field-error" data-error-for="comment">{{ error }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
                             <div class="form-action">
                                 <button type="submit">
                                     <svg class="icon" aria-hidden="true"><use href="#icon-save"></use></svg>
@@ -1919,7 +1931,7 @@
                                             <td>{% if row.final_result %}{{ row.final_result.final_grade|default:'Не рассчитано' }}{% else %}Не рассчитано{% endif %}</td>
                                             <td>
                                                 {% if can_edit_journal and section.can_edit %}
-                                                    <form method="post" class="assessment-actions" data-save-context="assessment-{{ section.item.id }}-{{ row.student.id }}">
+                                                    <form method="post" class="assessment-actions" data-save-context="assessment-{{ section.item.id }}-{{ row.student.id }}" data-confirm-existing-changes="{% if row.result %}1{% else %}0{% endif %}">
                                                         {% csrf_token %}
                                                         <input type="hidden" name="action" value="assessment_result">
                                                         <input type="hidden" name="item_id" value="{{ section.item.id }}">
@@ -2096,7 +2108,7 @@
                             {% endif %}
 
                             {% if can_edit_journal %}
-                                <form method="post" class="table-form" data-save-context="journal-table-{{ table.academic_year.id }}-{{ table.group.id }}-{{ table.subject.id }}">
+                                <form method="post" class="table-form" data-save-context="journal-table-{{ table.academic_year.id }}-{{ table.group.id }}-{{ table.subject.id }}" data-confirm-existing-changes="1">
                                     {% csrf_token %}
                                     <input type="hidden" name="action" value="inline_edit">
                             {% else %}
@@ -2217,12 +2229,13 @@
     </main>
 </div>
 
-<script src="{% static 'journal/grade_dependencies.js' %}?v=20260730-4"></script>
+<script src="{% static 'journal/grade_dependencies.js' %}"></script>
 <script src="{% static 'journal/assessment_filters.js' %}"></script>
 <script src="{% static 'journal/select_search.js' %}"></script>
 <script src="{% static 'journal/workspace_search.js' %}"></script>
 <script src="{% static 'journal/collapsible_tables.js' %}"></script>
 <script src="{% static 'journal/form_state.js' %}"></script>
 <script src="{% static 'journal/responsive_tables.js' %}"></script>
+<script src="{% static 'journal/change_confirmation.js' %}"></script>
 </body>
 </html>

@@ -10,6 +10,13 @@
         assessment_student: 'students'
     };
 
+    function availableJQuery() {
+        if (window.django && window.django.jQuery) {
+            return window.django.jQuery;
+        }
+        return window.jQuery || null;
+    }
+
     function start() {
         document.querySelectorAll('form[data-assessment-filter-url]').forEach(function (form) {
             if (form.dataset.assessmentFiltersInitialized === '1') {
@@ -36,14 +43,36 @@
 
         var requestSequence = 0;
         var controller = null;
+        var pendingChange = null;
+
+        function queueLoad(name) {
+            if (pendingChange) {
+                window.clearTimeout(pendingChange);
+            }
+            pendingChange = window.setTimeout(function () {
+                pendingChange = null;
+                load(name);
+            }, 0);
+        }
 
         Object.keys(fields).forEach(function (name) {
             if (!fields[name]) {
                 return;
             }
             fields[name].addEventListener('change', function () {
-                load(name);
+                queueLoad(name);
             });
+            var jq = availableJQuery();
+            if (jq) {
+                jq(fields[name])
+                    .off('.journalAssessmentFilters')
+                    .on(
+                        'change.journalAssessmentFilters '
+                        + 'select2:select.journalAssessmentFilters '
+                        + 'select2:clear.journalAssessmentFilters',
+                        function () { queueLoad(name); }
+                    );
+            }
         });
 
         function buildUrl(changedField) {
@@ -153,6 +182,13 @@
                             !changedField || changedField === name
                         ) || reload;
                     });
+                    if (payload.existing_change) {
+                        form.dataset.changeConfirmationFields = JSON.stringify(
+                            payload.existing_change
+                        );
+                    } else {
+                        delete form.dataset.changeConfirmationFields;
+                    }
                     setStatus('', false);
                     if (reload) {
                         load(changedField);
