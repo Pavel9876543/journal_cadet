@@ -29,6 +29,7 @@ from django.urls import reverse
 from django.utils import timezone
 from openpyxl import load_workbook
 
+from journal.access_scope import JournalAccessScope
 from journal.academic_year_context import (
     academic_year_ids_for_user,
     filter_temporary_credentials_for_year,
@@ -153,6 +154,7 @@ from journal.models import (
     TeacherSubject,
     TemporaryCredential,
     UserAcademicYearMembership,
+    sync_people_with_active_academic_year,
 )
 
 
@@ -3873,10 +3875,18 @@ class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
         self.assertEqual(available_ids, {first_year.pk, second_year.pk})
         self.assertEqual(response.context['selected_academic_year'], first_year)
 
-    def test_teacher_sees_only_membership_years(self):
+    def test_teacher_sees_only_years_with_real_assignments(self):
         old_year = self.create_academic_year(name='2025/2026')
+        old_group = self.create_group(academic_year=old_year)
         teacher = self.create_teacher()
+        subject = self.create_subject(name='Назначенный предмет')
+        GroupSubject.objects.create(
+            group=old_group,
+            subject=subject,
+            teacher=teacher,
+        )
         new_year = self.create_academic_year(name='2026/2027')
+        TeacherEnrollment.objects.create(teacher=teacher, academic_year=new_year)
         self.client.force_login(teacher.user)
 
         response = self.client.get(reverse('journal'), {'academic_year': new_year.pk})
@@ -3886,23 +3896,28 @@ class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
         self.assertEqual(list(response.context['academic_years']), [old_year])
 
 
-    def test_inactive_teacher_membership_remains_viewable_but_not_editable(self):
-        year = self.create_academic_year()
-        teacher = self.create_teacher()
-        membership = TeacherEnrollment.objects.get(teacher=teacher, academic_year=year)
+    def test_inactive_helper_membership_does_not_remove_assignment_access(self):
+        data = self.create_base_journal()
+        membership = TeacherEnrollment.objects.get(
+            teacher=data['teacher'],
+            academic_year=data['year'],
+        )
         membership.is_active = False
-        membership.save()
-        teacher.refresh_from_db()
-        self.client.force_login(teacher.user)
+        membership.save(update_fields=['is_active'])
+        self.client.force_login(data['teacher'].user)
 
-        response = self.client.get(reverse('journal'), {'academic_year': year.pk})
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': data['year'].pk},
+        )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['selected_academic_year'], year)
-        self.assertFalse(response.context['can_edit_journal'])
+        self.assertEqual(response.context['selected_academic_year'], data['year'])
+        self.assertTrue(response.context['can_edit_journal'])
+        self.assertTrue(response.context['journal_tables'])
 
 
-    def test_inactive_teacher_cannot_bypass_read_only_mode_with_post(self):
+    def test_helper_membership_cannot_block_assigned_teacher_post(self):
         data = self.create_base_journal()
         grade = Grade.objects.create(
             student=data['student'],
@@ -3937,7 +3952,7 @@ class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 302)
         grade.refresh_from_db()
-        self.assertEqual(grade.value, '5')
+        self.assertEqual(grade.value, '2')
 
 
 class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
@@ -3968,32 +3983,37 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
             {old_year.pk, new_year.pk},
         )
 
-    def test_administrator_sees_only_manually_assigned_academic_years(self):
+    def test_superuser_sees_every_academic_year(self):
         assigned_year = self.create_academic_year(name='2025/2026')
-        hidden_year = self.create_academic_year(name='2026/2027')
+        other_year = self.create_academic_year(name='2026/2027')
         UserAcademicYearMembership.objects.create(
             user=self.superuser,
             academic_year=assigned_year,
         )
-        request = self.admin_request(hidden_year)
+        request = self.admin_request(other_year)
 
         context = get_admin_academic_year_context(request)
 
-        self.assertEqual(context['admin_selected_academic_year'], assigned_year)
-        self.assertEqual(list(context['admin_academic_years']), [assigned_year])
+        self.assertEqual(context['admin_selected_academic_year'], other_year)
+        self.assertEqual(
+            set(context['admin_academic_years'].values_list('pk', flat=True)),
+            {assigned_year.pk, other_year.pk},
+        )
 
-    def test_teacher_enrollments_create_memberships_for_every_academic_year(self):
+    def test_teacher_memberships_do_not_create_journal_access(self):
         old_year = self.create_academic_year(name='2025/2026')
         teacher = self.create_teacher(username='multi_year_teacher')
-        self.assertTrue(
-            TeacherEnrollment.objects.filter(teacher=teacher, academic_year=old_year).exists()
-        )
         new_year = self.create_academic_year(name='2026/2027')
-        TeacherEnrollment.objects.create(teacher=teacher, academic_year=new_year)
+        TeacherEnrollment.objects.get_or_create(teacher=teacher, academic_year=new_year)
 
+        self.assertEqual(set(academic_year_ids_for_user(teacher.user)), set())
+
+        group = self.create_group(academic_year=old_year)
+        subject = self.create_subject(name='Предмет реального назначения')
+        GroupSubject.objects.create(group=group, subject=subject, teacher=teacher)
         self.assertEqual(
             set(academic_year_ids_for_user(teacher.user)),
-            {old_year.pk, new_year.pk},
+            {old_year.pk},
         )
 
     def test_admin_save_keeps_the_same_change_page(self):
@@ -10421,54 +10441,218 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
         self.assertEqual([row['student'].pk for row in table['rows']], [self.student.pk])
         self.assertIn('5', table['rows'][0]['grades_by_date'].values())
 
-    def test_existing_result_keeps_assignment_visible_when_legacy_link_is_missing(self):
+    def test_teacher_standard_scope_matches_exact_student_subject_pairs(self):
+        second_group = self.create_group(
+            name='Группа Б',
+            academic_year=self.year,
+        )
+        second_student = self.create_student(
+            full_name='Ученик Второй',
+            group=second_group,
+            username='second_standard_scope_student',
+        )
+        second_subject = Subject.objects.create(
+            name='Второй обычный предмет',
+            assessment_mode=Subject.ASSESSMENT_MODE_STANDARD,
+        )
+        other_teacher = self.create_teacher(
+            full_name='Другой Преподаватель',
+            username='cross_pair_teacher',
+        )
+
+        # The tested teacher owns only (group A, subject A) and
+        # (group B, subject B). The other two combinations belong to another
+        # teacher and must not leak through independent student/subject sets.
+        GroupSubject.objects.create(
+            group=second_group,
+            subject=second_subject,
+            teacher=self.teacher,
+        )
+        GroupSubject.objects.create(
+            group=self.group,
+            subject=second_subject,
+            teacher=other_teacher,
+        )
+        GroupSubject.objects.create(
+            group=second_group,
+            subject=self.standard_subject,
+            teacher=other_teacher,
+        )
+
+        own_second_grade = Grade.objects.create(
+            student=second_student,
+            subject=second_subject,
+            teacher=self.teacher,
+            academic_year=self.year,
+            date=date(self.year.starts_on.year, 10, 2),
+            value='4',
+        )
+        foreign_first_grade = Grade.objects.create(
+            student=self.student,
+            subject=second_subject,
+            teacher=other_teacher,
+            academic_year=self.year,
+            date=date(self.year.starts_on.year, 10, 3),
+            value='3',
+        )
+        foreign_second_grade = Grade.objects.create(
+            student=second_student,
+            subject=self.standard_subject,
+            teacher=other_teacher,
+            academic_year=self.year,
+            date=date(self.year.starts_on.year, 10, 4),
+            value='2',
+        )
+
+        scope = JournalAccessScope(self.year, teacher=self.teacher)
+        visible_grade_ids = set(scope.standard_grades().values_list('pk', flat=True))
+        self.assertIn(own_second_grade.pk, visible_grade_ids)
+        self.assertNotIn(foreign_first_grade.pk, visible_grade_ids)
+        self.assertNotIn(foreign_second_grade.pk, visible_grade_ids)
+
+        self.client.force_login(self.teacher.user)
+        response = self.client.get(reverse('journal'), {'academic_year': self.year.pk})
+        self.assertEqual(response.status_code, 200)
+        visible_pairs = {
+            (table['group'].pk, table['subject'].pk)
+            for table in response.context['journal_tables']
+        }
+        self.assertEqual(
+            visible_pairs,
+            {
+                (self.group.pk, self.standard_subject.pk),
+                (second_group.pk, second_subject.pk),
+            },
+        )
+
+    def test_current_teacher_profile_is_derived_from_real_assignments(self):
+        TeacherEnrollment.objects.filter(
+            teacher=self.teacher,
+            academic_year=self.year,
+        ).delete()
+        Teacher.objects.filter(pk=self.teacher.pk).update(is_active=False)
+
+        sync_people_with_active_academic_year(self.year.pk)
+
+        self.teacher.refresh_from_db()
+        self.assertTrue(self.teacher.is_active)
+
+    def test_teacher_scope_ignores_helper_memberships_and_uses_assignments(self):
+        other_year = self.create_academic_year(name='2024/2025', is_active=False)
+        TeacherEnrollment.objects.create(
+            teacher=self.teacher,
+            academic_year=other_year,
+            is_active=True,
+        )
+        UserAcademicYearMembership.objects.create(
+            user=self.teacher.user,
+            academic_year=other_year,
+            is_active=True,
+        )
+        TeacherEnrollment.objects.filter(
+            teacher=self.teacher,
+            academic_year=self.year,
+        ).delete()
+        UserAcademicYearMembership.objects.filter(
+            user=self.teacher.user,
+            academic_year=self.year,
+        ).delete()
+
+        self.assertEqual(
+            set(academic_year_ids_for_user(self.teacher.user)),
+            {self.year.pk},
+        )
+        scope = JournalAccessScope(self.year, teacher=self.teacher)
+        self.assertTrue(scope.group_subjects().filter(subject=self.standard_subject).exists())
+        self.assertTrue(scope.assessment_items().filter(pk=self.item.pk).exists())
+
+    def test_unassigned_teacher_cannot_see_or_edit_assigned_data(self):
+        other_teacher = self.create_teacher(
+            full_name='Посторонний Преподаватель',
+            username='unassigned_teacher',
+        )
+        scope = JournalAccessScope(self.year, teacher=other_teacher)
+        self.assertFalse(scope.group_subjects().exists())
+        self.assertFalse(scope.student_subjects().exists())
+        self.assertFalse(scope.assessment_items().exists())
+        self.assertFalse(scope.can_edit_assessment_item(self.item))
+        self.assertNotIn(
+            self.year.pk,
+            set(academic_year_ids_for_user(other_teacher.user)),
+        )
+
+    def test_assessment_models_derive_redundant_fields_from_canonical_relations(self):
+        second_element = AssessmentElement.objects.create(
+            subject=self.element_subject,
+            title='Второе произведение',
+        )
+        derived_item = AssessmentItem.objects.create(
+            element=second_element,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+        )
+        self.assertEqual(derived_item.subject_id, self.assessment_group.subject_id)
+        self.assertEqual(derived_item.academic_year_id, self.assessment_group.academic_year_id)
+
+        second_student = self.create_student(
+            full_name='Второй Назначенный Ученик',
+            group=self.group,
+            username='second_assigned_assessment_student',
+        )
+        derived_assignment = StudentAssessmentGroup.objects.create(
+            student=second_student,
+            assessment_group=self.assessment_group,
+        )
+        self.assertEqual(derived_assignment.academic_year_id, self.year.pk)
+        self.assertEqual(
+            derived_assignment.enrollment_id,
+            second_student.enrollment_for_year(self.year).pk,
+        )
+
+    def test_result_without_explicit_assignment_does_not_grant_access(self):
         result = AssessmentResult.objects.create(
             enrollment=self.assignment.enrollment,
             item=self.item,
             status=AssessmentResult.STATUS_PASSED,
             assessed_by=self.teacher,
         )
-        # QuerySet.delete deliberately simulates a legacy import/admin path that
-        # bypassed the current model-level protection.
+        # QuerySet.delete simulates a legacy/imported row that left an outcome
+        # behind. Outcomes are history, never an access grant.
         StudentAssessmentGroup.objects.filter(pk=self.assignment.pk).delete()
 
-        enrollment_ids = set(
+        self.assertFalse(
             enrollments_for_assessment_groups(
                 [self.assessment_group.pk],
                 self.year,
-            ).values_list('pk', flat=True)
+            ).filter(pk=result.enrollment_id).exists()
         )
-        self.assertIn(result.enrollment_id, enrollment_ids)
-        self.assertIn(
+        self.assertNotIn(
             self.item,
             available_assessment_items_for_student(self.student, self.year),
         )
 
         Form = type(
-            'LegacySafeAssessmentResultForm',
+            'CanonicalAssessmentResultForm',
             (AssessmentResultAdminForm,),
             {'parent_academic_year': self.year},
         )
         form = Form()
-        self.assertIn(
+        self.assertNotIn(
             self.student.pk,
             form.fields['student'].queryset.values_list('pk', flat=True),
         )
 
         admin_user = User.objects.create_superuser(
-            username='legacy_assessment_admin',
+            username='canonical_assessment_admin',
             password='Pass12345!',
         )
         self.client.force_login(admin_user)
         options_response = self.client.get(
             reverse('assessment_options_api'),
-            {
-                'type': 'result',
-                'academic_year': self.year.pk,
-            },
+            {'type': 'result', 'academic_year': self.year.pk},
         )
         self.assertEqual(options_response.status_code, 200)
-        self.assertIn(
+        self.assertNotIn(
             self.student.pk,
             {row['id'] for row in options_response.json()['students']},
         )
@@ -10481,10 +10665,7 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
             section for section in admin_response.context['assessment_sections']
             if section['item'].pk == self.item.pk
         )
-        self.assertEqual(
-            [row['student'].pk for row in admin_section['rows']],
-            [self.student.pk],
-        )
+        self.assertEqual(admin_section['rows'], [])
 
         self.client.force_login(self.teacher.user)
         teacher_response = self.client.get(
@@ -10496,12 +10677,42 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
             if section['item'].pk == self.item.pk
         )
         self.assertTrue(teacher_section['can_edit'])
+        self.assertEqual(teacher_section['rows'], [])
+
+    def test_profile_activity_flags_do_not_override_year_assignments(self):
+        Student.objects.filter(pk=self.student.pk).update(is_active=False)
+        Teacher.objects.filter(pk=self.teacher.pk).update(is_active=False)
+        self.student.refresh_from_db()
+        self.teacher.refresh_from_db()
+
+        scope = JournalAccessScope(self.year, teacher=self.teacher)
+        self.assertIn(
+            self.student.pk,
+            scope.standard_students().values_list('pk', flat=True),
+        )
+        self.assertIn(
+            self.student.pk,
+            scope.assessment_students().values_list('pk', flat=True),
+        )
+        self.assertTrue(scope.can_edit_assessment_item(self.item))
+
+        self.client.force_login(self.teacher.user)
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['journal_tables'])
+        section = next(
+            row for row in response.context['assessment_sections']
+            if row['item'].pk == self.item.pk
+        )
         self.assertEqual(
-            [row['student'].pk for row in teacher_section['rows']],
+            [row['student'].pk for row in section['rows']],
             [self.student.pk],
         )
 
-    def test_stale_enrollment_flag_does_not_hide_assigned_teacher_data(self):
+    def test_inactive_enrollment_hides_active_year_data(self):
         enrollment = self.student.enrollment_for_year(self.year)
         StudentEnrollment.objects.filter(pk=enrollment.pk).update(is_active=False)
 
@@ -10512,24 +10723,19 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
         )
 
         self.assertEqual(response.status_code, 200)
-        ordinary_table = next(
-            table for table in response.context['journal_tables']
-            if table['subject'].pk == self.standard_subject.pk
-        )
-        self.assertEqual(
-            [row['student'].pk for row in ordinary_table['rows']],
-            [self.student.pk],
+        self.assertFalse(
+            any(
+                table['subject'].pk == self.standard_subject.pk
+                for table in response.context['journal_tables']
+            )
         )
         assessment_section = next(
             section for section in response.context['assessment_sections']
             if section['item'].pk == self.item.pk
         )
-        self.assertEqual(
-            [row['student'].pk for row in assessment_section['rows']],
-            [self.student.pk],
-        )
+        self.assertEqual(assessment_section['rows'], [])
 
-    def test_explicitly_inactive_assignment_is_not_restored_by_result_fallback(self):
+    def test_explicitly_inactive_assignment_is_not_restored_by_result(self):
         AssessmentResult.objects.create(
             enrollment=self.assignment.enrollment,
             item=self.item,
