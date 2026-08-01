@@ -11,7 +11,7 @@ from unittest import skipUnless
 from unittest.mock import patch
 
 from django import forms
-from django.forms.models import inlineformset_factory
+from django.forms.models import inlineformset_factory, modelform_factory
 from django.apps import apps
 from django.conf import settings
 from django.contrib import admin as django_admin
@@ -75,6 +75,7 @@ from journal.admin import (
     GroupSubjectAdminForm,
     GroupSubjectForSubjectAdminForm,
     GroupSubjectForSubjectInline,
+    GroupStudentInlineForm,
     JournalAdminDescriptionMixin,
     StudentAdmin,
     StudentAdminForm,
@@ -3543,6 +3544,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 'date': lesson_date.isoformat(),
                 'value': '5',
                 'comment': 'Исправлено',
+                '_confirm_existing_changes': '1',
             },
             follow=True,
         )
@@ -4032,6 +4034,7 @@ class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
                     f'grade__{data["solfeggio"].pk}__'
                     f'{data["student"].pk}__2025-10-15'
                 ): '2',
+                '_confirm_existing_changes': '1',
             },
         )
 
@@ -8953,6 +8956,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
                 'assessment_student': self.student.pk,
                 'status': AssessmentResult.STATUS_PASSED,
                 'comment': 'Повторная сдача',
+                '_confirm_existing_changes': '1',
             },
             follow=True,
         )
@@ -9655,7 +9659,8 @@ class CabinetAndDependencyRegressionTests(JournalTestDataMixin, TestCase):
             template.count(
                 '<form method="post" class="table-form" '
                 'data-save-context="journal-table-{{ table.academic_year.id }}-'
-                '{{ table.group.id }}-{{ table.subject.id }}">'
+                '{{ table.group.id }}-{{ table.subject.id }}" '
+                'data-confirm-existing-changes="1">'
             ),
             1,
         )
@@ -9951,6 +9956,7 @@ class TeacherAccessAndErrorLoggingRegressionTests(JournalTestDataMixin, TestCase
                     f'grade__{self.data["solfeggio"].pk}__'
                     f'{self.data["student"].pk}__{lesson_date.isoformat()}'
                 ): '5',
+                '_confirm_existing_changes': '1',
             },
         )
 
@@ -10124,6 +10130,7 @@ class TeacherAssignmentVisibilityAndAssessmentChoiceTests(JournalTestDataMixin, 
                     f'grade__{self.data["solfeggio"].pk}__'
                     f'{self.data["student"].pk}__{lesson_date.isoformat()}'
                 ): '5',
+                '_confirm_existing_changes': '1',
             },
         )
         self.assertEqual(edit_response.status_code, 302)
@@ -11267,3 +11274,417 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
             {row['id'] for row in selected_response.json()['subjects']},
             {self.standard_subject.pk},
         )
+
+
+class ImmediateDependenciesAndChangeConfirmationTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.data = self.create_base_journal()
+
+    def _assessment_catalog(self):
+        subject = Subject.objects.create(
+            name='Оркестровая практика подтверждений',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        group = AssessmentGroup.objects.create(
+            name='Концертная программа подтверждений',
+            subject=subject,
+            academic_year=self.data['year'],
+        )
+        used_element = AssessmentElement.objects.create(
+            subject=subject,
+            title='Уже назначенное произведение',
+        )
+        free_element = AssessmentElement.objects.create(
+            subject=subject,
+            title='Свободное произведение',
+        )
+        item = AssessmentItem.objects.create(
+            element=used_element,
+            subject=subject,
+            academic_year=self.data['year'],
+            group=group,
+            responsible_teacher=self.data['teacher'],
+            sort_order=45,
+            is_required=False,
+        )
+        StudentAssessmentGroup.objects.create(
+            student=self.data['student'],
+            assessment_group=group,
+        )
+        return subject, group, used_element, free_element, item
+
+    def test_teacher_inline_dependency_includes_reassignable_work_metadata(self):
+        _subject, group, used_element, free_element, item = self._assessment_catalog()
+        admin_user = User.objects.create_superuser(
+            username='dependency_confirmation_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'item',
+                'group': group.pk,
+                'parent_responsible_teacher': self.data['other_teacher'].pk,
+                'allow_teacher_reassignment': '1',
+                'changed': 'group',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        elements = {row['id']: row for row in response.json()['elements']}
+        self.assertEqual(set(elements), {used_element.pk, free_element.pk})
+        assignment = elements[used_element.pk]['existing_assignment']
+        self.assertEqual(assignment['id'], item.pk)
+        self.assertEqual(
+            assignment['responsible_teacher_id'],
+            self.data['teacher'].pk,
+        )
+        self.assertEqual(
+            assignment['target_teacher_id'],
+            self.data['other_teacher'].pk,
+        )
+        self.assertEqual(assignment['sort_order'], 45)
+        self.assertFalse(assignment['is_required'])
+
+        page = self.client.get(
+            reverse(
+                'admin:journal_teacher_change',
+                args=[self.data['other_teacher'].pk],
+            ),
+            {'academic_year': self.data['year'].pk},
+        )
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'data-allow-teacher-reassignment="1"')
+        self.assertContains(
+            page,
+            f'data-parent-responsible-teacher-id="{self.data["other_teacher"].pk}"',
+        )
+
+    def test_teacher_inline_reassignment_requires_confirmation_and_updates_in_place(self):
+        _subject, group, used_element, _free_element, item = self._assessment_catalog()
+        historical_result = set_assessment_result(
+            item=item,
+            student=self.data['student'],
+            acting_teacher=self.data['teacher'],
+            status=AssessmentResult.STATUS_PASSED,
+            comment='Результат должен сохраниться',
+        )
+        base_form = type(
+            'ConfirmedTeacherAssessmentItemForm',
+            (AssessmentItemAdminForm,),
+            {
+                'parent_academic_year': self.data['year'],
+                'parent_responsible_teacher': self.data['other_teacher'],
+                'allow_teacher_reassignment': True,
+            },
+        )
+        form_class = modelform_factory(
+            AssessmentItem,
+            form=base_form,
+            fields=('group', 'element', 'sort_order', 'is_required', 'is_active'),
+        )
+        payload = {
+            'group': group.pk,
+            'element': used_element.pk,
+            'sort_order': item.sort_order,
+            'is_active': 'on',
+        }
+
+        unconfirmed = form_class(
+            data=payload,
+            instance=AssessmentItem(responsible_teacher=self.data['other_teacher']),
+        )
+        self.assertFalse(unconfirmed.is_valid())
+        self.assertIn('Подтвердите изменение существующего назначения', unconfirmed.errors['element'][0])
+
+        formset_class = inlineformset_factory(
+            Teacher,
+            AssessmentItem,
+            form=base_form,
+            formset=AssessmentItemInlineFormSet,
+            fk_name='responsible_teacher',
+            fields=('group', 'element', 'sort_order', 'is_required', 'is_active'),
+            extra=1,
+        )
+        prefix = 'responsible_assessment_items'
+        confirmed = formset_class(
+            data={
+                f'{prefix}-TOTAL_FORMS': '1',
+                f'{prefix}-INITIAL_FORMS': '0',
+                f'{prefix}-MIN_NUM_FORMS': '0',
+                f'{prefix}-MAX_NUM_FORMS': '1000',
+                f'{prefix}-0-group': group.pk,
+                f'{prefix}-0-element': used_element.pk,
+                f'{prefix}-0-sort_order': item.sort_order,
+                f'{prefix}-0-is_active': 'on',
+                '_confirm_existing_changes': '1',
+            },
+            instance=self.data['other_teacher'],
+            prefix=prefix,
+        )
+        self.assertTrue(confirmed.is_valid(), confirmed.errors)
+        saved_objects = confirmed.save()
+
+        item.refresh_from_db()
+        self.assertEqual([saved.pk for saved in saved_objects], [item.pk])
+        self.assertEqual(confirmed.new_objects, [])
+        self.assertEqual(
+            [(saved.pk, fields) for saved, fields in confirmed.changed_objects],
+            [(item.pk, ['responsible_teacher'])],
+        )
+        self.assertEqual(item.responsible_teacher, self.data['other_teacher'])
+        self.assertEqual(
+            AssessmentItem.objects.filter(group=group, element=used_element).count(),
+            1,
+        )
+        self.assertTrue(
+            AssessmentResult.objects.filter(
+                pk=historical_result.pk,
+                item=item,
+                assessed_by=self.data['teacher'],
+            ).exists()
+        )
+
+    def test_student_instrument_dependencies_keep_part_enabled_and_custom_conditional(self):
+        part = OrchestraPart.objects.create(
+            instrument=self.data['instrument'],
+            name='Партия для мгновенного обновления',
+        )
+        blank_form = StudentAdminForm()
+        selected_form = StudentAdminForm(instance=self.data['student'])
+
+        self.assertFalse(blank_form.fields['orchestra_part'].disabled)
+        self.assertFalse(blank_form.fields['orchestra_part'].queryset.exists())
+        self.assertNotIn('disabled', blank_form.fields['orchestra_part'].widget.attrs)
+        self.assertNotIn('disabled', blank_form.fields['custom_instrument'].widget.attrs)
+        self.assertIn('disabled', selected_form.fields['custom_instrument'].widget.attrs)
+        embedded = json.loads(
+            blank_form.fields['orchestra_part'].widget.attrs['data-orchestra-parts-map']
+        )
+        self.assertEqual(
+            embedded[str(self.data['instrument'].pk)],
+            [{'id': part.pk, 'name': part.name}],
+        )
+
+        city_form = GroupStudentInlineForm(instance=StudentEnrollment.objects.get(
+            student=self.data['student'],
+            academic_year=self.data['year'],
+        ))
+        self.assertFalse(city_form.fields['city_church'].disabled)
+        self.assertTrue(city_form.fields['city_church'].widget.attrs['readonly'])
+
+    def test_dependency_assets_listen_to_native_and_select2_changes(self):
+        project_root = Path(__file__).resolve().parent.parent
+        for relative_path, namespace in (
+            ('journal/static/journal/admin_assessment_dependencies.js', 'select2:select.journalAssessmentDependencies'),
+            ('journal/static/journal/admin_assignment_dependencies.js', 'select2:select.journalAssignmentDependencies'),
+            ('journal/static/journal/grade_dependencies.js', 'select2:select.journalGradeDependencies'),
+            ('journal/static/journal/assessment_filters.js', 'select2:select.journalAssessmentFilters'),
+            ('journal/static/journal/group_student_inline.js', 'select2:select.journalStudentCity'),
+            ('journal/static/journal/orchestra_part_dependencies_v5.js', 'select2:select.journalOrchestraParts'),
+        ):
+            source = (project_root / relative_path).read_text(encoding='utf-8')
+            with self.subTest(script=relative_path):
+                self.assertIn("addEventListener('change'", source)
+                self.assertIn(namespace, source)
+
+        storage_source = (project_root / 'journal/static_storage.py').read_text(encoding='utf-8')
+        self.assertIn("endswith(('.css', '.js'))", storage_source)
+
+    def test_existing_quick_grade_requires_confirmation_with_exact_values(self):
+        grade_date = date(2025, 10, 18)
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=grade_date,
+            value='3',
+            comment='Старый комментарий',
+        )
+        self.client.force_login(self.data['teacher'].user)
+        payload = {
+            'action': 'add_grade',
+            'group': self.data['group'].pk,
+            'student': self.data['student'].pk,
+            'subject': self.data['solfeggio'].pk,
+            'academic_year': self.data['year'].pk,
+            'date': grade_date.isoformat(),
+            'value': '5',
+            'comment': 'Новый комментарий',
+        }
+        url = f"{reverse('journal')}?academic_year={self.data['year'].pk}"
+
+        unconfirmed = self.client.post(url, payload)
+        self.assertEqual(unconfirmed.status_code, 200)
+        self.assertContains(unconfirmed, 'Подтвердите изменение существующей оценки')
+        self.assertContains(unconfirmed, 'Оценка: «3» → «5»')
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '3')
+        self.assertEqual(grade.comment, 'Старый комментарий')
+
+        confirmed = self.client.post(
+            url,
+            {**payload, '_confirm_existing_changes': '1'},
+        )
+        self.assertEqual(confirmed.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '5')
+        self.assertEqual(grade.comment, 'Новый комментарий')
+
+    def test_grade_options_api_describes_existing_change_for_modal(self):
+        grade_date = date(2025, 10, 19)
+        Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=grade_date,
+            value='4',
+        )
+        self.client.force_login(self.data['teacher'].user)
+
+        response = self.client.get(reverse('grade_options_api'), {
+            'mode': 'grade',
+            'academic_year': self.data['year'].pk,
+            'group': self.data['group'].pk,
+            'student': self.data['student'].pk,
+            'subject': self.data['solfeggio'].pk,
+            'date': grade_date.isoformat(),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        fields = response.json()['existing_change']['fields']
+        self.assertEqual(fields['value']['old_label'], '4')
+        self.assertEqual(fields['teacher']['old_label'], self.data['teacher'].full_name)
+
+    def test_existing_inline_grade_requires_confirmation(self):
+        grade_date = date(2025, 10, 20)
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=grade_date,
+            value='2',
+        )
+        self.client.force_login(self.data['teacher'].user)
+        field_name = (
+            f'grade__{self.data["solfeggio"].pk}__'
+            f'{self.data["student"].pk}__{grade_date.isoformat()}'
+        )
+        url = f"{reverse('journal')}?academic_year={self.data['year'].pk}"
+
+        unconfirmed = self.client.post(url, {
+            'action': 'inline_edit',
+            field_name: '4',
+        })
+        self.assertEqual(unconfirmed.status_code, 200)
+        self.assertContains(unconfirmed, 'Подтвердите изменение существующих значений')
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '2')
+
+        confirmed = self.client.post(url, {
+            'action': 'inline_edit',
+            field_name: '4',
+            '_confirm_existing_changes': '1',
+        })
+        self.assertEqual(confirmed.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '4')
+
+    def test_existing_assessment_result_requires_confirmation(self):
+        _subject, group, _used, _free, item = self._assessment_catalog()
+        result = set_assessment_result(
+            item=item,
+            student=self.data['student'],
+            acting_teacher=self.data['teacher'],
+            status=AssessmentResult.STATUS_PASSED,
+            comment='Старый комментарий зачёта',
+        )
+        self.client.force_login(self.data['teacher'].user)
+        payload = {
+            'action': 'assessment_result',
+            'assessment_group': group.pk,
+            'assessment_item': item.pk,
+            'assessment_student': self.data['student'].pk,
+            'status': AssessmentResult.STATUS_FAILED,
+            'comment': 'Новый комментарий зачёта',
+        }
+        url = f"{reverse('journal')}?academic_year={self.data['year'].pk}"
+
+        unconfirmed = self.client.post(url, payload, follow=True)
+        self.assertEqual(unconfirmed.status_code, 200)
+        self.assertContains(unconfirmed, 'Подтвердите изменение существующего зачёта')
+        self.assertContains(unconfirmed, '«Зачёт» → «Незачёт»')
+        result.refresh_from_db()
+        self.assertEqual(result.status, AssessmentResult.STATUS_PASSED)
+
+        confirmed = self.client.post(
+            url,
+            {**payload, '_confirm_existing_changes': '1'},
+        )
+        self.assertEqual(confirmed.status_code, 302)
+        result.refresh_from_db()
+        self.assertEqual(result.status, AssessmentResult.STATUS_FAILED)
+        self.assertEqual(result.comment, 'Новый комментарий зачёта')
+
+    def test_assessment_options_api_describes_existing_result_for_modal(self):
+        _subject, group, _used, _free, item = self._assessment_catalog()
+        set_assessment_result(
+            item=item,
+            student=self.data['student'],
+            acting_teacher=self.data['teacher'],
+            status=AssessmentResult.STATUS_PASSED,
+            comment='API комментарий',
+        )
+        self.client.force_login(self.data['teacher'].user)
+
+        response = self.client.get(reverse('assessment_filter_options_api'), {
+            'academic_year': self.data['year'].pk,
+            'assessment_group': group.pk,
+            'assessment_item': item.pk,
+            'assessment_student': self.data['student'].pk,
+            'editable': '1',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        fields = response.json()['existing_change']['fields']
+        self.assertEqual(fields['status']['old_label'], 'Зачёт')
+        self.assertEqual(fields['comment']['old_label'], 'API комментарий')
+
+    def test_admin_and_cabinet_render_shared_confirmation_assets(self):
+        admin_user = User.objects.create_superuser(
+            username='confirmation_assets_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+        admin_response = self.client.get(
+            reverse('admin:journal_student_change', args=[self.data['student'].pk]),
+            {'academic_year': self.data['year'].pk},
+        )
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(admin_response, 'data-confirm-existing-changes="1"')
+        self.assertContains(admin_response, 'journal/change_confirmation.js')
+        self.assertContains(admin_response, 'journal/change_confirmation.css')
+
+        self.client.force_login(self.data['teacher'].user)
+        cabinet_response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.data['year'].pk},
+        )
+        self.assertEqual(cabinet_response.status_code, 200)
+        self.assertContains(cabinet_response, 'journal/change_confirmation.js')
+        self.assertContains(cabinet_response, 'journal/change_confirmation.css')
+
+        source = Path(
+            'journal/static/journal/change_confirmation.js'
+        ).read_text(encoding='utf-8')
+        self.assertIn('Подтвердите изменение данных', source)
+        self.assertIn('oldValue', source)
+        self.assertIn('newValue', source)
+        self.assertIn('_confirm_existing_changes', source)
