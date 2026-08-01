@@ -961,7 +961,7 @@ def _assessment_workspace_context(
 ):
     if academic_year is None:
         return {
-            'assessment_filter_enabled': True,
+            'assessment_filter_enabled': False,
             'assessment_sections': [],
             'assessment_summary': assessment_summary_for_teacher([]),
         }
@@ -976,16 +976,21 @@ def _assessment_workspace_context(
         allowed_academic_years=academic_years,
         fixed_teacher=fixed_teacher,
     )
-    sections = assessment_sections_for_teacher(
-        selection.teacher,
-        academic_year,
-        subject=selection.subject,
-        assessment_group=selection.assessment_group,
-        item=selection.item,
-        student=selection.student,
+    assessment_filter_enabled = options['items'].exists()
+    sections = (
+        assessment_sections_for_teacher(
+            selection.teacher,
+            academic_year,
+            subject=selection.subject,
+            assessment_group=selection.assessment_group,
+            item=selection.item,
+            student=selection.student,
+        )
+        if assessment_filter_enabled
+        else []
     )
     return {
-        'assessment_filter_enabled': True,
+        'assessment_filter_enabled': assessment_filter_enabled,
         'assessment_filter_options': options,
         'assessment_selection': selection,
         'assessment_sections': sections,
@@ -2130,6 +2135,15 @@ def _handle_grade_form(
     )
 
 
+def _has_items(value) -> bool:
+    if value is None:
+        return False
+    exists = getattr(value, 'exists', None)
+    if callable(exists):
+        return exists()
+    return bool(value)
+
+
 def _journal_context(
     *,
     role_mode: str,
@@ -2149,6 +2163,7 @@ def _journal_context(
         'role_mode': role_mode,
         'groups': groups,
         'subjects': subjects,
+        'has_subjects': _has_items(subjects),
         'students': students,
         'journal_tables': journal_tables,
         'selected_group': selected_group,

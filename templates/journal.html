@@ -1505,17 +1505,19 @@
                         </div>
                     {% endif %}
 
-                    <div class="field">
-                        <label for="subject">Предмет</label>
-                        <select id="subject" name="subject" data-searchable-select data-search-placeholder="Найти предмет">
-                            <option value="">Все предметы</option>
-                            {% for subject in subjects %}
-                                <option value="{{ subject.id }}" {% if selected_subject_id == subject.id|stringformat:"s" %}selected{% endif %}>
-                                    {{ subject.name }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
+                    {% if has_subjects %}
+                        <div class="field" data-filter-field="subject">
+                            <label for="subject">Предмет</label>
+                            <select id="subject" name="subject" data-searchable-select data-search-placeholder="Найти предмет">
+                                <option value="">Все предметы</option>
+                                {% for subject in subjects %}
+                                    <option value="{{ subject.id }}" {% if selected_subject_id == subject.id|stringformat:"s" %}selected{% endif %}>
+                                        {{ subject.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    {% endif %}
 
                     <div class="form-action">
                         <button type="submit">
@@ -1553,13 +1555,15 @@
                     </span>
                     <div class="summary-value">{{ groups|length }}</div>
                 </div>
-                <div class="summary-item">
-                    <span class="summary-label">
-                        <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
-                        Предметы
-                    </span>
-                    <div class="summary-value">{{ subjects|length }}</div>
-                </div>
+                {% if has_subjects %}
+                    <div class="summary-item" data-summary-category="subjects">
+                        <span class="summary-label">
+                            <svg class="icon" aria-hidden="true"><use href="#icon-book"></use></svg>
+                            Предметы
+                        </span>
+                        <div class="summary-value">{{ subjects|length }}</div>
+                    </div>
+                {% endif %}
                 <div class="summary-item">
                     <span class="summary-label">
                         <svg class="icon" aria-hidden="true"><use href="#icon-user"></use></svg>
@@ -1576,7 +1580,7 @@
                 </div>
             </section>
 
-            {% if grade_form and can_edit_journal %}
+            {% if grade_form and can_edit_journal and has_subjects %}
                 <section class="quick-entry" aria-labelledby="quick-grade-title">
                     <div class="section-head">
                         <div class="section-title">
@@ -1707,7 +1711,7 @@
 
 
             {% if assessment_filter_enabled %}
-                <section class="assessment-stack" aria-label="Сдача произведений">
+                <section class="assessment-stack" aria-label="Сдача произведений" data-journal-category="assessments">
                     <div class="workspace-title">
                         <h2>Сдача произведений</h2>
                         <p>Фильтры показывают только совместимые назначения и произведения.</p>
@@ -1948,7 +1952,7 @@
             {% endif %}
 
             {% if assessment_subject_sections %}
-                <section class="assessment-stack" aria-label="Мои произведения">
+                <section class="assessment-stack" aria-label="Мои произведения" data-journal-category="assessments">
                     <div class="workspace-title">
                         <h2>Мои произведения</h2>
                         <p>Прогресс сгруппирован по предметам и сформирован из назначенных вам групп произведений.</p>
