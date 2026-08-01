@@ -2,18 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from django.db.models import Prefetch, Q
+from django.db.models import Q
 
+from .access_scope import JournalAccessScope
 from .models import (
     AcademicYear,
-    GroupSubject,
     Student,
-    StudentEnrollment,
-    StudentSubject,
     StudyGroup,
     Subject,
     Teacher,
-    academic_year_is_active,
 )
 
 
@@ -29,39 +26,9 @@ def _normalized_modes(assessment_modes: Iterable[str] | str | None) -> tuple[str
     return tuple(assessment_modes)
 
 
-def _assignment_querysets(
-    academic_year: AcademicYear | None,
-    assessment_modes: Iterable[str] | str | None,
-):
-    year = _selected_year(academic_year)
-    if year is None:
-        return year, GroupSubject.objects.none(), StudentSubject.objects.none()
-
-    group_assignments = GroupSubject.objects.filter(group__academic_year=year)
-    individual_assignments = StudentSubject.objects.filter(academic_year=year)
+def _is_standard_only(assessment_modes) -> bool:
     modes = _normalized_modes(assessment_modes)
-    if modes is not None:
-        group_assignments = group_assignments.filter(subject__assessment_mode__in=modes)
-        individual_assignments = individual_assignments.filter(subject__assessment_mode__in=modes)
-
-    if academic_year_is_active(year):
-        group_assignments = group_assignments.filter(
-            is_active=True,
-            group__is_active=True,
-            subject__is_active=True,
-        )
-        individual_assignments = individual_assignments.filter(
-            is_active=True,
-            student__is_active=True,
-            subject__is_active=True,
-        )
-    return year, group_assignments, individual_assignments
-
-
-def _student_enrollment(student: Student | None, academic_year: AcademicYear | None):
-    if student is None or academic_year is None:
-        return None
-    return student.enrollment_for_year(academic_year)
+    return modes in (None, (Subject.ASSESSMENT_MODE_STANDARD,))
 
 
 def available_groups(
@@ -72,37 +39,32 @@ def available_groups(
     academic_year: AcademicYear | None = None,
     assessment_modes: Iterable[str] | str | None = None,
 ):
-    year, group_assignments, individual_assignments = _assignment_querysets(
-        academic_year,
-        assessment_modes,
-    )
-    if year is None:
+    year = _selected_year(academic_year)
+    if year is None or not _is_standard_only(assessment_modes):
         return StudyGroup.objects.none()
-
-    enrollment = _student_enrollment(student, year)
-    if student is not None and enrollment is None:
-        return StudyGroup.objects.none()
-    if student is not None:
-        group_assignments = group_assignments.filter(group_id=enrollment.group_id)
-        individual_assignments = individual_assignments.filter(student=student)
+    scope = JournalAccessScope(year, teacher=teacher)
+    groups = scope.standard_groups()
     if subject is not None:
-        group_assignments = group_assignments.filter(subject=subject)
-        individual_assignments = individual_assignments.filter(subject=subject)
-    if teacher is not None:
-        group_assignments = group_assignments.filter(teacher=teacher)
-        individual_assignments = individual_assignments.filter(teacher=teacher)
-
-    individual_group_ids = StudentEnrollment.objects.filter(
-        academic_year=year,
-        student_id__in=individual_assignments.values('student_id'),
-    ).values('group_id')
-    groups = StudyGroup.objects.filter(academic_year=year).filter(
-        Q(pk__in=group_assignments.values('group_id'))
-        | Q(pk__in=individual_group_ids)
-    )
-    if academic_year_is_active(year):
-        groups = groups.filter(is_active=True)
-    return groups.select_related('academic_year').distinct().order_by('name')
+        group_ids = scope.group_subjects().filter(subject=subject).values_list('group_id', flat=True)
+        individual_student_ids = scope.student_subjects().filter(subject=subject).values_list(
+            'student_id', flat=True
+        )
+        individual_group_ids = scope.standard_enrollments(subject=subject).exclude(
+            group_id=None
+        ).values_list('group_id', flat=True)
+        groups = groups.filter(Q(pk__in=group_ids) | Q(pk__in=individual_group_ids))
+    if student is not None:
+        enrollment = student.enrollment_for_year(year)
+        if enrollment is None:
+            return StudyGroup.objects.none()
+        student_has_individual = scope.student_subjects().filter(student=student)
+        if subject is not None:
+            student_has_individual = student_has_individual.filter(subject=subject)
+        allowed = Q(pk=enrollment.group_id) if enrollment.group_id else Q(pk__in=[])
+        if student_has_individual.exists() and enrollment.group_id:
+            allowed |= Q(pk=enrollment.group_id)
+        groups = groups.filter(allowed)
+    return groups.distinct().order_by('name', 'pk')
 
 
 def available_students(
@@ -115,57 +77,27 @@ def available_students(
     base_queryset=None,
     individual_only: bool = False,
 ):
-    year, group_assignments, individual_assignments = _assignment_querysets(
-        academic_year,
-        assessment_modes,
-    )
-    if year is None:
+    year = _selected_year(academic_year)
+    if year is None or not _is_standard_only(assessment_modes):
         return Student.objects.none()
     if group is not None and group.academic_year_id != year.pk:
         return Student.objects.none()
+
+    scope = JournalAccessScope(year, teacher=teacher)
     if individual_only:
-        group_assignments = group_assignments.none()
-
-    group_enrollments = StudentEnrollment.objects.filter(academic_year=year)
-    if group is not None:
-        group_assignments = group_assignments.filter(group=group)
-        group_enrollments = group_enrollments.filter(group=group)
-        individual_assignments = individual_assignments.filter(
-            student_id__in=group_enrollments.values('student_id'),
+        assignments = scope.student_subjects()
+        if group is not None:
+            group_student_ids = scope.standard_enrollments(group=group).values_list('student_id', flat=True)
+            assignments = assignments.filter(student_id__in=group_student_ids)
+        if subject is not None:
+            assignments = assignments.filter(subject=subject)
+        student_ids = assignments.values_list('student_id', flat=True)
+    else:
+        student_ids = scope.standard_enrollments(group=group, subject=subject).values_list(
+            'student_id', flat=True
         )
-    if subject is not None:
-        group_assignments = group_assignments.filter(subject=subject)
-        individual_assignments = individual_assignments.filter(subject=subject)
-    if teacher is not None:
-        group_assignments = group_assignments.filter(teacher=teacher)
-        individual_assignments = individual_assignments.filter(teacher=teacher)
-
-    group_student_ids = group_enrollments.filter(
-        group_id__in=group_assignments.values('group_id'),
-    ).values('student_id')
-    students = base_queryset.prefetch_related(None) if base_queryset is not None else Student.objects.all()
-    students = students.filter(
-        Q(pk__in=group_student_ids)
-        | Q(pk__in=individual_assignments.values('student_id')),
-    )
-    if academic_year_is_active(year):
-        students = students.filter(is_active=True)
-
-    enrollment_prefetch = Prefetch(
-        'enrollments',
-        queryset=StudentEnrollment.objects.filter(academic_year=year).select_related(
-            'group',
-            'academic_year',
-        ),
-        to_attr='journal_enrollments',
-    )
-    return (
-        students
-        .select_related('group', 'group__academic_year', 'instrument')
-        .prefetch_related(enrollment_prefetch)
-        .distinct()
-        .order_by('full_name')
-    )
+    queryset = base_queryset.prefetch_related(None) if base_queryset is not None else Student.objects.all()
+    return queryset.filter(pk__in=student_ids).distinct().order_by('full_name', 'pk')
 
 
 def available_subjects(
@@ -177,43 +109,23 @@ def available_subjects(
     assessment_modes: Iterable[str] | str | None = None,
     individual_only: bool = False,
 ):
-    year, group_assignments, individual_assignments = _assignment_querysets(
-        academic_year,
-        assessment_modes,
-    )
-    if year is None:
+    year = _selected_year(academic_year)
+    if year is None or not _is_standard_only(assessment_modes):
         return Subject.objects.none()
     if group is not None and group.academic_year_id != year.pk:
         return Subject.objects.none()
+    scope = JournalAccessScope(year, teacher=teacher)
     if individual_only:
-        group_assignments = group_assignments.none()
-
-    enrollment = _student_enrollment(student, year)
-    if student is not None and enrollment is None:
-        return Subject.objects.none()
-    selected_group = None if individual_only else group or (enrollment.group if enrollment else None)
-    if selected_group is not None:
-        group_assignments = group_assignments.filter(group=selected_group)
-        group_student_ids = StudentEnrollment.objects.filter(
-            academic_year=year,
-            group=selected_group,
-        ).values('student_id')
-        individual_assignments = individual_assignments.filter(student_id__in=group_student_ids)
-    elif student is not None:
-        group_assignments = group_assignments.none()
-    if student is not None:
-        individual_assignments = individual_assignments.filter(student=student)
-    if teacher is not None:
-        group_assignments = group_assignments.filter(teacher=teacher)
-        individual_assignments = individual_assignments.filter(teacher=teacher)
-
-    subjects = Subject.objects.filter(
-        Q(pk__in=group_assignments.values('subject_id'))
-        | Q(pk__in=individual_assignments.values('subject_id'))
-    )
-    if academic_year_is_active(year):
-        subjects = subjects.filter(is_active=True)
-    return subjects.distinct().order_by('name')
+        assignments = scope.student_subjects()
+        if student is not None:
+            assignments = assignments.filter(student=student)
+        if group is not None:
+            student_ids = scope.standard_enrollments(group=group).values_list('student_id', flat=True)
+            assignments = assignments.filter(student_id__in=student_ids)
+        return Subject.objects.filter(
+            pk__in=assignments.values_list('subject_id', flat=True)
+        ).distinct().order_by('name', 'pk')
+    return scope.standard_subjects(group=group, student=student)
 
 
 def available_teachers(
@@ -225,40 +137,22 @@ def available_teachers(
     assessment_modes: Iterable[str] | str | None = None,
     individual_only: bool = False,
 ):
-    year, group_assignments, individual_assignments = _assignment_querysets(
-        academic_year,
-        assessment_modes,
-    )
-    if year is None:
+    year = _selected_year(academic_year)
+    if year is None or not _is_standard_only(assessment_modes):
         return Teacher.objects.none()
     if group is not None and group.academic_year_id != year.pk:
         return Teacher.objects.none()
+    scope = JournalAccessScope(year)
     if individual_only:
-        group_assignments = group_assignments.none()
-
-    enrollment = _student_enrollment(student, year)
-    if student is not None and enrollment is None:
-        return Teacher.objects.none()
-    selected_group = None if individual_only else group or (enrollment.group if enrollment else None)
-    if selected_group is not None:
-        group_assignments = group_assignments.filter(group=selected_group)
-        group_student_ids = StudentEnrollment.objects.filter(
-            academic_year=year,
-            group=selected_group,
-        ).values('student_id')
-        individual_assignments = individual_assignments.filter(student_id__in=group_student_ids)
-    elif student is not None:
-        group_assignments = group_assignments.none()
-    if student is not None:
-        individual_assignments = individual_assignments.filter(student=student)
-    if subject is not None:
-        group_assignments = group_assignments.filter(subject=subject)
-        individual_assignments = individual_assignments.filter(subject=subject)
-
-    teachers = Teacher.objects.filter(
-        Q(pk__in=group_assignments.values('teacher_id'))
-        | Q(pk__in=individual_assignments.values('teacher_id'))
-    )
-    if academic_year_is_active(year):
-        teachers = teachers.filter(is_active=True)
-    return teachers.distinct().order_by('full_name')
+        assignments = scope.student_subjects()
+        if student is not None:
+            assignments = assignments.filter(student=student)
+        if group is not None:
+            student_ids = scope.standard_enrollments(group=group).values_list('student_id', flat=True)
+            assignments = assignments.filter(student_id__in=student_ids)
+        if subject is not None:
+            assignments = assignments.filter(subject=subject)
+        return Teacher.objects.filter(
+            pk__in=assignments.values_list('teacher_id', flat=True)
+        ).distinct().order_by('full_name', 'pk')
+    return scope.standard_teachers(group=group, student=student, subject=subject)

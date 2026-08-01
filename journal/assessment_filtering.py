@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .assessment_services import (
-    assessment_items_visible_to_teacher,
-    enrollments_for_assessment_groups,
-)
+from .access_scope import JournalAccessScope
 from .models import (
     AcademicYear,
     AssessmentGroup,
@@ -65,24 +62,45 @@ def resolve_assessment_filter_selection(
     academic_year: AcademicYear,
     fixed_teacher: Teacher | None = None,
 ) -> AssessmentFilterSelection:
+    """Resolve only objects that belong to the selected canonical year.
+
+    ``AssessmentItem.subject`` and ``AssessmentItem.academic_year`` are legacy
+    snapshots.  The parent ``AssessmentGroup`` owns both values, therefore all
+    selection checks deliberately follow ``group__...`` relations.
+    """
+    scope = JournalAccessScope(academic_year, teacher=fixed_teacher)
+    item_queryset = scope.assessment_items()
+    group_queryset = scope.assessment_groups()
+
     teacher = fixed_teacher or _selected(
-        Teacher.objects.filter(is_active=True),
+        Teacher.objects.filter(
+            pk__in=item_queryset.values_list('responsible_teacher_id', flat=True),
+        ).distinct(),
         params.get('assessment_teacher'),
     )
+    if fixed_teacher is None and teacher is not None:
+        item_queryset = item_queryset.filter(responsible_teacher=teacher)
+        group_queryset = AssessmentGroup.objects.filter(
+            pk__in=item_queryset.values_list('group_id', flat=True)
+        )
+
     subject = _selected(
-        Subject.objects.filter(assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS),
+        Subject.objects.filter(
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            assessment_groups__academic_year=academic_year,
+        ).distinct(),
         params.get('assessment_subject'),
     )
     assessment_group = _selected(
-        AssessmentGroup.objects.filter(academic_year=academic_year),
+        group_queryset.filter(academic_year=academic_year),
         params.get('assessment_group'),
     )
     item = _selected(
-        AssessmentItem.objects.filter(academic_year=academic_year).select_related('group', 'subject'),
+        item_queryset.filter(group__academic_year=academic_year),
         params.get('assessment_item'),
     )
     student = _selected(
-        Student.objects.all(),
+        scope.assessment_students(),
         params.get('assessment_student'),
     )
 
@@ -96,25 +114,27 @@ def resolve_assessment_filter_selection(
     )
 
 
-def _available_items(
+def _items_for_selection(
     selection: AssessmentFilterSelection,
     *,
-    fixed_teacher: Teacher | None = None,
+    fixed_teacher: Teacher | None,
 ):
-    if fixed_teacher is not None:
-        return assessment_items_visible_to_teacher(
-            fixed_teacher,
-            selection.academic_year,
-        )
-
-    items = AssessmentItem.objects.filter(
-        academic_year=selection.academic_year,
-        subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-        responsible_teacher__isnull=False,
-    ).select_related('subject', 'academic_year', 'group', 'responsible_teacher')
-    if selection.academic_year.is_active:
-        items = items.filter(is_active=True, group__is_active=True)
-    return items.distinct()
+    scope = JournalAccessScope(selection.academic_year, teacher=fixed_teacher)
+    items = scope.assessment_items()
+    if fixed_teacher is None and selection.teacher is not None:
+        items = items.filter(responsible_teacher=selection.teacher)
+    if selection.subject is not None:
+        items = items.filter(group__subject=selection.subject)
+    if selection.assessment_group is not None:
+        items = items.filter(group=selection.assessment_group)
+    if selection.item is not None:
+        items = items.filter(pk=selection.item.pk)
+    if selection.student is not None:
+        assigned_group_ids = scope.assessment_assignments().filter(
+            student=selection.student,
+        ).values_list('assessment_group_id', flat=True)
+        items = items.filter(group_id__in=assigned_group_ids)
+    return items
 
 
 def assessment_filter_querysets(
@@ -123,92 +143,83 @@ def assessment_filter_querysets(
     allowed_academic_years,
     fixed_teacher: Teacher | None = None,
 ) -> dict:
-    all_items = _available_items(selection, fixed_teacher=fixed_teacher)
-    group_items = all_items
-    if selection.assessment_group is not None:
-        group_items = group_items.filter(group=selection.assessment_group)
+    """Return one coherent set of options for cabinet filters and editing.
 
+    Every collection is derived from :class:`JournalAccessScope`; saved result
+    rows never create visibility and helper participation rows never remove it.
+    """
+    scope = JournalAccessScope(selection.academic_year, teacher=fixed_teacher)
+    scoped_items = scope.assessment_items()
+    if fixed_teacher is None and selection.teacher is not None:
+        scoped_items = scoped_items.filter(responsible_teacher=selection.teacher)
+
+    option_items = scoped_items
+    if selection.subject is not None:
+        option_items = option_items.filter(group__subject=selection.subject)
+    if selection.assessment_group is not None:
+        option_items = option_items.filter(group=selection.assessment_group)
+    if selection.student is not None:
+        assigned_group_ids = scope.assessment_assignments().filter(
+            student=selection.student,
+        ).values_list('assessment_group_id', flat=True)
+        option_items = option_items.filter(group_id__in=assigned_group_ids)
+
+    displayed_items = _items_for_selection(
+        selection,
+        fixed_teacher=fixed_teacher,
+    )
+
+    assessment_groups = AssessmentGroup.objects.filter(
+        pk__in=option_items.values_list('group_id', flat=True),
+    ).select_related('subject', 'academic_year').distinct().order_by(
+        'subject__name', 'sort_order', 'name', 'pk'
+    )
+    subjects = Subject.objects.filter(
+        pk__in=option_items.values_list('group__subject_id', flat=True),
+    ).distinct().order_by('name', 'pk')
     teachers = Teacher.objects.filter(
-        pk__in=group_items.exclude(responsible_teacher=None).values('responsible_teacher_id'),
-    ).order_by('full_name')
+        pk__in=option_items.exclude(
+            responsible_teacher=None,
+        ).values_list('responsible_teacher_id', flat=True),
+    ).distinct().order_by('full_name', 'pk')
     if fixed_teacher is not None:
         teachers = teachers.filter(pk=fixed_teacher.pk)
 
-    subjects = Subject.objects.filter(
-        pk__in=group_items.values('subject_id'),
-    ).order_by('name')
+    group_ids = option_items.values_list('group_id', flat=True)
+    students = scope.assessment_students(group_ids=group_ids)
 
-    assessment_groups = AssessmentGroup.objects.filter(
-        pk__in=all_items.values('group_id'),
+    # In a teacher cabinet all items in the scope are editable in an active
+    # year.  In the admin cabinet all configured items are editable.  Keeping
+    # these querysets structurally identical prevents the filter and editor
+    # from showing contradictory values.
+    editable_items = displayed_items
+    editable_group_ids = editable_items.values_list('group_id', flat=True)
+    editable_assessment_groups = AssessmentGroup.objects.filter(
+        pk__in=editable_group_ids,
     ).select_related('subject', 'academic_year').distinct().order_by(
-        'subject__name',
-        'sort_order',
-        'name',
+        'subject__name', 'sort_order', 'name', 'pk'
     )
-    items = group_items.order_by(
-        'subject__name',
+    editable_students = scope.assessment_students(group_ids=editable_group_ids)
+
+    item_order = (
+        'group__subject__name',
         'group__sort_order',
         'group__name',
         'sort_order',
         'title',
         'pk',
     )
-    students = Student.objects.filter(
-        pk__in=_eligible_enrollments_for_items(
-            selection,
-            group_items,
-        ).values('student_id'),
-    ).order_by('full_name', 'pk')
-
-    editable_items = group_items
-    if fixed_teacher is not None:
-        editable_items = editable_items.filter(responsible_teacher=fixed_teacher)
-    editable_assessment_groups = AssessmentGroup.objects.filter(
-        pk__in=editable_items.values('group_id'),
-    ).select_related('subject', 'academic_year').distinct().order_by(
-        'subject__name',
-        'sort_order',
-        'name',
-    )
-    editable_students = Student.objects.filter(
-        pk__in=_eligible_enrollments_for_items(
-            selection,
-            editable_items,
-        ).values('student_id'),
-    ).order_by('full_name', 'pk')
-
     return {
         'academic_years': allowed_academic_years.order_by('-starts_on', '-pk'),
         'teachers': teachers,
         'subjects': subjects,
         'assessment_groups': assessment_groups,
-        'items': items,
+        'items': displayed_items.order_by(*item_order),
         'students': students,
-        'editable_items': editable_items.order_by(
-            'subject__name',
-            'group__sort_order',
-            'group__name',
-            'sort_order',
-            'title',
-            'pk',
-        ),
+        'editable_items': editable_items.order_by(*item_order),
         'editable_assessment_groups': editable_assessment_groups,
         'editable_students': editable_students,
     }
-
-
-def _eligible_enrollments_for_items(
-    selection: AssessmentFilterSelection,
-    items,
-):
-    # Assignment to an assessment group is itself the authoritative relation.
-    # Requiring a second GroupSubject/StudentSubject link incorrectly removed
-    # students that were explicitly assigned in the admin panel.
-    return enrollments_for_assessment_groups(
-        items.values_list('group_id', flat=True),
-        selection.academic_year,
-        include_inactive=not selection.academic_year.is_active,
-    )
 
 
 def serialize_assessment_filter_options(
@@ -224,8 +235,8 @@ def serialize_assessment_filter_options(
     )
     students = options['editable_students'] if editable_only else options['students']
     subjects = Subject.objects.filter(
-        pk__in=items.values('subject_id'),
-    ).order_by('name')
+        pk__in=items.values_list('group__subject_id', flat=True),
+    ).order_by('name', 'pk')
     return {
         'academic_years': [
             {'id': item.pk, 'label': item.name}
@@ -251,10 +262,10 @@ def serialize_assessment_filter_options(
             {
                 'id': item.pk,
                 'label': item.title,
-                'subject_id': item.subject_id,
+                'subject_id': item.group.subject_id,
                 'assessment_group_id': item.group_id,
             }
-            for item in items
+            for item in items.select_related('group')
         ],
         'students': [
             {'id': item.pk, 'label': item.full_name}

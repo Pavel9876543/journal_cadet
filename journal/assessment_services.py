@@ -5,20 +5,19 @@ from dataclasses import dataclass
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Q
 from django.utils import timezone
 
+from .access_scope import JournalAccessScope
 from .models import (
     AcademicYear,
     AssessmentGroup,
     AssessmentItem,
     AssessmentResult,
     FinalGradeRule,
-    GroupSubject,
     Student,
     StudentAssessmentGroup,
     StudentEnrollment,
-    StudentSubject,
     Subject,
     SubjectResult,
     Teacher,
@@ -57,60 +56,32 @@ def assessment_assignments_for_groups(
     *,
     include_inactive: bool = False,
 ):
-    """Return canonical year-scoped assessment-group assignments.
-
-    ``StudentAssessmentGroup.academic_year`` and ``enrollment`` are denormalized
-    convenience fields.  Older imports may contain stale values there even
-    though the authoritative ``assessment_group`` and ``student`` relations are
-    correct.  The journal therefore scopes by the group's academic year and
-    resolves the current enrollment separately.
-    """
-    queryset = (
-        StudentAssessmentGroup.objects
-        .filter(
-            assessment_group_id__in=group_ids,
-            assessment_group__academic_year=academic_year,
-        )
-        .select_related(
-            'student',
-            'assessment_group',
-            'assessment_group__subject',
-            'enrollment',
-            'enrollment__group',
-            'enrollment__academic_year',
-        )
+    normalized_group_ids = _normalized_primary_key_values(
+        group_ids,
+        mapping_keys=('group_id', 'assessment_group_id', 'pk', 'id'),
     )
-    if not include_inactive:
-        queryset = queryset.filter(is_active=True, student__is_active=True)
-    return queryset
+    if not normalized_group_ids:
+        return StudentAssessmentGroup.objects.none()
+    return JournalAccessScope(
+        academic_year,
+        include_inactive=include_inactive,
+    ).assessment_assignments(group_ids=normalized_group_ids)
 
 
 def _normalized_primary_key_values(values, *, mapping_keys=('pk', 'id')) -> set[int]:
-    """Return positive integer primary keys from common queryset/value shapes.
-
-    Django ``QuerySet.values()`` yields dictionaries, while ``values_list()``
-    yields scalars or one-item tuples.  Service helpers are intentionally
-    tolerant of all of these shapes so a harmless queryset refactor cannot
-    take the journal page down with ``unhashable type: 'dict'``.  Unknown or
-    malformed values are ignored instead of being passed to an ``__in`` lookup.
-    """
+    """Normalize scalars, ``values()``, ``values_list()`` and model instances."""
     normalized: set[int] = set()
     if values is None:
         return normalized
-
     for raw_value in values:
         value = raw_value
         if isinstance(value, Mapping):
-            value = next(
-                (value[key] for key in mapping_keys if key in value),
-                None,
-            )
+            value = next((value[key] for key in mapping_keys if key in value), None)
         elif isinstance(value, (tuple, list)) and len(value) == 1:
             value = value[0]
         elif hasattr(value, 'pk'):
             value = value.pk
-
-        if value is None or value == '' or isinstance(value, bool):
+        if value in (None, '') or isinstance(value, bool):
             continue
         try:
             primary_key = int(value)
@@ -127,60 +98,13 @@ def assessment_student_ids_by_group(
     *,
     include_inactive: bool = False,
 ) -> dict[int, set[int]]:
-    """Return the canonical student set for each assessment group.
-
-    ``StudentAssessmentGroup`` is the normal source of truth.  Older databases
-    can nevertheless contain ``AssessmentResult`` rows after an assignment was
-    lost during an import or a former admin workflow.  Such rows prove that the
-    student was assigned when the result was created.  We use them as a
-    compatibility fallback only when no explicit inactive assignment exists,
-    so a deliberate deactivation is never silently undone in the UI.
-    """
-    normalized_group_ids = _normalized_primary_key_values(
-        group_ids,
-        mapping_keys=('group_id', 'assessment_group_id', 'pk', 'id'),
-    )
-    if not normalized_group_ids:
-        return {}
-
-    all_assignments = StudentAssessmentGroup.objects.filter(
-        assessment_group_id__in=normalized_group_ids,
-        assessment_group__academic_year=academic_year,
-    )
-    inactive_pairs = set(
-        all_assignments.filter(is_active=False).values_list(
-            'assessment_group_id',
-            'student_id',
-        )
-    )
-    assignments = all_assignments
-    if not include_inactive:
-        assignments = assignments.filter(is_active=True, student__is_active=True)
-
+    """Explicit group assignments are the only source of student access."""
     result: dict[int, set[int]] = {}
-    for group_id, student_id in assignments.values_list(
-        'assessment_group_id',
-        'student_id',
-    ):
-        result.setdefault(group_id, set()).add(student_id)
-
-    legacy_results = AssessmentResult.objects.filter(
-        item__group_id__in=normalized_group_ids,
-        item__academic_year=academic_year,
-        enrollment__academic_year=academic_year,
-    )
-    if not include_inactive:
-        legacy_results = legacy_results.filter(
-            item__is_active=True,
-            item__group__is_active=True,
-            enrollment__student__is_active=True,
-        )
-    for group_id, student_id in legacy_results.values_list(
-        'item__group_id',
-        'enrollment__student_id',
-    ).distinct():
-        if (group_id, student_id) in inactive_pairs:
-            continue
+    for group_id, student_id in assessment_assignments_for_groups(
+        group_ids,
+        academic_year,
+        include_inactive=include_inactive,
+    ).values_list('assessment_group_id', 'student_id'):
         result.setdefault(group_id, set()).add(student_id)
     return result
 
@@ -191,39 +115,14 @@ def assessment_group_ids_for_student(
     *,
     include_inactive: bool = False,
 ) -> set[int]:
-    assignments = StudentAssessmentGroup.objects.filter(
-        student=student,
-        assessment_group__academic_year=academic_year,
-    )
-    inactive_group_ids = set(
-        assignments.filter(is_active=False).values_list(
-            'assessment_group_id',
-            flat=True,
+    return set(
+        JournalAccessScope(
+            academic_year,
+            include_inactive=include_inactive,
+        ).assessment_assignments().filter(student=student).values_list(
+            'assessment_group_id', flat=True
         )
     )
-    if not include_inactive:
-        assignments = assignments.filter(is_active=True)
-    group_ids = set(assignments.values_list('assessment_group_id', flat=True))
-
-    legacy_result_group_ids = AssessmentResult.objects.filter(
-        enrollment__student=student,
-        enrollment__academic_year=academic_year,
-        item__academic_year=academic_year,
-    )
-    if not include_inactive:
-        legacy_result_group_ids = legacy_result_group_ids.filter(
-            item__is_active=True,
-            item__group__is_active=True,
-        )
-    group_ids.update(
-        group_id
-        for group_id in legacy_result_group_ids.values_list(
-            'item__group_id',
-            flat=True,
-        ).distinct()
-        if group_id not in inactive_group_ids
-    )
-    return group_ids
 
 
 def enrollments_for_assessment_groups(
@@ -232,29 +131,16 @@ def enrollments_for_assessment_groups(
     *,
     include_inactive: bool = False,
 ):
-    """Return one year-scoped enrollment for every assigned student."""
-    student_ids_by_group = assessment_student_ids_by_group(
+    normalized_group_ids = _normalized_primary_key_values(
         group_ids,
+        mapping_keys=('group_id', 'assessment_group_id', 'pk', 'id'),
+    )
+    if not normalized_group_ids:
+        return StudentEnrollment.objects.none()
+    return JournalAccessScope(
         academic_year,
         include_inactive=include_inactive,
-    )
-    student_ids = {
-        student_id
-        for group_student_ids in student_ids_by_group.values()
-        for student_id in group_student_ids
-    }
-    queryset = (
-        StudentEnrollment.objects
-        .filter(academic_year=academic_year, student_id__in=student_ids)
-        .select_related('student', 'group', 'academic_year')
-        .distinct()
-        .order_by('full_name', 'pk')
-    )
-    if not include_inactive:
-        # Assignment/result activity is authoritative here. A stale enrollment
-        # flag must not make the same data disappear only in staff cabinets.
-        queryset = queryset.filter(student__is_active=True)
-    return queryset
+    ).assessment_enrollments(group_ids=normalized_group_ids)
 
 
 def available_assessment_items_for_student(
@@ -264,29 +150,12 @@ def available_assessment_items_for_student(
     subject: Subject | None = None,
     include_inactive: bool = False,
 ):
-    group_ids = assessment_group_ids_for_student(
-        student,
+    queryset = JournalAccessScope(
         academic_year,
         include_inactive=include_inactive,
-    )
-    queryset = (
-        AssessmentItem.objects
-        .filter(
-            group_id__in=group_ids,
-            academic_year=academic_year,
-            subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-        )
-        .select_related(
-            'subject', 'academic_year', 'group',
-            'responsible_teacher', 'responsible_teacher__user',
-        )
-        .distinct()
-        .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
-    )
+    ).assessment_items_for_student(student)
     if subject is not None:
-        queryset = queryset.filter(subject=subject)
-    if not include_inactive:
-        queryset = queryset.filter(is_active=True, group__is_active=True)
+        queryset = queryset.filter(group__subject=subject)
     return queryset
 
 
@@ -296,59 +165,12 @@ def assessment_items_visible_to_teacher(
     *,
     include_inactive: bool = False,
 ):
-    """Return element-assessment items genuinely connected to a teacher.
-
-    Besides explicitly responsible items, a teacher may inspect an item when
-    the same subject is assigned by that teacher to at least one student who
-    belongs to the item's assessment group. Such linked items are read-only;
-    only the responsible teacher may change their results.
-    """
-    queryset = (
-        AssessmentItem.objects
-        .filter(
-            academic_year=academic_year,
-            subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-        )
-        .filter(
-            Q(responsible_teacher=teacher)
-            | Q(
-                group__student_assignments__is_active=True,
-                group__student_assignments__student__enrollments__academic_year=academic_year,
-                group__student_assignments__student__enrollments__is_active=True,
-                group__student_assignments__student__enrollments__group__group_subjects__teacher=teacher,
-                group__student_assignments__student__enrollments__group__group_subjects__subject_id=F('subject_id'),
-                group__student_assignments__student__enrollments__group__group_subjects__is_active=True,
-            )
-            | Q(
-                group__student_assignments__is_active=True,
-                group__student_assignments__student__enrollments__academic_year=academic_year,
-                group__student_assignments__student__enrollments__is_active=True,
-                group__student_assignments__student__individual_subjects__academic_year=academic_year,
-                group__student_assignments__student__individual_subjects__teacher=teacher,
-                group__student_assignments__student__individual_subjects__subject_id=F('subject_id'),
-                group__student_assignments__student__individual_subjects__is_active=True,
-            )
-            | Q(
-                results__enrollment__academic_year=academic_year,
-                results__enrollment__group__group_subjects__teacher=teacher,
-                results__enrollment__group__group_subjects__subject_id=F('subject_id'),
-                results__enrollment__group__group_subjects__is_active=True,
-            )
-            | Q(
-                results__enrollment__academic_year=academic_year,
-                results__enrollment__student__individual_subjects__academic_year=academic_year,
-                results__enrollment__student__individual_subjects__teacher=teacher,
-                results__enrollment__student__individual_subjects__subject_id=F('subject_id'),
-                results__enrollment__student__individual_subjects__is_active=True,
-            )
-        )
-        .select_related('subject', 'academic_year', 'group', 'responsible_teacher')
-        .distinct()
-        .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
-    )
-    if not include_inactive:
-        queryset = queryset.filter(is_active=True, group__is_active=True)
-    return queryset
+    """A teacher sees works for which they are the responsible teacher."""
+    return JournalAccessScope(
+        academic_year,
+        teacher=teacher,
+        include_inactive=include_inactive,
+    ).assessment_items()
 
 
 def assessment_items_for_teacher(
@@ -357,11 +179,8 @@ def assessment_items_for_teacher(
     *,
     include_inactive: bool = False,
 ):
-    """Backward-compatible alias for the teacher-visible item queryset."""
     return assessment_items_visible_to_teacher(
-        teacher,
-        academic_year,
-        include_inactive=include_inactive,
+        teacher, academic_year, include_inactive=include_inactive
     )
 
 
@@ -370,20 +189,18 @@ def enrollments_for_assessment_item(
     *,
     include_inactive: bool = False,
 ):
-    return enrollments_for_assessment_groups(
-        [item.group_id],
-        item.academic_year,
+    return JournalAccessScope(
+        item.group.academic_year,
         include_inactive=include_inactive,
-    )
+    ).assessment_enrollments(group_ids=[item.group_id])
 
 
 def students_for_assessment_item(item: AssessmentItem, *, include_inactive: bool = False):
     return Student.objects.filter(
         pk__in=enrollments_for_assessment_item(
-            item,
-            include_inactive=include_inactive,
-        ).values('student_id'),
-    ).order_by('full_name')
+            item, include_inactive=include_inactive
+        ).values_list('student_id', flat=True)
+    ).order_by('full_name', 'pk')
 
 
 def enrollments_eligible_for_assessment_group(
@@ -391,17 +208,12 @@ def enrollments_eligible_for_assessment_group(
     *,
     include_inactive: bool = False,
 ):
-    """Return year-scoped enrollments that may be assigned to a work group."""
-    queryset = (
-        StudentEnrollment.objects
-        .filter(academic_year=group.academic_year)
-        .select_related('student', 'group', 'academic_year')
-        .distinct()
-        .order_by('full_name', 'pk')
+    queryset = StudentEnrollment.objects.filter(academic_year=group.academic_year)
+    if not include_inactive and group.academic_year.is_active:
+        queryset = queryset.filter(is_active=True)
+    return queryset.select_related('student', 'group', 'academic_year').order_by(
+        'full_name', 'pk'
     )
-    if not include_inactive:
-        queryset = queryset.filter(is_active=True, student__is_active=True)
-    return queryset
 
 
 def students_eligible_for_assessment_group(
@@ -411,19 +223,15 @@ def students_eligible_for_assessment_group(
 ):
     return Student.objects.filter(
         pk__in=enrollments_eligible_for_assessment_group(
-            group,
-            include_inactive=include_inactive,
-        ).values('student_id'),
+            group, include_inactive=include_inactive
+        ).values_list('student_id', flat=True)
     ).order_by('full_name', 'pk')
 
 
 def teacher_can_edit_item(teacher: Teacher, item: AssessmentItem) -> bool:
-    return bool(
-        item.responsible_teacher_id == teacher.pk
-        and item.is_active
-        and item.group.is_active
-        and item.academic_year.is_active
-    )
+    return JournalAccessScope(
+        item.group.academic_year, teacher=teacher
+    ).can_edit_assessment_item(item)
 
 
 def _matching_rule(
@@ -596,7 +404,7 @@ def set_assessment_result(
     if status not in {AssessmentResult.STATUS_PASSED, AssessmentResult.STATUS_FAILED}:
         raise ValidationError({'status': 'Выберите «Зачёт» или «Незачёт».'})
 
-    enrollment = student.enrollment_for_year(item.academic_year)
+    enrollment = student.enrollment_for_year(item.group.academic_year)
     if enrollment is None or not enrollments_for_assessment_item(item).filter(pk=enrollment.pk).exists():
         raise PermissionDenied('Это произведение не назначено выбранному ученику.')
 
@@ -614,7 +422,7 @@ def set_assessment_result(
     result.comment = comment
     result.assessed_at = timezone.now()
     result.save(recalculate=False)
-    recalculate_student_subject_final(student, item.subject, item.academic_year)
+    recalculate_student_subject_final(student, item.group.subject, item.group.academic_year)
     return result
 
 
@@ -627,11 +435,11 @@ def clear_assessment_result(
 ) -> bool:
     if not teacher_can_edit_item(acting_teacher, item):
         raise PermissionDenied('У преподавателя нет права изменять результаты этого произведения.')
-    enrollment = student.enrollment_for_year(item.academic_year)
+    enrollment = student.enrollment_for_year(item.group.academic_year)
     if enrollment is None:
         return False
     deleted, _ = AssessmentResult.objects.filter(enrollment=enrollment, item=item).delete()
-    recalculate_student_subject_final(student, item.subject, item.academic_year)
+    recalculate_student_subject_final(student, item.group.subject, item.group.academic_year)
     return bool(deleted)
 
 
@@ -671,144 +479,68 @@ def assessment_sections_for_teacher(
     item: AssessmentItem | None = None,
     student: Student | None = None,
 ):
-    if teacher is None:
-        items_queryset = (
-            AssessmentItem.objects
-            .filter(
-                academic_year=academic_year,
-                subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-                responsible_teacher__isnull=False,
-            )
-            .select_related('subject', 'academic_year', 'group', 'responsible_teacher')
-            .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
-        )
-        if academic_year.is_active:
-            items_queryset = items_queryset.filter(is_active=True, group__is_active=True)
-    else:
-        items_queryset = assessment_items_for_teacher(teacher, academic_year)
+    """Build works sections from the same access scope used by forms and APIs."""
+    scope = JournalAccessScope(academic_year, teacher=teacher)
+    items_queryset = scope.assessment_items()
     if subject is not None:
-        items_queryset = items_queryset.filter(subject=subject)
+        items_queryset = items_queryset.filter(group__subject=subject)
     if assessment_group is not None:
         items_queryset = items_queryset.filter(group=assessment_group)
     if item is not None:
         items_queryset = items_queryset.filter(pk=item.pk)
-
     items = list(items_queryset)
     if not items:
         return []
 
-    group_ids = {item.group_id for item in items}
-    student_ids_by_group = assessment_student_ids_by_group(
-        group_ids,
-        academic_year,
-    )
-    all_student_ids = {
-        student_id
-        for group_student_ids in student_ids_by_group.values()
-        for student_id in group_student_ids
-    }
+    group_ids = {assessment_item.group_id for assessment_item in items}
+    assignments = scope.assessment_assignments(group_ids=group_ids)
+    student_ids_by_group: dict[int, set[int]] = {}
+    for group_id, student_id in assignments.values_list(
+        'assessment_group_id', 'student_id'
+    ):
+        student_ids_by_group.setdefault(group_id, set()).add(student_id)
 
-    enrollments = list(
-        StudentEnrollment.objects
-        .filter(
-            academic_year=academic_year,
-            student_id__in=all_student_ids,
-        )
-        .select_related('student', 'group', 'academic_year')
-        .order_by('full_name', 'pk')
-    )
+    enrollments = scope.assessment_enrollments(group_ids=group_ids)
     if study_group is not None:
-        enrollments = [
-            enrollment
-            for enrollment in enrollments
-            if enrollment.group_id == study_group.pk
-        ]
+        enrollments = enrollments.filter(group=study_group)
     if student is not None:
-        enrollments = [
-            enrollment
-            for enrollment in enrollments
-            if enrollment.student_id == student.pk
-        ]
-    enrollment_by_student = {enrollment.student_id: enrollment for enrollment in enrollments}
-    enrollment_ids = [enrollment.pk for enrollment in enrollments]
-    subject_ids = {item.subject_id for item in items}
-    group_subject_queryset = GroupSubject.objects.filter(
-        group_id__in={
-            enrollment.group_id
-            for enrollment in enrollments
-            if enrollment.group_id
-        },
-        subject_id__in=subject_ids,
-        is_active=True,
-    )
-    individual_subject_queryset = StudentSubject.objects.filter(
-        student_id__in=all_student_ids,
-        subject_id__in=subject_ids,
-        academic_year=academic_year,
-        is_active=True,
-    )
-    teacher_group_subject_pairs = set()
-    teacher_individual_subject_pairs = set()
-    if teacher is not None:
-        teacher_group_subject_pairs = set(
-            group_subject_queryset.filter(teacher=teacher).values_list(
-                'group_id',
-                'subject_id',
-            )
-        )
-        teacher_individual_subject_pairs = set(
-            individual_subject_queryset.filter(teacher=teacher).values_list(
-                'student_id',
-                'subject_id',
-            )
-        )
+        enrollments = enrollments.filter(student=student)
+    enrollment_list = list(enrollments)
+    enrollment_by_student = {row.student_id: row for row in enrollment_list}
+    enrollment_ids = [row.pk for row in enrollment_list]
+    all_student_ids = set(enrollment_by_student)
 
     result_by_pair = {
         (result.item_id, result.enrollment_id): result
-        for result in AssessmentResult.objects.filter(
-            item_id__in=[item.pk for item in items],
+        for result in scope.assessment_results(items=items).filter(
             enrollment_id__in=enrollment_ids,
-        ).select_related('assessed_by')
+        )
     }
     final_by_pair = {
         (result.student_id, result.subject_id): result
         for result in SubjectResult.objects.filter(
             student_id__in=all_student_ids,
-            subject_id__in={item.subject_id for item in items},
+            subject_id__in={assessment_item.group.subject_id for assessment_item in items},
             academic_year=academic_year,
         )
     }
 
     sections = []
-    for item in items:
-        teacher_is_responsible = bool(
-            teacher is None or item.responsible_teacher_id == teacher.pk
-        )
+    for assessment_item in items:
         item_enrollments = [
             enrollment_by_student[student_id]
-            for student_id in student_ids_by_group.get(item.group_id, set())
+            for student_id in student_ids_by_group.get(assessment_item.group_id, set())
             if student_id in enrollment_by_student
-            and (
-                # The responsible teacher is directly connected to the work
-                # through AssessmentItem and must see every student explicitly
-                # assigned to that work group. Requiring an additional
-                # GroupSubject/StudentSubject row hid legitimate assignments.
-                teacher_is_responsible
-                or (
-                    (enrollment_by_student[student_id].group_id, item.subject_id)
-                    in teacher_group_subject_pairs
-                    or (student_id, item.subject_id)
-                    in teacher_individual_subject_pairs
-                )
-            )
         ]
-        item_enrollments.sort(key=lambda enrollment: (enrollment.full_name, enrollment.pk))
+        item_enrollments.sort(key=lambda row: (row.full_name, row.pk))
         rows = [
             {
                 'enrollment': enrollment,
                 'student': enrollment.student,
-                'result': result_by_pair.get((item.pk, enrollment.pk)),
-                'final_result': final_by_pair.get((enrollment.student_id, item.subject_id)),
+                'result': result_by_pair.get((assessment_item.pk, enrollment.pk)),
+                'final_result': final_by_pair.get((
+                    enrollment.student_id, assessment_item.group.subject_id
+                )),
             }
             for enrollment in item_enrollments
         ]
@@ -820,17 +552,15 @@ def assessment_sections_for_teacher(
             1 for row in rows
             if row['result'] and row['result'].status == AssessmentResult.STATUS_FAILED
         )
-        section = {
-            'item': item,
+        sections.append({
+            'item': assessment_item,
             'rows': rows,
-            'can_edit': teacher_is_responsible,
+            'can_edit': scope.can_edit_assessment_item(assessment_item),
             'student_count': len(rows),
             'passed_count': passed_count,
             'failed_count': failed_count,
             'not_evaluated_count': len(rows) - passed_count - failed_count,
-        }
-        if rows or (study_group is None and student is None):
-            sections.append(section)
+        })
     return sections
 
 
@@ -862,9 +592,9 @@ def assessment_subject_sections_for_student(
     for row in rows:
         item = row['item']
         section = sections_by_subject.setdefault(
-            item.subject_id,
+            item.group.subject_id,
             {
-                'subject': item.subject,
+                'subject': item.group.subject,
                 'rows': [],
                 'groups': [],
                 'group_ids': set(),
@@ -873,7 +603,7 @@ def assessment_subject_sections_for_student(
                 'not_evaluated_count': 0,
                 'required_count': 0,
                 'required_passed_count': 0,
-                'final_result': final_results.get(item.subject_id),
+                'final_result': final_results.get(item.group.subject_id),
             },
         )
         section['rows'].append(row)

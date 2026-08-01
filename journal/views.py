@@ -23,6 +23,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET
 
 from .services.excel_export import build_full_export_workbook
+from .access_scope import JournalAccessScope
 
 from .assessment_services import (
     assessment_rows_for_student,
@@ -30,7 +31,6 @@ from .assessment_services import (
     assessment_subject_sections_for_student,
     assessment_summary_for_teacher,
     clear_assessment_result,
-    enrollments_for_assessment_groups,
     set_assessment_result,
 )
 from .assessment_filtering import (
@@ -57,8 +57,6 @@ from .forms import (
     CourseApplicationPublicForm,
     GradeCreateForm,
     get_student_allowed_subjects,
-    get_student_subject_teachers,
-    get_teacher_subjects,
 )
 from .grade_options import (
     get_grade_form_options,
@@ -85,7 +83,6 @@ from .models import (
     Subject,
     SubjectResult,
     Teacher,
-    TeacherEnrollment,
     TemporaryCredential,
     CourseRegistrationRateLimit,
 )
@@ -521,162 +518,154 @@ def _assessment_filter_options_api_sync(request):
 
 
 def _assessment_options_api_sync(request):
+    """Return dependent options from the same canonical assignment scope.
+
+    The parent assessment group owns the subject/year, an AssessmentItem owns
+    its responsible teacher, and StudentAssessmentGroup owns student access.
+    No result row or helper membership is allowed to manufacture an option.
+    """
     assessment_type = request.GET.get('type')
     if assessment_type not in {'item', 'student_group', 'rule', 'result'}:
         return JsonResponse({'error': 'Не удалось определить тип связанных полей.'}, status=400)
 
     changed_field = request.GET.get('changed') or ''
     strict_options = request.GET.get('strict') == '1'
-
     selected_year = get_selected_admin_academic_year(request) or AcademicYear.get_active()
-    academic_year = _get_selected_object(
-        AcademicYear.objects.all(), request.GET.get('academic_year')
-    ) or selected_year
-    subject = _get_selected_object(
-        Subject.objects.filter(
-            is_active=True,
-            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-        ),
-        request.GET.get('subject'),
-    )
+
     group = _get_selected_object(
         AssessmentGroup.objects.select_related('subject', 'academic_year'),
         request.GET.get('group') or request.GET.get('assessment_group'),
     )
+    item = _get_selected_object(
+        AssessmentItem.objects.select_related(
+            'element', 'group', 'group__subject', 'group__academic_year',
+            'responsible_teacher',
+        ),
+        request.GET.get('item'),
+    )
+    current_item = _get_selected_object(
+        AssessmentItem.objects.select_related('element', 'group'),
+        request.GET.get('current_item'),
+    )
+    student = _get_selected_object(Student.objects.all(), request.GET.get('student'))
     element = _get_selected_object(
         AssessmentElement.objects.select_related('subject'),
         request.GET.get('element'),
     )
-    student = _get_selected_object(
-        Student.objects.filter(is_active=True), request.GET.get('student')
-    )
-    item = _get_selected_object(
-        AssessmentItem.objects.select_related(
-            'element', 'subject', 'academic_year', 'group', 'responsible_teacher'
-        ),
-        request.GET.get('item'),
-    )
-    current_assessment_item = _get_selected_object(
-        AssessmentItem.objects.select_related('element', 'group'),
-        request.GET.get('current_item'),
-    )
-    enrollment = _get_selected_object(
-        StudentEnrollment.objects.select_related('student', 'group', 'academic_year'),
-        request.GET.get('enrollment'),
-    )
-    teacher_field_name = 'responsible_teacher' if assessment_type == 'item' else 'assessed_by'
     selected_teacher = _get_selected_object(
-        Teacher.objects.all(), request.GET.get(teacher_field_name)
+        Teacher.objects.all(),
+        request.GET.get('responsible_teacher') or request.GET.get('assessed_by'),
     )
 
-    if item is not None and (assessment_type == 'result' or changed_field == 'item'):
+    academic_year = _get_selected_object(
+        AcademicYear.objects.all(), request.GET.get('academic_year')
+    ) or selected_year
+    subject = _get_selected_object(
+        Subject.objects.filter(assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS),
+        request.GET.get('subject'),
+    )
+    if item is not None:
         group = item.group
-        subject = item.subject
-        academic_year = item.academic_year
-
-    if element is not None and assessment_type == 'item' and group is None:
+    if group is not None:
+        academic_year = group.academic_year
+        subject = group.subject
+    elif element is not None and assessment_type == 'item':
         subject = element.subject
 
-    if group is not None:
-        group_field_name = 'assessment_group' if assessment_type in {'student_group', 'rule'} else 'group'
-        if changed_field == group_field_name or subject is None:
-            subject = group.subject
-        if changed_field == group_field_name or academic_year is None:
-            academic_year = group.academic_year
-
-    years = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
+    years = AcademicYear.objects.filter(is_active=True).order_by('-starts_on', '-pk')
     if academic_year is not None:
-        years = _include_selected_option(years, AcademicYear, academic_year).order_by('-starts_on')
+        years = _include_selected_option(years, AcademicYear, academic_year)
+
     subjects = Subject.objects.filter(
         is_active=True,
         assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-    ).order_by('name')
-    groups = AssessmentGroup.objects.filter(is_active=True).select_related('subject', 'academic_year')
-    elements = AssessmentElement.objects.filter(is_active=True).select_related('subject')
-    teachers = Teacher.objects.filter(is_active=True)
-    students = active_student_queryset()
-    items = AssessmentItem.objects.filter(is_active=True, group__is_active=True).select_related(
-        'element', 'subject', 'academic_year', 'group', 'responsible_teacher'
+    ).order_by('name', 'pk')
+    groups = AssessmentGroup.objects.filter(is_active=True).select_related(
+        'subject', 'academic_year'
     )
-    if assessment_type == 'result':
-        # A result starts with the student. Only fully configured works can be
-        # selected, and the remaining fields are narrowed from that choice.
-        items = items.filter(responsible_teacher__isnull=False)
-    enrollments = StudentEnrollment.objects.none()
-
     if academic_year is not None:
         groups = groups.filter(academic_year=academic_year)
-        teacher_ids = TeacherEnrollment.objects.filter(
-            academic_year=academic_year,
-            is_active=True,
-        ).values('teacher_id')
-        teachers = teachers.filter(pk__in=teacher_ids)
-        students = students.filter(enrollments__academic_year=academic_year, enrollments__is_active=True)
-        items = items.filter(academic_year=academic_year)
     if subject is not None:
-        if assessment_type != 'item':
-            groups = groups.filter(subject=subject)
-            teachers = teachers.filter(qualified_subjects=subject)
+        groups = groups.filter(subject=subject)
+
+    elements = AssessmentElement.objects.filter(is_active=True).select_related('subject')
+    if subject is not None:
         elements = elements.filter(subject=subject)
-        items = items.filter(subject=subject)
-    if selected_teacher is not None and assessment_type == 'item':
-        items = items.filter(responsible_teacher=selected_teacher)
-    if group is not None:
-        items = items.filter(group=group)
-    if assessment_type == 'item' and element is not None:
-        occupied_groups = AssessmentItem.objects.filter(
-            element=element,
-        )
-        if current_assessment_item is not None:
-            occupied_groups = occupied_groups.exclude(pk=current_assessment_item.pk)
-        groups = groups.exclude(pk__in=occupied_groups.values('group_id'))
-    if assessment_type == 'student_group' and group is not None:
-        students = Student.objects.filter(
-            enrollments__academic_year=group.academic_year,
-            enrollments__is_active=True,
-        )
-        if student is None:
-            students = students.filter(is_active=True)
-    if assessment_type == 'result':
-        result_groups = AssessmentGroup.objects.filter(
-            pk__in=items.values('group_id'),
-        )
+
+    teachers = assignment_teacher_queryset(
+        subject=subject,
+        academic_year=academic_year,
+    )
+    students = Student.objects.none()
+    items = AssessmentItem.objects.none()
+    enrollments = StudentEnrollment.objects.none()
+
+    if assessment_type == 'item':
+        # Group is the first and authoritative selector. Subject/year are
+        # derived, while any active teacher can become the responsible one.
+        items = AssessmentItem.objects.filter(
+            group__in=groups,
+            is_active=True,
+        ).select_related('group', 'group__subject', 'group__academic_year')
+        if group is not None:
+            items = items.filter(group=group)
+        if selected_teacher is not None:
+            items = items.filter(responsible_teacher=selected_teacher)
+        if element is not None:
+            occupied_group_ids = AssessmentItem.objects.filter(element=element)
+            if current_item is not None:
+                occupied_group_ids = occupied_group_ids.exclude(pk=current_item.pk)
+            groups = groups.exclude(pk__in=occupied_group_ids.values_list('group_id', flat=True))
+
+    elif assessment_type == 'student_group':
+        if group is not None:
+            academic_year = group.academic_year
         if academic_year is not None:
-            result_groups = result_groups.filter(academic_year=academic_year)
-        if item is not None:
-            result_groups = result_groups.filter(pk=item.group_id)
+            enrollment_qs = StudentEnrollment.objects.filter(academic_year=academic_year)
+            if academic_year.is_active:
+                enrollment_qs = enrollment_qs.filter(is_active=True)
+            students = Student.objects.filter(
+                pk__in=enrollment_qs.values_list('student_id', flat=True)
+            )
 
-        enrollments = (
-            enrollments_for_assessment_groups(
-                result_groups.values('pk'),
+    elif assessment_type == 'rule':
+        # Rule fields are constrained by the selected subject/year only.
+        pass
+
+    elif assessment_type == 'result':
+        if academic_year is not None:
+            scope = JournalAccessScope(
                 academic_year,
-                include_inactive=bool(enrollment),
+                include_inactive=bool(getattr(item, 'pk', None)),
             )
-            if academic_year is not None
-            else StudentEnrollment.objects.none()
-        )
-        students = Student.objects.filter(
-            pk__in=enrollments.values('student_id'),
-        )
-        if student is not None:
-            items = items.filter(
-                group__student_assignments__student=student,
-                group__student_assignments__assessment_group__academic_year=academic_year,
-                group__student_assignments__is_active=True,
+            configured_items = scope.assessment_items()
+            students = scope.assessment_students()
+            if student is not None:
+                items = scope.assessment_items_for_student(student)
+            else:
+                items = AssessmentItem.objects.none()
+            if item is not None:
+                items = configured_items.filter(pk=item.pk)
+                students = scope.assessment_students(group_ids=[item.group_id])
+                enrollments = scope.assessment_enrollments(group_ids=[item.group_id])
+                if item.responsible_teacher_id:
+                    teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
+                else:
+                    teachers = Teacher.objects.none()
+            else:
+                teachers = Teacher.objects.none()
+                enrollments = scope.assessment_enrollments()
+            groups = AssessmentGroup.objects.filter(
+                pk__in=configured_items.values_list('group_id', flat=True)
+            ).select_related('subject', 'academic_year')
+            subjects = Subject.objects.filter(
+                pk__in=configured_items.values_list('group__subject_id', flat=True)
             )
-        elif item is None:
-            # Enforce the documented order: student -> work -> teacher.
-            items = items.none()
 
-        if item is not None and item.responsible_teacher_id:
-            teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
-            if selected_teacher is not None and selected_teacher.pk != item.responsible_teacher_id:
-                teachers = Teacher.objects.filter(
-                    Q(pk=item.responsible_teacher_id) | Q(pk=selected_teacher.pk)
-                )
-        else:
-            teachers = Teacher.objects.none()
-
+    # Preserve an edited value only for non-strict initial loads. A change
+    # event must remove an incompatible old value instead of silently keeping
+    # an impossible combination.
+    teacher_field = 'responsible_teacher' if assessment_type == 'item' else 'assessed_by'
     if not strict_options or changed_field in {'group', 'assessment_group'}:
         groups = _include_selected_option(groups, AssessmentGroup, group)
     if not strict_options or changed_field == 'subject':
@@ -687,20 +676,25 @@ def _assessment_options_api_sync(request):
         elements = _include_selected_option(elements, AssessmentElement, element)
     if not strict_options or changed_field == 'item':
         items = _include_selected_option(items, AssessmentItem, item)
-    if not strict_options or changed_field == teacher_field_name:
+    if not strict_options or changed_field == teacher_field:
         teachers = _include_selected_option(teachers, Teacher, selected_teacher)
-    if not strict_options or changed_field == 'enrollment':
-        enrollments = _include_selected_option(enrollments, StudentEnrollment, enrollment)
 
-    groups = groups.distinct().order_by(
-        'subject__name', 'sort_order', 'name'
-    )
-    subjects = subjects.distinct().order_by('name')
-    elements = elements.distinct().order_by('subject__name', 'title')
-    students = students.distinct().order_by('full_name')
-    teachers = teachers.distinct().order_by('full_name')
+    if group is not None:
+        occupied = AssessmentItem.objects.filter(group=group, element__isnull=False)
+        if current_item is not None:
+            occupied = occupied.exclude(pk=current_item.pk)
+        elements = elements.exclude(pk__in=occupied.values_list('element_id', flat=True))
+        if current_item is not None and current_item.group_id == group.pk and current_item.element_id:
+            elements = _include_selected_option(elements, AssessmentElement, current_item.element)
+
+    groups = groups.distinct().order_by('subject__name', 'sort_order', 'name', 'pk')
+    subjects = subjects.distinct().order_by('name', 'pk')
+    elements = elements.distinct().order_by('subject__name', 'title', 'pk')
+    students = students.distinct().order_by('full_name', 'pk')
+    teachers = teachers.distinct().order_by('full_name', 'pk')
     items = items.distinct().order_by(
-        'subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title'
+        'group__subject__name', 'group__sort_order', 'group__name',
+        'sort_order', 'title', 'pk',
     )
     enrollments = enrollments.distinct().order_by('full_name', 'pk')
 
@@ -714,89 +708,55 @@ def _assessment_options_api_sync(request):
             'academic_year_id': group.academic_year_id,
             'subject_id': group.subject_id,
         })
-        if group.items.filter(responsible_teacher__isnull=False).values('responsible_teacher_id').distinct().count() == 1:
-            defaults['responsible_teacher_id'] = group.items.filter(
-                responsible_teacher__isnull=False
-            ).values_list('responsible_teacher_id', flat=True).first()
-        occupied_items = AssessmentItem.objects.filter(
-            group=group,
-            element__isnull=False,
-        )
-        if current_assessment_item is not None:
-            occupied_items = occupied_items.exclude(pk=current_assessment_item.pk)
-        available_elements = elements.exclude(
-            pk__in=occupied_items.values('element_id'),
-        )
-        if (
-            element is not None
-            and current_assessment_item is not None
-            and current_assessment_item.group_id == group.pk
-            and current_assessment_item.element_id == element.pk
-        ):
-            available_elements = _include_selected_option(
-                available_elements,
-                AssessmentElement,
-                element,
-            )
-        elements = available_elements
-    elements = elements.distinct().order_by('subject__name', 'title')
-    if enrollment is not None:
-        defaults['student_id'] = enrollment.student_id
     if item is not None and item.responsible_teacher_id:
         defaults['assessed_by_id'] = item.responsible_teacher_id
+        defaults['responsible_teacher_id'] = item.responsible_teacher_id
 
     return JsonResponse({
         'academic_years': [
-            {'id': item.pk, 'label': item.name}
-            for item in years
+            {'id': row.pk, 'label': row.name}
+            for row in years
         ],
         'subjects': [
-            {'id': item.pk, 'label': item.name}
-            for item in subjects
+            {'id': row.pk, 'label': row.name}
+            for row in subjects
         ],
         'elements': [
-            {
-                'id': catalog_item.pk,
-                'label': catalog_item.title,
-                'subject_id': catalog_item.subject_id,
-            }
-            for catalog_item in elements
+            {'id': row.pk, 'label': row.title, 'subject_id': row.subject_id}
+            for row in elements
         ],
         'groups': [
             {
-                'id': item.pk,
-                'label': str(item),
-                'subject_id': item.subject_id,
-                'academic_year_id': item.academic_year_id,
+                'id': row.pk,
+                'label': str(row),
+                'subject_id': row.subject_id,
+                'academic_year_id': row.academic_year_id,
             }
-            for item in groups
+            for row in groups
         ],
         'teachers': [
-            {'id': item.pk, 'label': item.full_name}
-            for item in teachers
+            {'id': row.pk, 'label': row.full_name}
+            for row in teachers
         ],
         'students': [
-            {'id': item.pk, 'label': item.full_name}
-            for item in students
+            {'id': row.pk, 'label': row.full_name}
+            for row in students
         ],
         'items': [
             {
-                'id': assessment_item.pk,
-                'label': f'{assessment_item.title} — {assessment_item.group.name}',
-                'subject_id': assessment_item.subject_id,
-                'academic_year_id': assessment_item.academic_year_id,
+                'id': row.pk,
+                'label': f'{row.title} — {row.group.name}',
+                'subject_id': row.group.subject_id,
+                'academic_year_id': row.group.academic_year_id,
             }
-            for assessment_item in items
+            for row in items.select_related('group')
         ],
         'enrollments': [
             {
-                'id': enrollment_item.pk,
-                'label': (
-                    f'{enrollment_item.full_name}'
-                    + (f' — {enrollment_item.group.name}' if enrollment_item.group_id else '')
-                ),
+                'id': row.pk,
+                'label': row.full_name + (f' — {row.group.name}' if row.group_id else ''),
             }
-            for enrollment_item in enrollments
+            for row in enrollments
         ],
         'defaults': defaults,
     })
@@ -1104,7 +1064,7 @@ def _handle_assessment_result_post(
         request.POST.get('item_id') or request.POST.get('assessment_item'),
     )
     student = _get_selected_object(
-        Student.objects.filter(is_active=True),
+        Student.objects.all(),
         request.POST.get('student_id') or request.POST.get('assessment_student'),
     )
     assessment_group = _get_selected_object(
@@ -1150,74 +1110,6 @@ def _handle_assessment_result_post(
         error_messages = getattr(exc, 'messages', None) or [str(exc)]
         messages.error(request, '; '.join(error_messages))
     return _redirect_current_journal(request)
-
-
-def _student_subject_allowed_for_teacher(
-    student: Student,
-    subject: Subject,
-    teacher: Teacher | None = None,
-    academic_year: AcademicYear | None = None,
-) -> bool:
-    if not student or not subject:
-        return False
-
-    if teacher is None:
-        return get_student_allowed_subjects(
-            student,
-            academic_year,
-        ).filter(pk=subject.pk).exists()
-
-    return get_student_subject_teachers(
-        student,
-        subject,
-        academic_year,
-    ).filter(pk=teacher.pk).exists()
-
-
-def _subjects_for_groups(
-    groups,
-    *,
-    teacher: Teacher | None = None,
-    academic_year: AcademicYear | None = None,
-):
-    group_ids = [group.pk for group in groups if group is not None]
-    if not group_ids:
-        return Subject.objects.none()
-
-    academic_year = academic_year or groups[0].academic_year
-    group_assignments = GroupSubject.objects.filter(
-        group_id__in=group_ids,
-        is_active=True,
-    )
-    enrollment_student_ids = StudentEnrollment.objects.filter(
-        academic_year=academic_year,
-        group_id__in=group_ids,
-    ).values_list('student_id', flat=True)
-    individual_assignments = StudentSubject.objects.filter(
-        academic_year=academic_year,
-        student_id__in=enrollment_student_ids,
-        is_active=True,
-    )
-    if academic_year.is_active:
-        group_assignments = group_assignments.filter(subject__is_active=True)
-        individual_assignments = individual_assignments.filter(
-            subject__is_active=True,
-            student__is_active=True,
-        )
-
-    if teacher is not None:
-        group_assignments = group_assignments.filter(teacher=teacher)
-        individual_assignments = individual_assignments.filter(teacher=teacher)
-
-    group_subject_ids = group_assignments.values_list('subject_id', flat=True)
-    individual_subject_ids = individual_assignments.values_list('subject_id', flat=True)
-
-    return (
-        Subject.objects
-        .filter(Q(pk__in=group_subject_ids) | Q(pk__in=individual_subject_ids))
-        .distinct()
-        .order_by('name')
-    )
 
 
 def _students_for_table(
@@ -1273,26 +1165,27 @@ def _table_assignment_maps(
     dict[tuple[int, int], set[int]],
     dict[tuple[int, int], tuple[str, str]],
 ]:
+    """Build table rows from the same assignments as the access scope.
+
+    This function used to re-query GroupSubject/StudentSubject with its own
+    unconditional ``is_active=True`` rules.  As a result the filter controls
+    could show a subject while the table itself stayed empty, especially in an
+    archived year.  The scope is now the single source of truth for both.
+    """
     group_ids = {group.pk for group in groups if group is not None}
     subject_ids = {subject.pk for subject in subjects if subject is not None}
     if not group_ids or not subject_ids:
         return set(), defaultdict(set), {}
 
-    group_assignments = GroupSubject.objects.filter(
+    scope = JournalAccessScope(academic_year, teacher=teacher)
+    group_assignments = scope.group_subjects().filter(
         group_id__in=group_ids,
         subject_id__in=subject_ids,
-        is_active=True,
     )
-    individual_assignments = StudentSubject.objects.filter(
-        academic_year=academic_year,
+    individual_assignments = scope.student_subjects().filter(
         student_id__in=enrollment_group_by_student,
         subject_id__in=subject_ids,
-        is_active=True,
     )
-
-    if teacher is not None:
-        group_assignments = group_assignments.filter(teacher=teacher)
-        individual_assignments = individual_assignments.filter(teacher=teacher)
 
     group_assignment_rows = list(group_assignments.values_list(
         'group_id',
@@ -1302,18 +1195,22 @@ def _table_assignment_maps(
     ))
     group_subject_pairs = {
         (group_id, subject_id)
-        for group_id, subject_id, _subject_name, _final_grade_type in group_assignment_rows
+        for group_id, subject_id, _subject_name, _final_grade_type
+        in group_assignment_rows
     }
     individual_students_by_pair: dict[tuple[int, int], set[int]] = defaultdict(set)
     assignment_metadata: dict[tuple[int, int], tuple[str, str]] = {
         (group_id, subject_id): (subject_name, final_grade_type)
-        for group_id, subject_id, subject_name, final_grade_type in group_assignment_rows
+        for group_id, subject_id, subject_name, final_grade_type
+        in group_assignment_rows
     }
-    for student_id, subject_id, subject_name, final_grade_type in individual_assignments.values_list(
-        'student_id',
-        'subject_id',
-        'subject_name_snapshot',
-        'final_grade_type_snapshot',
+    for student_id, subject_id, subject_name, final_grade_type in (
+        individual_assignments.values_list(
+            'student_id',
+            'subject_id',
+            'subject_name_snapshot',
+            'final_grade_type_snapshot',
+        )
     ):
         group_id = enrollment_group_by_student.get(student_id)
         if group_id not in group_ids:
@@ -1800,72 +1697,28 @@ def _journal_for_admin(
     selected_academic_year: AcademicYear | None,
 ):
     role_mode = 'superuser'
+    scope = JournalAccessScope(selected_academic_year)
 
-    groups = (
-        StudyGroup.objects
-        .all()
-        .select_related('academic_year')
-        .order_by('academic_year__name', 'name')
-    )
-    groups = _filter_groups_by_academic_year(groups, selected_academic_year)
-    if selected_academic_year and selected_academic_year.is_active:
-        groups = groups.filter(is_active=True)
-    subjects = get_grade_subjects(academic_year=selected_academic_year)
-    can_edit_journal = _can_edit_academic_year(selected_academic_year)
-
+    groups = scope.standard_groups()
     selected_group = _get_selected_object(groups, selected_group_id)
-    selected_subject = _get_selected_object(subjects, selected_subject_id)
-
     groups_to_show = [selected_group] if selected_group else list(groups)
 
-    if selected_subject:
-        subjects_to_show = [selected_subject]
-    elif selected_group:
-        subjects_to_show = list(_subjects_for_groups(
-            groups_to_show,
-            academic_year=selected_academic_year,
-        ))
-    else:
-        subjects_to_show = list(_subjects_for_groups(
-            groups_to_show,
-            academic_year=selected_academic_year,
-        ))
+    subjects = scope.standard_subjects(group=selected_group)
+    selected_subject = _get_selected_object(subjects, selected_subject_id)
+    subjects_to_show = [selected_subject] if selected_subject else list(subjects)
+    can_edit_journal = _can_edit_academic_year(selected_academic_year)
 
-    enrollments_qs = (
-        StudentEnrollment.objects
-        .filter(
-            academic_year=selected_academic_year,
-            group__in=groups_to_show,
-        )
-        .select_related('student', 'student__instrument', 'student__user', 'group', 'academic_year')
-        .order_by('full_name')
-    )
-    if can_edit_journal:
-        enrollments_qs = enrollments_qs.filter(is_active=True, student__is_active=True)
-    enrollments = list(enrollments_qs)
-    student_ids = [enrollment.student_id for enrollment in enrollments]
-    students_qs = Student.objects.filter(pk__in=student_ids).order_by('full_name')
+    enrollments = list(scope.standard_enrollments(group=selected_group))
+    students_qs = Student.objects.filter(
+        pk__in=[row.student_id for row in enrollments]
+    ).order_by('full_name', 'pk')
     students = list(students_qs)
 
-    grade_qs = (
-        Grade.objects
-        .filter(
-            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
-            subject__in=subjects_to_show,
-            academic_year=selected_academic_year,
-        )
-        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
+    grade_qs = scope.standard_grades(group=selected_group).filter(
+        subject__in=subjects_to_show,
     )
-
-    result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
-    results_qs = (
-        SubjectResult.objects
-        .filter(
-            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
-            subject__in=subjects_to_show,
-            academic_year_id__in=result_year_ids,
-        )
-        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
+    results_qs = scope.standard_subject_results(group=selected_group).filter(
+        subject__in=subjects_to_show,
     )
 
     journal_tables = _build_journal_tables(
@@ -1955,85 +1808,35 @@ def _journal_for_teacher(
     selected_academic_year: AcademicYear | None,
 ):
     role_mode = 'teacher'
+    scope = JournalAccessScope(selected_academic_year, teacher=teacher)
 
-    groups = get_grade_groups(teacher=teacher, academic_year=selected_academic_year).select_related('academic_year')
+    groups = scope.standard_groups()
     selected_group = _get_selected_object(groups, selected_group_id)
     groups_to_show = [selected_group] if selected_group else list(groups)
-    has_active_assignment = teacher_has_active_assignment(teacher, selected_academic_year)
-    # Assignment rows are the access source of truth.  Participation records
-    # are historical metadata and may be missing or stale in upgraded databases.
-    # A teacher may edit an active year exactly when an active assignment exists.
+    has_active_assignment = teacher_has_active_assignment(
+        teacher,
+        selected_academic_year,
+    )
     can_edit_journal = bool(
         _can_edit_academic_year(selected_academic_year)
         and has_active_assignment
     )
 
-    subjects = get_teacher_subjects(
-        teacher,
-        selected_group,
-        selected_academic_year,
-    )
+    subjects = scope.standard_subjects(group=selected_group)
     selected_subject = _get_selected_object(subjects, selected_subject_id)
-    subjects_to_show = (
-        [selected_subject]
-        if selected_subject
-        else list(subjects)
-    )
+    subjects_to_show = [selected_subject] if selected_subject else list(subjects)
 
-    eligible_students = get_grade_students(
-        group=selected_group,
-        teacher=teacher,
-        academic_year=selected_academic_year,
-    )
-    enrollments_qs = (
-        StudentEnrollment.objects
-        .filter(
-            academic_year=selected_academic_year,
-            student_id__in=eligible_students.values_list('pk', flat=True),
-        )
-        .select_related('student', 'student__instrument', 'student__user', 'group', 'academic_year')
-        .order_by('full_name')
-    )
-    if selected_group is not None:
-        enrollments_qs = enrollments_qs.filter(group=selected_group)
-    if can_edit_journal:
-        # The active GroupSubject/StudentSubject assignment is the teacher's
-        # access source. Older imports can leave the enrollment flag stale;
-        # do not hide otherwise assigned students because of that helper flag.
-        enrollments_qs = enrollments_qs.filter(student__is_active=True)
-    enrollments = list(enrollments_qs)
-    if selected_group is None:
-        # Derive the rendering groups from the actual assigned enrollments as
-        # well as the selector queryset. This prevents a stale/missing helper
-        # relation from hiding otherwise valid teacher data.
-        groups_by_id = {group.pk: group for group in groups_to_show if group is not None}
-        for enrollment in enrollments:
-            if enrollment.group_id and enrollment.group is not None:
-                groups_by_id.setdefault(enrollment.group_id, enrollment.group)
-        groups_to_show = sorted(groups_by_id.values(), key=lambda group: (group.name, group.pk))
-    student_ids = [enrollment.student_id for enrollment in enrollments]
-    students_qs = Student.objects.filter(pk__in=student_ids).order_by('full_name')
+    enrollments = list(scope.standard_enrollments(group=selected_group))
+    students_qs = Student.objects.filter(
+        pk__in=[row.student_id for row in enrollments]
+    ).order_by('full_name', 'pk')
     students = list(students_qs)
 
-    grade_qs = (
-        Grade.objects
-        .filter(
-            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
-            subject__in=subjects_to_show,
-            academic_year=selected_academic_year,
-        )
-        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'teacher', 'academic_year')
+    grade_qs = scope.standard_grades(group=selected_group).filter(
+        subject__in=subjects_to_show,
     )
-
-    result_year_ids = _result_year_ids(groups_to_show, selected_academic_year)
-    results_qs = (
-        SubjectResult.objects
-        .filter(
-            enrollment_id__in=[enrollment.pk for enrollment in enrollments],
-            subject__in=subjects_to_show,
-            academic_year_id__in=result_year_ids,
-        )
-        .select_related('student', 'enrollment', 'enrollment__group', 'subject', 'academic_year')
+    results_qs = scope.standard_subject_results(group=selected_group).filter(
+        subject__in=subjects_to_show,
     )
 
     journal_tables = _build_journal_tables(

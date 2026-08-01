@@ -80,19 +80,30 @@ def get_admin_academic_year_context(request) -> dict:
 
 
 def academic_year_ids_for_user(user) -> Iterable[int]:
-    """Return only academic years the user participated in."""
+    """Return years from the same canonical relations used by the journal.
+
+    A helper membership is deliberately not an access grant for a teacher or a
+    student.  Teachers receive years from their actual subject/work
+    assignments, students from their enrollments, and superusers receive every
+    year.  Explicit ``UserAcademicYearMembership`` rows remain useful only for
+    staff accounts that do not have a teacher/student profile.
+    """
     from .models import AcademicYear
 
     if not getattr(user, 'is_authenticated', False):
         return ()
-    year_ids: set[int] = set(
-        user.journal_year_memberships.values_list('academic_year_id', flat=True),
-    )
+    if getattr(user, 'is_superuser', False):
+        return AcademicYear.objects.values_list('pk', flat=True)
+
+    year_ids: set[int] = set()
+    has_profile = False
+
     try:
         student = user.student_profile
     except ObjectDoesNotExist:
         student = None
     if student is not None:
+        has_profile = True
         year_ids.update(student.enrollments.values_list('academic_year_id', flat=True))
 
     try:
@@ -100,22 +111,17 @@ def academic_year_ids_for_user(user) -> Iterable[int]:
     except ObjectDoesNotExist:
         teacher = None
     if teacher is not None:
-        # An inactive membership still proves that the teacher participated in
-        # the year and therefore may inspect its archived journal.  Real
-        # assignments are also authoritative: older databases may contain
-        # group/individual/assessment assignments without a participation row.
-        year_ids.update(
-            teacher.academic_year_memberships.values_list('academic_year_id', flat=True),
-        )
+        has_profile = True
         from .teacher_access import teacher_assignment_year_ids
 
         year_ids.update(teacher_assignment_year_ids(teacher))
 
-    # Existing installations may have a bootstrap administrator without an
-    # explicit membership yet. Keep all years available only until the first
-    # manual assignment is created for that account.
-    if (user.is_superuser or user.is_staff) and not year_ids:
-        return AcademicYear.objects.values_list('pk', flat=True)
+    if not has_profile and getattr(user, 'is_staff', False):
+        year_ids.update(
+            user.journal_year_memberships.values_list('academic_year_id', flat=True),
+        )
+        if not year_ids:
+            return AcademicYear.objects.values_list('pk', flat=True)
 
     return year_ids
 
