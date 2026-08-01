@@ -11,6 +11,7 @@ from unittest import skipUnless
 from unittest.mock import patch
 
 from django import forms
+from django.forms.models import inlineformset_factory
 from django.apps import apps
 from django.conf import settings
 from django.contrib import admin as django_admin
@@ -61,6 +62,7 @@ from journal.admin import (
     AcademicYearAdmin,
     AssessmentGroupForSubjectAdminForm,
     AssessmentItemAdminForm,
+    AssessmentItemInlineFormSet,
     AssessmentResultAdminForm,
     CourseRegistrationSettingsAdmin,
     FinalGradeRuleAdminForm,
@@ -9887,4 +9889,189 @@ class TeacherAccessAndErrorLoggingRegressionTests(JournalTestDataMixin, TestCase
         self.assertEqual(
             admin_form.errors['orchestra_part'],
             registration_form.errors['orchestra_part'],
+        )
+
+
+class TeacherAssignmentVisibilityAndAssessmentChoiceTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.data = self.create_base_journal()
+
+    def test_teacher_keeps_assigned_journal_access_without_membership_helper_rows(self):
+        lesson_date = date(2025, 10, 10)
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=lesson_date,
+            value='4',
+        )
+        TeacherEnrollment.objects.filter(
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+        ).delete()
+        UserAcademicYearMembership.objects.filter(
+            user=self.data['teacher'].user,
+            academic_year=self.data['year'],
+        ).delete()
+        self.data['teacher'].refresh_from_db()
+
+        self.client.force_login(self.data['teacher'].user)
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.data['solfeggio'].name)
+        self.assertTrue(response.context['can_edit_journal'])
+        self.assertIn(
+            self.data['year'].pk,
+            list(academic_year_ids_for_user(self.data['teacher'].user)),
+        )
+
+        edit_response = self.client.post(
+            f"{reverse('journal')}?academic_year={self.data['year'].pk}",
+            {
+                'action': 'inline_edit',
+                (
+                    f'grade__{self.data["solfeggio"].pk}__'
+                    f'{self.data["student"].pk}__{lesson_date.isoformat()}'
+                ): '5',
+            },
+        )
+        self.assertEqual(edit_response.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '5')
+
+    def _assessment_catalog(self):
+        subject = Subject.objects.create(
+            name='Оркестровая практика',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        group = AssessmentGroup.objects.create(
+            name='Концертная программа',
+            subject=subject,
+            academic_year=self.data['year'],
+        )
+        first = AssessmentElement.objects.create(
+            subject=subject,
+            title='Первое произведение',
+        )
+        second = AssessmentElement.objects.create(
+            subject=subject,
+            title='Второе произведение',
+        )
+        item = AssessmentItem.objects.create(
+            element=first,
+            subject=subject,
+            academic_year=self.data['year'],
+            group=group,
+            responsible_teacher=self.data['teacher'],
+        )
+        return subject, group, first, second, item
+
+    def test_assessment_item_field_excludes_element_already_used_in_selected_group(self):
+        subject, group, first, second, _item = self._assessment_catalog()
+        candidate = AssessmentItem(
+            subject=subject,
+            academic_year=self.data['year'],
+            group=group,
+            responsible_teacher=self.data['teacher'],
+        )
+
+        form = AssessmentItemAdminForm(instance=candidate)
+
+        self.assertNotIn(first.pk, form.fields['element'].queryset.values_list('pk', flat=True))
+        self.assertIn(second.pk, form.fields['element'].queryset.values_list('pk', flat=True))
+
+        reverse_candidate = AssessmentItem(
+            element=first,
+            subject=subject,
+            academic_year=self.data['year'],
+            responsible_teacher=self.data['teacher'],
+        )
+        reverse_form = AssessmentItemAdminForm(instance=reverse_candidate)
+        self.assertNotIn(
+            group.pk,
+            reverse_form.fields['group'].queryset.values_list('pk', flat=True),
+        )
+
+    def test_assessment_options_api_excludes_occupied_group_element(self):
+        _subject, group, first, second, _item = self._assessment_catalog()
+        admin_user = User.objects.create_superuser(
+            username='assessment_options_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'item',
+                'group': group.pk,
+                'changed': 'group',
+                'strict': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        element_ids = {item['id'] for item in response.json()['elements']}
+        self.assertNotIn(first.pk, element_ids)
+        self.assertIn(second.pk, element_ids)
+
+        reverse_response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'item',
+                'element': first.pk,
+                'changed': 'element',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(reverse_response.status_code, 200)
+        group_ids = {item['id'] for item in reverse_response.json()['groups']}
+        self.assertNotIn(group.pk, group_ids)
+
+    def test_inline_formset_rejects_duplicate_group_element_in_two_new_rows(self):
+        subject, group, _first, second, _item = self._assessment_catalog()
+        FormSet = inlineformset_factory(
+            Teacher,
+            AssessmentItem,
+            fk_name='responsible_teacher',
+            form=AssessmentItemAdminForm,
+            formset=AssessmentItemInlineFormSet,
+            extra=2,
+            can_delete=True,
+        )
+        prefix = FormSet.get_default_prefix()
+        row = {
+            'group': str(group.pk),
+            'subject': str(subject.pk),
+            'academic_year': str(self.data['year'].pk),
+            'element': str(second.pk),
+            'sort_order': '100',
+            'is_required': 'on',
+            'is_active': 'on',
+        }
+        payload = {
+            f'{prefix}-TOTAL_FORMS': '2',
+            f'{prefix}-INITIAL_FORMS': '0',
+            f'{prefix}-MIN_NUM_FORMS': '0',
+            f'{prefix}-MAX_NUM_FORMS': '1000',
+        }
+        for index in range(2):
+            for field_name, value in row.items():
+                payload[f'{prefix}-{index}-{field_name}'] = value
+
+        formset = FormSet(data=payload, instance=self.data['teacher'], prefix=prefix)
+
+        self.assertFalse(formset.is_valid())
+        self.assertTrue(any('element' in form.errors for form in formset.forms))
+        self.assertFalse(
+            any(
+                'unique_assessment_item_group_element' in str(form.errors)
+                for form in formset.forms
+            )
         )
