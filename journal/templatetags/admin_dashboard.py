@@ -130,7 +130,23 @@ def journal_admin_dashboard(context):
         ),
         _stat(
             'Активные преподаватели',
-            Teacher.objects.filter(academic_year_memberships__academic_year=selected_year, academic_year_memberships__is_active=True).distinct().count() if selected_year else 0,
+            (
+                Teacher.objects.filter(
+                    Q(
+                        group_subjects__group__academic_year=selected_year,
+                        group_subjects__is_active=True,
+                    )
+                    | Q(
+                        individual_subjects__academic_year=selected_year,
+                        individual_subjects__is_active=True,
+                    )
+                    | Q(
+                        responsible_assessment_items__group__academic_year=selected_year,
+                        responsible_assessment_items__is_active=True,
+                    )
+                ).distinct().count()
+                if selected_year else 0
+            ),
             _admin_url('journal', 'teacher', params=active_teachers_params),
             'fas fa-chalkboard-teacher',
             user,
@@ -173,7 +189,7 @@ def journal_admin_dashboard(context):
             'Результаты сдачи',
             (
                 AssessmentResult.objects
-                .filter(item__academic_year=selected_year)
+                .filter(item__group__academic_year=selected_year)
                 .count()
                 if selected_year
                 else 0

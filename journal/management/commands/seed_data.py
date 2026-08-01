@@ -1320,7 +1320,7 @@ class Command(BaseCommand):
                 errors.append(f'Нет итогов для {academic_year}.')
             if not AssessmentGroup.objects.filter(academic_year=academic_year).exists():
                 errors.append(f'Нет групп произведений для {academic_year}.')
-            if not AssessmentItem.objects.filter(academic_year=academic_year).exists():
+            if not AssessmentItem.objects.filter(group__academic_year=academic_year).exists():
                 errors.append(f'Нет произведений для {academic_year}.')
             if not StudentAssessmentGroup.objects.filter(assessment_group__academic_year=academic_year).exists():
                 errors.append(f'Нет назначений произведений для {academic_year}.')
@@ -1380,7 +1380,7 @@ class Command(BaseCommand):
             assignment_exists = StudentAssessmentGroup.objects.filter(
                 student_id=result.enrollment.student_id,
                 assessment_group_id=result.item.group_id,
-                assessment_group__academic_year_id=result.item.academic_year_id,
+                assessment_group__academic_year_id=result.item.group.academic_year_id,
                 enrollment_id=result.enrollment_id,
                 is_active=True,
             ).exists()

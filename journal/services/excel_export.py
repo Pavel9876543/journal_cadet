@@ -505,8 +505,8 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
         ],
     )
     items = (
-        AssessmentItem.objects.filter(academic_year=academic_year)
-        .select_related('element', 'group', 'subject', 'responsible_teacher', 'academic_year')
+        AssessmentItem.objects.filter(group__academic_year=academic_year)
+        .select_related('element', 'group', 'group__subject', 'group__academic_year', 'responsible_teacher')
         .order_by('group__sort_order', 'sort_order', 'title')
         if academic_year else AssessmentItem.objects.none()
     )
@@ -549,8 +549,8 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
         ],
     )
     assessment_results = (
-        AssessmentResult.objects.filter(item__academic_year=academic_year)
-        .select_related('enrollment', 'item', 'item__group', 'item__subject', 'item__academic_year', 'assessed_by')
+        AssessmentResult.objects.filter(item__group__academic_year=academic_year)
+        .select_related('enrollment', 'item', 'item__group', 'item__group__subject', 'item__group__academic_year', 'assessed_by')
         .order_by('enrollment__full_name', 'item__title')
         if academic_year else AssessmentResult.objects.none()
     )
@@ -562,12 +562,12 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
             ('Ученик', lambda item: item.enrollment.full_name),
             ('Произведение', lambda item: item.item.title),
             ('Группа произведений', lambda item: item.item.group.name),
-            ('Предмет', lambda item: item.item.subject.name),
+            ('Предмет', lambda item: item.item.group.subject.name),
             ('Результат', lambda item: item.get_status_display()),
             ('Преподаватель', lambda item: item.assessed_by.full_name),
             ('Дата результата', lambda item: item.assessed_at),
             ('Комментарий', lambda item: item.comment),
-            ('Учебный год', lambda item: item.item.academic_year.name),
+            ('Учебный год', lambda item: item.item.group.academic_year.name),
         ],
     )
     rules = (

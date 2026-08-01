@@ -29,15 +29,13 @@ from .account_utils import (
     user_has_temporary_credential,
 )
 from .admin_relations import RelatedRecordsAdminMixin
+from .access_scope import JournalAccessScope
 from .assignment_options import (
     active_group_queryset,
     active_student_queryset,
     assignment_teacher_queryset,
     group_subject_queryset,
     student_subject_queryset,
-)
-from .assessment_services import (
-    enrollments_for_assessment_groups,
 )
 from .error_logging import log_handled_error
 from .user_error_messages import build_admin_form_user_message
@@ -50,7 +48,6 @@ from .forms import (
 )
 from .grade_options import (
     get_grade_form_options,
-    get_grade_groups,
     get_grade_students,
     get_grade_subjects,
     get_grade_teachers,
@@ -473,10 +470,14 @@ class SelectedYearTeacherActiveFilter(admin.SimpleListFilter):
     def queryset(self, request, queryset):
         if self.value() not in {'0', '1'}:
             return queryset
-        return queryset.filter(
-            academic_year_memberships__academic_year=get_selected_admin_academic_year(request),
-            academic_year_memberships__is_active=self.value() == '1',
+        active_assignments = (
+            Q(_group_subjects_count__gt=0)
+            | Q(_individual_students_count__gt=0)
+            | Q(_assessment_items_count__gt=0)
         )
+        if self.value() == '1':
+            return queryset.filter(active_assignments)
+        return queryset.exclude(active_assignments)
 
 
 class SpaceFriendlyUsernameFormMixin:
@@ -1605,7 +1606,7 @@ class AssessmentGroupForSubjectAdminForm(AssessmentGroupAdminForm):
 
 class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
     assessment_type = 'item'
-    dependency_fields = ('subject', 'academic_year', 'group', 'element', 'responsible_teacher')
+    dependency_fields = ('group', 'element', 'responsible_teacher')
 
     class Meta:
         model = AssessmentItem
@@ -1613,15 +1614,15 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        subject = self._selected_object(Subject.objects.all(), 'subject')
-        year = self._selected_object(AcademicYear.objects.all(), 'academic_year')
         group = (
             self._selected_object(AssessmentGroup.objects.all(), 'group')
             or getattr(self, 'parent_assessment_group', None)
         )
-        if group is not None:
-            subject = group.subject
-            year = group.academic_year
+        subject = group.subject if group is not None else None
+        year = (
+            group.academic_year if group is not None
+            else getattr(self, 'parent_academic_year', None) or AcademicYear.get_active()
+        )
         elements = AssessmentElement.objects.filter(is_active=True)
         if subject is not None:
             elements = elements.filter(subject=subject)
@@ -1654,19 +1655,6 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
                 'Выберите произведение только из справочника. Новое значение '
                 'добавляется через кнопку «+» рядом с полем.'
             )
-        self._set_queryset('subject', self._include_selected(
-            Subject.objects.filter(
-                is_active=True,
-                assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-            ).order_by('name'),
-            Subject,
-            'subject',
-        ))
-        self._set_queryset('academic_year', self._include_selected(
-            AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
-            AcademicYear,
-            'academic_year',
-        ))
         groups = AssessmentGroup.objects.filter(is_active=True)
         if year is not None:
             groups = groups.filter(academic_year=year)
@@ -1695,12 +1683,9 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
                 'sort_order', 'name'
             ),
         )
-        teachers = Teacher.objects.filter(is_active=True)
-        if year is not None:
-            teachers = teachers.filter(
-                academic_year_memberships__academic_year=year,
-                academic_year_memberships__is_active=True,
-            )
+        # The assignment itself grants access. TeacherEnrollment is only a
+        # synchronized navigation/history record and must never empty this list.
+        teachers = assignment_teacher_queryset(subject=subject, academic_year=year)
         self._set_queryset('responsible_teacher', self._include_selected(
             teachers.distinct().order_by('full_name'),
             Teacher,
@@ -1775,7 +1760,7 @@ class AssessmentItemInlineFormSet(BaseInlineFormSet):
 
 class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
     assessment_type = 'student_group'
-    dependency_fields = ('student', 'academic_year', 'assessment_group')
+    dependency_fields = ('student', 'assessment_group')
 
     class Meta:
         model = StudentAssessmentGroup
@@ -1803,16 +1788,9 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
                 enrollments__academic_year=group.academic_year,
                 enrollments__is_active=True,
             )
-            if not (self.instance and self.instance.pk):
-                student_queryset = student_queryset.filter(is_active=True)
             student_queryset = student_queryset.distinct().order_by('full_name', 'pk')
         self._set_queryset('student', self._include_selected(
             student_queryset, Student, 'student'
-        ))
-        self._set_queryset('academic_year', self._include_selected(
-            AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
-            AcademicYear,
-            'academic_year',
         ))
         groups = AssessmentGroup.objects.filter(is_active=True)
         if year is not None:
@@ -1830,7 +1808,7 @@ class AssessmentResultAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         label='Ученик',
         queryset=Student.objects.none(),
         required=True,
-        empty_label='Сначала выберите ученика',
+        empty_label='Выберите ученика',
     )
     assessment_type = 'result'
     dependency_fields = ('student', 'item', 'assessed_by')
@@ -1846,79 +1824,76 @@ class AssessmentResultAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
         instance = self.instance if self.instance and self.instance.pk else None
         parent_item = getattr(self, 'parent_assessment_item', None)
-        item = self._selected_object(AssessmentItem.objects.all(), 'item') or parent_item
+        selected_item = self._selected_object(
+            AssessmentItem.objects.select_related(
+                'group', 'group__academic_year', 'group__subject',
+                'responsible_teacher',
+            ),
+            'item',
+        ) or parent_item or (instance.item if instance is not None else None)
         selected_year = (
             getattr(self, 'parent_academic_year', None)
-            or (item.academic_year if item is not None else None)
-            or (instance.item.academic_year if instance is not None else None)
+            or (selected_item.group.academic_year if selected_item is not None else None)
+            or AcademicYear.get_active()
         )
-        student = self._selected_object(Student.objects.all(), 'student')
-        if student is None and instance is not None and instance.enrollment_id:
-            student = instance.enrollment.student
+        selected_student = self._selected_object(Student.objects.all(), 'student')
+        if selected_student is None and instance is not None:
+            selected_student = instance.enrollment.student
 
-        active_groups = AssessmentGroup.objects.filter(is_active=True)
-        if selected_year is not None:
-            active_groups = active_groups.filter(academic_year=selected_year)
-        if parent_item is not None:
-            active_groups = active_groups.filter(pk=parent_item.group_id)
-
-        eligible_enrollments = enrollments_for_assessment_groups(
-            active_groups.values('pk'),
-            selected_year,
-            include_inactive=bool(instance),
-        ) if selected_year is not None else StudentEnrollment.objects.none()
-        students = Student.objects.filter(
-            pk__in=eligible_enrollments.values('student_id'),
-        ).order_by('full_name', 'pk')
-        if instance is not None:
-            students = Student.objects.filter(
-                Q(pk__in=students.values('pk')) | Q(pk=instance.enrollment.student_id)
-            ).order_by('full_name', 'pk')
-        self.fields['student'].queryset = students
-        if student is not None:
-            self.fields['student'].initial = student.pk
-
-        items = AssessmentItem.objects.select_related(
-            'group', 'subject', 'academic_year', 'responsible_teacher'
-        ).filter(responsible_teacher__isnull=False)
-        if selected_year is not None:
-            items = items.filter(academic_year=selected_year)
-        if not instance:
-            items = items.filter(is_active=True, group__is_active=True)
-        if parent_item is not None:
-            items = items.filter(pk=parent_item.pk)
-        elif student is not None:
-            items = items.filter(
-                group__student_assignments__student=student,
-                group__student_assignments__assessment_group__academic_year=selected_year,
-                group__student_assignments__is_active=True,
-            )
+        if selected_year is None:
+            scope = None
+            students = Student.objects.none()
+            items = AssessmentItem.objects.none()
         else:
-            items = items.none()
-        if instance is not None:
-            items = AssessmentItem.objects.filter(
-                Q(pk__in=items.values('pk')) | Q(pk=instance.item_id)
-            ).select_related('group', 'subject', 'academic_year', 'responsible_teacher')
+            scope = JournalAccessScope(
+                selected_year,
+                include_inactive=bool(instance),
+            )
+            students = scope.assessment_students()
+            if parent_item is not None:
+                students = scope.assessment_students(group_ids=[parent_item.group_id])
+            if instance is not None:
+                students = Student.objects.filter(
+                    Q(pk__in=students.values_list('pk', flat=True))
+                    | Q(pk=instance.enrollment.student_id)
+                ).order_by('full_name', 'pk')
+
+            if parent_item is not None:
+                items = scope.assessment_items().filter(pk=parent_item.pk)
+            elif selected_student is not None:
+                items = scope.assessment_items_for_student(selected_student)
+            else:
+                items = AssessmentItem.objects.none()
+            if instance is not None:
+                items = AssessmentItem.objects.filter(
+                    Q(pk__in=items.values_list('pk', flat=True))
+                    | Q(pk=instance.item_id)
+                ).select_related(
+                    'group', 'group__subject', 'group__academic_year',
+                    'responsible_teacher',
+                )
+
+        self.fields['student'].queryset = students.distinct().order_by('full_name', 'pk')
+        if selected_student is not None:
+            self.fields['student'].initial = selected_student.pk
         self._set_queryset(
             'item',
             items.distinct().order_by(
-                'subject__name', 'group__sort_order', 'group__name',
+                'group__subject__name', 'group__sort_order', 'group__name',
                 'sort_order', 'title', 'pk',
             ),
         )
 
         teachers = Teacher.objects.none()
-        effective_item = item or (instance.item if instance is not None else None)
-        if effective_item is not None and effective_item.responsible_teacher_id:
-            teachers = Teacher.objects.filter(pk=effective_item.responsible_teacher_id)
-            if instance is not None and instance.assessed_by_id != effective_item.responsible_teacher_id:
+        if selected_item is not None and selected_item.responsible_teacher_id:
+            teachers = Teacher.objects.filter(pk=selected_item.responsible_teacher_id)
+            if instance is not None and instance.assessed_by_id != selected_item.responsible_teacher_id:
                 teachers = Teacher.objects.filter(
-                    Q(pk=effective_item.responsible_teacher_id)
+                    Q(pk=selected_item.responsible_teacher_id)
                     | Q(pk=instance.assessed_by_id)
                 )
-            if not self.fields['assessed_by'].initial:
-                self.fields['assessed_by'].initial = effective_item.responsible_teacher_id
-        self._set_queryset('assessed_by', teachers.order_by('full_name'))
+            self.fields['assessed_by'].initial = selected_item.responsible_teacher_id
+        self._set_queryset('assessed_by', teachers.order_by('full_name', 'pk'))
         self.attach_dependencies()
 
     def clean(self):
@@ -1926,31 +1901,38 @@ class AssessmentResultAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         student = cleaned_data.get('student')
         item = cleaned_data.get('item') or getattr(self, 'parent_assessment_item', None)
         assessed_by = cleaned_data.get('assessed_by')
-
         if student is None or item is None:
             return cleaned_data
 
-        enrollment = student.enrollment_for_year(item.academic_year)
-        if enrollment is None:
-            self.add_error('student', 'Ученик не зачислен в учебный год произведения.')
-            return cleaned_data
-
-        if not StudentAssessmentGroup.objects.filter(
+        year = item.group.academic_year
+        scope = JournalAccessScope(year, include_inactive=bool(self.instance.pk))
+        enrollment = StudentEnrollment.objects.filter(
             student=student,
-            assessment_group=item.group,
-            assessment_group__academic_year=item.academic_year,
-            is_active=True,
-        ).exists():
+            academic_year=year,
+        ).first()
+        if enrollment is None:
             self.add_error(
-                'item',
-                'Это произведение не входит в группы произведений выбранного ученика.',
+                'student',
+                'Ученик не зачислен в учебный год выбранного произведения.',
             )
             return cleaned_data
 
-        if assessed_by is not None and item.responsible_teacher_id != assessed_by.pk:
+        if not scope.assessment_items_for_student(student).filter(pk=item.pk).exists():
+            self.add_error(
+                'item',
+                'Выбранное произведение не назначено этому ученику.',
+            )
+            return cleaned_data
+
+        if item.responsible_teacher_id is None:
+            self.add_error(
+                'item',
+                'Для произведения не назначен ответственный преподаватель.',
+            )
+        elif assessed_by is None or assessed_by.pk != item.responsible_teacher_id:
             self.add_error(
                 'assessed_by',
-                'Выберите ответственного преподавателя, назначенного для этого произведения.',
+                'Результат может выставить только ответственный преподаватель произведения.',
             )
 
         duplicate_results = AssessmentResult.objects.filter(
@@ -3269,7 +3251,12 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
         if academic_year is None:
             return qs.none()
         return (
-            qs.filter(academic_year_memberships__academic_year=academic_year)
+            qs.filter(
+                Q(academic_year_memberships__academic_year=academic_year)
+                | Q(group_subjects__group__academic_year=academic_year)
+                | Q(individual_subjects__academic_year=academic_year)
+                | Q(responsible_assessment_items__group__academic_year=academic_year)
+            )
             .annotate(
                 _group_subjects_count=Count(
                     'group_subjects',
@@ -3284,6 +3271,14 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
                     filter=Q(
                         individual_subjects__is_active=True,
                         individual_subjects__academic_year=academic_year,
+                    ),
+                    distinct=True,
+                ),
+                _assessment_items_count=Count(
+                    'responsible_assessment_items',
+                    filter=Q(
+                        responsible_assessment_items__is_active=True,
+                        responsible_assessment_items__group__academic_year=academic_year,
                     ),
                     distinct=True,
                 ),
@@ -3365,8 +3360,13 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
 
     @admin.display(description='Активен в выбранном году', boolean=True)
     def selected_year_active_display(self, obj):
-        memberships = getattr(obj, 'journal_year_memberships', ())
-        return bool(memberships and memberships[0].is_active)
+        # The helper membership is historical metadata. A teacher is active in
+        # the selected year when at least one real assignment is active.
+        return bool(
+            getattr(obj, '_group_subjects_count', 0)
+            or getattr(obj, '_individual_students_count', 0)
+            or getattr(obj, '_assessment_items_count', 0)
+        )
 
     @admin.display(description='Пользователь')
     def user_link(self, obj):
@@ -4674,6 +4674,7 @@ class AssessmentElementAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescrip
 
 @admin.register(AssessmentItem)
 class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    academic_year_lookup = 'group__academic_year'
     form = AssessmentItemAdminForm
     inlines = (AssessmentResultForItemInline,)
     changelist_description = (
@@ -4681,20 +4682,39 @@ class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescript
         'текущего ответственного преподавателя-дирижёра.'
     )
     list_display = (
-        'element', 'group', 'subject', 'responsible_teacher', 'configuration_status',
-        'academic_year', 'sort_order', 'is_required', 'is_active', 'results_count_display',
+        'element', 'group', 'subject_display', 'responsible_teacher', 'configuration_status',
+        'academic_year_display', 'sort_order', 'is_required', 'is_active', 'results_count_display',
     )
-    list_filter = ('academic_year', 'subject', 'group', 'responsible_teacher', 'is_required', 'is_active')
-    search_fields = ('element__title', 'title', 'group__name', 'subject__name', 'responsible_teacher__full_name')
-    list_select_related = ('element', 'group', 'subject', 'responsible_teacher', 'academic_year')
+    list_filter = ('group__academic_year', 'group__subject', 'group', 'responsible_teacher', 'is_required', 'is_active')
+    search_fields = ('element__title', 'title', 'group__name', 'group__subject__name', 'responsible_teacher__full_name')
+    list_select_related = ('element', 'group', 'group__subject', 'group__academic_year', 'responsible_teacher')
     ordering = ('group__sort_order', 'sort_order', 'title')
     fields = (
         'element', 'group', 'responsible_teacher',
         'sort_order', 'is_required', 'is_active',
     )
 
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        base_form = super().get_form(request, obj, change=change, **kwargs)
+        return type(
+            'YearScopedAssessmentItemAdminForm',
+            (base_form,),
+            {
+                '__module__': base_form.__module__,
+                'parent_academic_year': self.selected_year(request),
+            },
+        )
+
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(_results_count=Count('results', distinct=True))
+
+    @admin.display(description='Предмет', ordering='group__subject__name')
+    def subject_display(self, obj):
+        return obj.group.subject
+
+    @admin.display(description='Учебный год', ordering='group__academic_year__starts_on')
+    def academic_year_display(self, obj):
+        return obj.group.academic_year
 
     @admin.display(description='Результатов', ordering='_results_count')
     def results_count_display(self, obj):
@@ -4710,19 +4730,31 @@ class AssessmentItemAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescript
 
 @admin.register(StudentAssessmentGroup)
 class StudentAssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
+    academic_year_lookup = 'assessment_group__academic_year'
     form = StudentAssessmentGroupAdminForm
     changelist_description = (
         'Назначение ученику одной или нескольких групп произведений. Доступные группы '
         'ограничиваются предметами ученика и выбранным учебным годом.'
     )
     list_display = (
-        'student', 'assessment_group', 'subject_display', 'academic_year',
+        'student', 'assessment_group', 'subject_display', 'academic_year_display',
         'items_count_display', 'results_workspace_link', 'is_active',
     )
-    list_filter = ('academic_year', 'assessment_group__subject', 'assessment_group', 'is_active')
+    list_filter = ('assessment_group__academic_year', 'assessment_group__subject', 'assessment_group', 'is_active')
     search_fields = ('student__full_name', 'assessment_group__name', 'assessment_group__subject__name')
-    list_select_related = ('student', 'assessment_group', 'assessment_group__subject', 'academic_year', 'enrollment')
-    fields = ('student', 'academic_year', 'assessment_group', 'is_active')
+    list_select_related = ('student', 'assessment_group', 'assessment_group__subject', 'assessment_group__academic_year', 'enrollment')
+    fields = ('student', 'assessment_group', 'is_active')
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        base_form = super().get_form(request, obj, change=change, **kwargs)
+        return type(
+            'YearScopedStudentAssessmentGroupAdminForm',
+            (base_form,),
+            {
+                '__module__': base_form.__module__,
+                'parent_academic_year': self.selected_year(request),
+            },
+        )
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(
@@ -4761,10 +4793,14 @@ class StudentAssessmentGroupAdmin(SelectedAssessmentYearAdminMixin, JournalAdmin
     def subject_display(self, obj):
         return obj.assessment_group.subject
 
+    @admin.display(description='Учебный год', ordering='assessment_group__academic_year__starts_on')
+    def academic_year_display(self, obj):
+        return obj.assessment_group.academic_year
+
 
 @admin.register(AssessmentResult)
 class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescriptionMixin, admin.ModelAdmin):
-    academic_year_lookup = 'item__academic_year'
+    academic_year_lookup = 'item__group__academic_year'
     form = AssessmentResultAdminForm
     changelist_description = (
         'История результатов по каждому произведению. Изменения преподавателя в кабинете '
@@ -4775,13 +4811,13 @@ class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescri
         'assessed_at', 'academic_year_display',
     )
     list_filter = (
-        'item__academic_year', 'item__subject', 'item__group', 'item',
+        'item__group__academic_year', 'item__group__subject', 'item__group', 'item',
         'enrollment__student', 'status', 'assessed_by',
     )
     search_fields = ('enrollment__full_name', 'item__title', 'assessed_by__full_name', 'comment')
     list_select_related = (
-        'enrollment', 'enrollment__student', 'item', 'item__subject',
-        'item__academic_year', 'assessed_by',
+        'enrollment', 'enrollment__student', 'item', 'item__group',
+        'item__group__subject', 'item__group__academic_year', 'assessed_by',
     )
     readonly_fields = ('created_at', 'updated_at')
     fields = ('student', 'item', 'status', 'assessed_by', 'assessed_at', 'comment', 'created_at', 'updated_at')
@@ -4801,13 +4837,13 @@ class AssessmentResultAdmin(SelectedAssessmentYearAdminMixin, JournalAdminDescri
     def student_display(self, obj):
         return obj.enrollment.full_name
 
-    @admin.display(description='Предмет', ordering='item__subject__name')
+    @admin.display(description='Предмет', ordering='item__group__subject__name')
     def subject_display(self, obj):
-        return obj.item.subject
+        return obj.item.group.subject
 
-    @admin.display(description='Учебный год', ordering='item__academic_year__starts_on')
+    @admin.display(description='Учебный год', ordering='item__group__academic_year__starts_on')
     def academic_year_display(self, obj):
-        return obj.item.academic_year
+        return obj.item.group.academic_year
 
 
 @admin.register(FinalGradeRule)

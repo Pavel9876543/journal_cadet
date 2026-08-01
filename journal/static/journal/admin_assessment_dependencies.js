@@ -3,12 +3,12 @@
 
     var CONFIG = {
         item: {
-            fields: ['subject', 'academic_year', 'group', 'element', 'responsible_teacher'],
-            payload: {subject: 'subjects', academic_year: 'academic_years', group: 'groups', element: 'elements', responsible_teacher: 'teachers'}
+            fields: ['group', 'element', 'responsible_teacher'],
+            payload: {group: 'groups', element: 'elements', responsible_teacher: 'teachers'}
         },
         student_group: {
-            fields: ['student', 'academic_year', 'assessment_group'],
-            payload: {student: 'students', academic_year: 'academic_years', assessment_group: 'groups'}
+            fields: ['student', 'assessment_group'],
+            payload: {student: 'students', assessment_group: 'groups'}
         },
         rule: {
             fields: ['subject', 'academic_year', 'assessment_group'],

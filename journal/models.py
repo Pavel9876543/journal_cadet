@@ -88,10 +88,16 @@ def academic_year_for_object(obj):
         return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, (Grade, SubjectResult, CourseApplication)):
         return obj.academic_year if obj.academic_year_id else None
-    if isinstance(obj, (AssessmentGroup, AssessmentItem, StudentAssessmentGroup, FinalGradeRule)):
+    if isinstance(obj, AssessmentGroup):
+        return obj.academic_year if obj.academic_year_id else None
+    if isinstance(obj, AssessmentItem):
+        return obj.group.academic_year if obj.group_id else None
+    if isinstance(obj, StudentAssessmentGroup):
+        return obj.assessment_group.academic_year if obj.assessment_group_id else None
+    if isinstance(obj, FinalGradeRule):
         return obj.academic_year if obj.academic_year_id else None
     if isinstance(obj, AssessmentResult):
-        return obj.item.academic_year if obj.item_id else None
+        return obj.item.group.academic_year if obj.item_id else None
     return None
 
 
@@ -1346,6 +1352,7 @@ class StudentSubject(models.Model):
         related_name='student_subjects',
         verbose_name='Учебный год',
         editable=False,
+        blank=True,
     )
     is_active = models.BooleanField('Активно', default=True)
     subject_name_snapshot = models.CharField(
@@ -1492,7 +1499,7 @@ def teacher_subject_is_used(teacher_id: int | None, subject_id: int | None) -> b
         ).exists()
         or AssessmentItem.objects.filter(
             responsible_teacher_id=teacher_id,
-            subject_id=subject_id,
+            group__subject_id=subject_id,
             is_active=True,
         ).exists()
     )
@@ -2108,12 +2115,16 @@ class AssessmentItem(models.Model):
         on_delete=models.CASCADE,
         related_name='assessment_items',
         verbose_name='Предмет',
+        editable=False,
+        blank=True,
     )
     academic_year = models.ForeignKey(
         AcademicYear,
         on_delete=models.CASCADE,
         related_name='assessment_items',
         verbose_name='Учебный год',
+        editable=False,
+        blank=True,
     )
     group = models.ForeignKey(
         AssessmentGroup,
@@ -2184,17 +2195,11 @@ class AssessmentItem(models.Model):
             raise ValidationError({'subject': 'Произведения доступны только в специальном режиме предмета.'})
         if self.academic_year_id:
             validate_active_academic_year(self.academic_year)
-        if self.responsible_teacher_id and self.subject_id and self.academic_year_id:
-            if not TeacherEnrollment.objects.filter(
-                teacher=self.responsible_teacher,
-                academic_year=self.academic_year,
-                is_active=True,
-            ).exists():
-                raise ValidationError({
-                    'responsible_teacher': 'Преподаватель не зачислен в выбранный учебный год.'
-                })
 
     def save(self, *args, **kwargs):
+        if self.group_id:
+            self.subject = self.group.subject
+            self.academic_year = self.group.academic_year
         if not self.element_id and self.title and (self.subject_id or self.group_id):
             subject = self.group.subject if self.group_id else self.subject
             element, _ = AssessmentElement.objects.get_or_create(
@@ -2219,7 +2224,15 @@ class AssessmentItem(models.Model):
                 previous_year_id = previous['academic_year_id']
         self.full_clean()
         result = super().save(*args, **kwargs)
-        ensure_teacher_subject(self.responsible_teacher_id, self.subject_id)
+        if self.responsible_teacher_id:
+            ensure_teacher_academic_year_membership(
+                self.responsible_teacher_id,
+                self.group.academic_year_id,
+            )
+            ensure_teacher_subject(
+                self.responsible_teacher_id,
+                self.group.subject_id,
+            )
         from .assessment_services import recalculate_group_finals, recalculate_subject_finals
         recalculate_group_finals(self.group)
         if previous_group_id and previous_group_id != self.group_id:
@@ -2261,6 +2274,8 @@ class StudentAssessmentGroup(models.Model):
         on_delete=models.CASCADE,
         related_name='student_assessment_group_assignments',
         verbose_name='Учебный год',
+        editable=False,
+        blank=True,
     )
     enrollment = models.ForeignKey(
         StudentEnrollment,
@@ -2281,8 +2296,8 @@ class StudentAssessmentGroup(models.Model):
         ordering = ['student__full_name', 'assessment_group__subject__name', 'assessment_group__sort_order']
         constraints = [
             models.UniqueConstraint(
-                fields=['student', 'assessment_group', 'academic_year'],
-                name='unique_student_assessment_group_year',
+                fields=['student', 'assessment_group'],
+                name='unique_student_assessment_group',
             ),
         ]
         indexes = [
@@ -2295,21 +2310,24 @@ class StudentAssessmentGroup(models.Model):
 
     def clean(self) -> None:
         super().clean()
-        if self.assessment_group_id:
-            if self.academic_year_id and self.assessment_group.academic_year_id != self.academic_year_id:
-                raise ValidationError({'assessment_group': 'Группа относится к другому учебному году.'})
-            if not self.academic_year_id:
-                self.academic_year = self.assessment_group.academic_year
-            if self.is_active and not self.assessment_group.is_active:
-                raise ValidationError({'assessment_group': 'Нельзя назначить неактивную группу.'})
-        if self.student_id and self.academic_year_id:
-            enrollment = self.student.enrollment_for_year(self.academic_year)
-            if enrollment is None:
-                raise ValidationError({'student': 'Ученик не зачислен в выбранный учебный год.'})
-            self.enrollment = enrollment
-        if self.academic_year_id:
-            validate_active_academic_year(self.academic_year)
-        if self.pk and not self.is_active and self.student_id and self.assessment_group_id:
+        if not self.assessment_group_id or not self.student_id:
+            return
+
+        # The group owns the year. These columns remain stored for backwards
+        # compatibility but are never independent inputs.
+        self.academic_year = self.assessment_group.academic_year
+        enrollment = self.student.enrollment_for_year(self.academic_year)
+        if enrollment is None:
+            raise ValidationError({
+                'student': 'Ученик не зачислен в учебный год выбранной группы произведений.'
+            })
+        self.enrollment = enrollment
+
+        if self.is_active and not self.assessment_group.is_active:
+            raise ValidationError({'assessment_group': 'Нельзя назначить неактивную группу.'})
+        validate_active_academic_year(self.academic_year)
+
+        if self.pk and not self.is_active:
             has_results = AssessmentResult.objects.filter(
                 enrollment__student_id=self.student_id,
                 item__group_id=self.assessment_group_id,
@@ -2323,6 +2341,9 @@ class StudentAssessmentGroup(models.Model):
                 })
 
     def save(self, *args, **kwargs):
+        if self.assessment_group_id and self.student_id:
+            self.academic_year = self.assessment_group.academic_year
+            self.enrollment = self.student.enrollment_for_year(self.academic_year)
         previous = None
         if self.pk:
             previous = type(self).objects.filter(pk=self.pk).values(
@@ -2330,15 +2351,9 @@ class StudentAssessmentGroup(models.Model):
             ).first()
         self.full_clean()
         result = super().save(*args, **kwargs)
-        if (
-            self.is_active
-            and self.enrollment_id
-            and self.student.is_active
-            and self.assessment_group.academic_year.is_active
-            and not self.enrollment.is_active
-        ):
-            StudentEnrollment.objects.filter(pk=self.enrollment_id).update(is_active=True)
-            self.enrollment.is_active = True
+        # StudentEnrollment is the authoritative participation record.  Saving
+        # a work-group assignment must never silently reactivate an enrollment
+        # or derive access from the mutable Student.is_active profile flag.
         from .assessment_services import (
             recalculate_group_finals,
             recalculate_student_subject_final,
@@ -2347,7 +2362,7 @@ class StudentAssessmentGroup(models.Model):
         recalculate_student_subject_final(
             self.student,
             self.assessment_group.subject,
-            self.academic_year,
+            self.assessment_group.academic_year,
         )
         if previous and (
             previous['student_id'] != self.student_id
@@ -2440,7 +2455,7 @@ class AssessmentResult(models.Model):
     def clean(self) -> None:
         super().clean()
         if self.enrollment_id and self.item_id:
-            if self.enrollment.academic_year_id != self.item.academic_year_id:
+            if self.enrollment.academic_year_id != self.item.group.academic_year_id:
                 raise ValidationError({'item': 'Результат и зачисление относятся к разным учебным годам.'})
             from .assessment_services import enrollments_for_assessment_item
             if not enrollments_for_assessment_item(self.item).filter(
@@ -2458,11 +2473,6 @@ class AssessmentResult(models.Model):
                 raise ValidationError({
                     'assessed_by': 'Результат может выставить только текущий ответственный преподаватель.'
                 })
-            if not TeacherSubject.objects.filter(
-                teacher_id=self.assessed_by_id,
-                subject_id=self.item.subject_id,
-            ).exists():
-                raise ValidationError({'assessed_by': 'Преподаватель не связан с предметом произведения.'})
 
     def save(self, *args, **kwargs):
         recalculate = kwargs.pop('recalculate', True)
@@ -2472,15 +2482,15 @@ class AssessmentResult(models.Model):
             from .assessment_services import recalculate_student_subject_final
             recalculate_student_subject_final(
                 self.enrollment.student,
-                self.item.subject,
-                self.item.academic_year,
+                self.item.group.subject,
+                self.item.group.academic_year,
             )
         return result
 
     def delete(self, *args, **kwargs):
         student = self.enrollment.student
-        subject = self.item.subject
-        academic_year = self.item.academic_year
+        subject = self.item.group.subject
+        academic_year = self.item.group.academic_year
         result = super().delete(*args, **kwargs)
         from .assessment_services import recalculate_student_subject_final
         recalculate_student_subject_final(student, subject, academic_year)
@@ -3632,10 +3642,32 @@ def sync_people_with_active_academic_year(academic_year_id: int) -> None:
             batch_size=500,
         )
 
-    active_teacher_ids = TeacherEnrollment.objects.filter(
-        academic_year_id=academic_year_id,
+    # The current-profile flag is a mirror of real assignments, not of the
+    # helper TeacherEnrollment table.  Otherwise a stale/missing helper row can
+    # deactivate a teacher whose subjects and works are configured correctly.
+    group_teacher_ids = GroupSubject.objects.filter(
+        group__academic_year_id=academic_year_id,
+        group__is_active=True,
+        subject__is_active=True,
         is_active=True,
-    ).values('teacher_id')
+    ).values_list('teacher_id', flat=True)
+    individual_teacher_ids = StudentSubject.objects.filter(
+        academic_year_id=academic_year_id,
+        subject__is_active=True,
+        is_active=True,
+    ).values_list('teacher_id', flat=True)
+    assessment_teacher_ids = AssessmentItem.objects.filter(
+        group__academic_year_id=academic_year_id,
+        group__is_active=True,
+        group__subject__is_active=True,
+        is_active=True,
+        responsible_teacher__isnull=False,
+    ).values_list('responsible_teacher_id', flat=True)
+    active_teacher_ids = Teacher.objects.filter(
+        Q(pk__in=group_teacher_ids)
+        | Q(pk__in=individual_teacher_ids)
+        | Q(pk__in=assessment_teacher_ids)
+    ).values_list('pk', flat=True)
     Teacher.objects.exclude(pk__in=active_teacher_ids).update(is_active=False)
     Teacher.objects.filter(pk__in=active_teacher_ids).update(is_active=True)
 
