@@ -2309,6 +2309,18 @@ class StudentAssessmentGroup(models.Model):
             self.enrollment = enrollment
         if self.academic_year_id:
             validate_active_academic_year(self.academic_year)
+        if self.pk and not self.is_active and self.student_id and self.assessment_group_id:
+            has_results = AssessmentResult.objects.filter(
+                enrollment__student_id=self.student_id,
+                item__group_id=self.assessment_group_id,
+            ).exists()
+            if has_results:
+                raise ValidationError({
+                    'is_active': (
+                        'Нельзя отключить назначение, пока по произведениям этой группы '
+                        'сохранены результаты ученика. Сначала удалите результаты сдачи.'
+                    )
+                })
 
     def save(self, *args, **kwargs):
         previous = None
@@ -2318,6 +2330,15 @@ class StudentAssessmentGroup(models.Model):
             ).first()
         self.full_clean()
         result = super().save(*args, **kwargs)
+        if (
+            self.is_active
+            and self.enrollment_id
+            and self.student.is_active
+            and self.assessment_group.academic_year.is_active
+            and not self.enrollment.is_active
+        ):
+            StudentEnrollment.objects.filter(pk=self.enrollment_id).update(is_active=True)
+            self.enrollment.is_active = True
         from .assessment_services import (
             recalculate_group_finals,
             recalculate_student_subject_final,
@@ -2347,6 +2368,14 @@ class StudentAssessmentGroup(models.Model):
         return result
 
     def delete(self, *args, **kwargs):
+        if AssessmentResult.objects.filter(
+            enrollment__student_id=self.student_id,
+            item__group_id=self.assessment_group_id,
+        ).exists():
+            raise ValidationError(
+                'Нельзя удалить назначение группы произведений, пока по ней '
+                'сохранены результаты ученика. Сначала удалите результаты сдачи.'
+            )
         group = self.assessment_group
         student = self.student
         academic_year = self.academic_year
@@ -2413,11 +2442,9 @@ class AssessmentResult(models.Model):
         if self.enrollment_id and self.item_id:
             if self.enrollment.academic_year_id != self.item.academic_year_id:
                 raise ValidationError({'item': 'Результат и зачисление относятся к разным учебным годам.'})
-            if not StudentAssessmentGroup.objects.filter(
-                student_id=self.enrollment.student_id,
-                assessment_group_id=self.item.group_id,
-                assessment_group__academic_year_id=self.item.academic_year_id,
-                is_active=True,
+            from .assessment_services import enrollments_for_assessment_item
+            if not enrollments_for_assessment_item(self.item).filter(
+                pk=self.enrollment_id,
             ).exists():
                 raise ValidationError({'item': 'Произведение не назначено этому ученику.'})
         if self.assessed_by_id and self.item_id:

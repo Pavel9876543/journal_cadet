@@ -1997,7 +1997,10 @@ def _journal_for_teacher(
     if selected_group is not None:
         enrollments_qs = enrollments_qs.filter(group=selected_group)
     if can_edit_journal:
-        enrollments_qs = enrollments_qs.filter(is_active=True, student__is_active=True)
+        # The active GroupSubject/StudentSubject assignment is the teacher's
+        # access source. Older imports can leave the enrollment flag stale;
+        # do not hide otherwise assigned students because of that helper flag.
+        enrollments_qs = enrollments_qs.filter(student__is_active=True)
     enrollments = list(enrollments_qs)
     if selected_group is None:
         # Derive the rendering groups from the actual assigned enrollments as

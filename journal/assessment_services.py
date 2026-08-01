@@ -83,32 +83,140 @@ def assessment_assignments_for_groups(
     return queryset
 
 
+def assessment_student_ids_by_group(
+    group_ids,
+    academic_year: AcademicYear,
+    *,
+    include_inactive: bool = False,
+) -> dict[int, set[int]]:
+    """Return the canonical student set for each assessment group.
+
+    ``StudentAssessmentGroup`` is the normal source of truth.  Older databases
+    can nevertheless contain ``AssessmentResult`` rows after an assignment was
+    lost during an import or a former admin workflow.  Such rows prove that the
+    student was assigned when the result was created.  We use them as a
+    compatibility fallback only when no explicit inactive assignment exists,
+    so a deliberate deactivation is never silently undone in the UI.
+    """
+    normalized_group_ids = {
+        int(group_id)
+        for group_id in group_ids
+        if group_id not in {None, ''}
+    }
+    if not normalized_group_ids:
+        return {}
+
+    all_assignments = StudentAssessmentGroup.objects.filter(
+        assessment_group_id__in=normalized_group_ids,
+        assessment_group__academic_year=academic_year,
+    )
+    inactive_pairs = set(
+        all_assignments.filter(is_active=False).values_list(
+            'assessment_group_id',
+            'student_id',
+        )
+    )
+    assignments = all_assignments
+    if not include_inactive:
+        assignments = assignments.filter(is_active=True, student__is_active=True)
+
+    result: dict[int, set[int]] = {}
+    for group_id, student_id in assignments.values_list(
+        'assessment_group_id',
+        'student_id',
+    ):
+        result.setdefault(group_id, set()).add(student_id)
+
+    legacy_results = AssessmentResult.objects.filter(
+        item__group_id__in=normalized_group_ids,
+        item__academic_year=academic_year,
+        enrollment__academic_year=academic_year,
+    )
+    if not include_inactive:
+        legacy_results = legacy_results.filter(
+            item__is_active=True,
+            item__group__is_active=True,
+            enrollment__student__is_active=True,
+        )
+    for group_id, student_id in legacy_results.values_list(
+        'item__group_id',
+        'enrollment__student_id',
+    ).distinct():
+        if (group_id, student_id) in inactive_pairs:
+            continue
+        result.setdefault(group_id, set()).add(student_id)
+    return result
+
+
+def assessment_group_ids_for_student(
+    student: Student,
+    academic_year: AcademicYear,
+    *,
+    include_inactive: bool = False,
+) -> set[int]:
+    assignments = StudentAssessmentGroup.objects.filter(
+        student=student,
+        assessment_group__academic_year=academic_year,
+    )
+    inactive_group_ids = set(
+        assignments.filter(is_active=False).values_list(
+            'assessment_group_id',
+            flat=True,
+        )
+    )
+    if not include_inactive:
+        assignments = assignments.filter(is_active=True)
+    group_ids = set(assignments.values_list('assessment_group_id', flat=True))
+
+    legacy_result_group_ids = AssessmentResult.objects.filter(
+        enrollment__student=student,
+        enrollment__academic_year=academic_year,
+        item__academic_year=academic_year,
+    )
+    if not include_inactive:
+        legacy_result_group_ids = legacy_result_group_ids.filter(
+            item__is_active=True,
+            item__group__is_active=True,
+        )
+    group_ids.update(
+        group_id
+        for group_id in legacy_result_group_ids.values_list(
+            'item__group_id',
+            flat=True,
+        ).distinct()
+        if group_id not in inactive_group_ids
+    )
+    return group_ids
+
+
 def enrollments_for_assessment_groups(
     group_ids,
     academic_year: AcademicYear,
     *,
     include_inactive: bool = False,
 ):
-    """Return one enrollment per student assigned to the selected work groups."""
-    assignments = assessment_assignments_for_groups(
+    """Return one year-scoped enrollment for every assigned student."""
+    student_ids_by_group = assessment_student_ids_by_group(
         group_ids,
         academic_year,
         include_inactive=include_inactive,
     )
-    enrollment_ids = assignments.exclude(enrollment_id=None).filter(
-        enrollment__academic_year=academic_year,
-    ).values('enrollment_id')
-    student_ids = assignments.values('student_id')
+    student_ids = {
+        student_id
+        for group_student_ids in student_ids_by_group.values()
+        for student_id in group_student_ids
+    }
     queryset = (
         StudentEnrollment.objects
-        .filter(academic_year=academic_year)
-        .filter(Q(pk__in=enrollment_ids) | Q(student_id__in=student_ids))
+        .filter(academic_year=academic_year, student_id__in=student_ids)
         .select_related('student', 'group', 'academic_year')
         .distinct()
         .order_by('full_name', 'pk')
     )
     if not include_inactive:
-        queryset = queryset.filter(is_active=True, student__is_active=True)
+        # Assignment/result activity is authoritative here. A stale enrollment
+        # flag must not make the same data disappear only in staff cabinets.
+        queryset = queryset.filter(student__is_active=True)
     return queryset
 
 
@@ -119,15 +227,15 @@ def available_assessment_items_for_student(
     subject: Subject | None = None,
     include_inactive: bool = False,
 ):
-    assignment_filter = Q(
-        group__student_assignments__student=student,
-        group__student_assignments__assessment_group__academic_year=academic_year,
-        group__student_assignments__is_active=True,
+    group_ids = assessment_group_ids_for_student(
+        student,
+        academic_year,
+        include_inactive=include_inactive,
     )
     queryset = (
         AssessmentItem.objects
         .filter(
-            assignment_filter,
+            group_id__in=group_ids,
             academic_year=academic_year,
             subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
         )
@@ -182,6 +290,19 @@ def assessment_items_visible_to_teacher(
                 group__student_assignments__student__individual_subjects__teacher=teacher,
                 group__student_assignments__student__individual_subjects__subject_id=F('subject_id'),
                 group__student_assignments__student__individual_subjects__is_active=True,
+            )
+            | Q(
+                results__enrollment__academic_year=academic_year,
+                results__enrollment__group__group_subjects__teacher=teacher,
+                results__enrollment__group__group_subjects__subject_id=F('subject_id'),
+                results__enrollment__group__group_subjects__is_active=True,
+            )
+            | Q(
+                results__enrollment__academic_year=academic_year,
+                results__enrollment__student__individual_subjects__academic_year=academic_year,
+                results__enrollment__student__individual_subjects__teacher=teacher,
+                results__enrollment__student__individual_subjects__subject_id=F('subject_id'),
+                results__enrollment__student__individual_subjects__is_active=True,
             )
         )
         .select_related('subject', 'academic_year', 'group', 'responsible_teacher')
@@ -398,7 +519,7 @@ def recalculate_subject_finals(subject: Subject, academic_year: AcademicYear) ->
         StudentAssessmentGroup.objects
         .filter(
             assessment_group__subject=subject,
-            academic_year=academic_year,
+            assessment_group__academic_year=academic_year,
             is_active=True,
         )
         .values_list('student_id', flat=True)
@@ -414,7 +535,7 @@ def recalculate_subject_finals(subject: Subject, academic_year: AcademicYear) ->
 def recalculate_group_finals(group: AssessmentGroup) -> int:
     student_ids = (
         StudentAssessmentGroup.objects
-        .filter(assessment_group=group, academic_year=group.academic_year, is_active=True)
+        .filter(assessment_group=group, is_active=True)
         .values_list('student_id', flat=True)
     )
     changed = 0
@@ -540,24 +661,21 @@ def assessment_sections_for_teacher(
         return []
 
     group_ids = {item.group_id for item in items}
-    assignments = list(
-        assessment_assignments_for_groups(
-            group_ids,
-            academic_year,
-        )
+    student_ids_by_group = assessment_student_ids_by_group(
+        group_ids,
+        academic_year,
     )
-    student_ids_by_group: dict[int, set[int]] = {}
-    all_student_ids: set[int] = set()
-    for assignment in assignments:
-        student_ids_by_group.setdefault(assignment.assessment_group_id, set()).add(assignment.student_id)
-        all_student_ids.add(assignment.student_id)
+    all_student_ids = {
+        student_id
+        for group_student_ids in student_ids_by_group.values()
+        for student_id in group_student_ids
+    }
 
     enrollments = list(
         StudentEnrollment.objects
         .filter(
             academic_year=academic_year,
             student_id__in=all_student_ids,
-            is_active=True,
         )
         .select_related('student', 'group', 'academic_year')
         .order_by('full_name', 'pk')

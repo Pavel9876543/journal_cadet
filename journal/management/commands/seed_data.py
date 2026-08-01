@@ -1374,6 +1374,60 @@ class Command(BaseCommand):
         if not AssessmentResult.objects.filter(status=AssessmentResult.STATUS_FAILED).exists():
             errors.append('Не созданы результаты со статусом «Незачёт».')
 
+        for result in AssessmentResult.objects.select_related(
+            'enrollment', 'item__group', 'item__responsible_teacher'
+        ):
+            assignment_exists = StudentAssessmentGroup.objects.filter(
+                student_id=result.enrollment.student_id,
+                assessment_group_id=result.item.group_id,
+                assessment_group__academic_year_id=result.item.academic_year_id,
+                enrollment_id=result.enrollment_id,
+                is_active=True,
+            ).exists()
+            if not assignment_exists:
+                errors.append(
+                    f'Результат сдачи #{result.pk} не имеет активного назначения '
+                    'ученика в группу произведений.'
+                )
+                break
+            if result.assessed_by_id != result.item.responsible_teacher_id:
+                errors.append(
+                    f'Результат сдачи #{result.pk} выставлен не ответственным преподавателем.'
+                )
+                break
+
+        teacher_links = []
+        teacher_links.extend(
+            (row.teacher_id, row.subject_id, row.group.academic_year_id)
+            for row in GroupSubject.objects.select_related('group').filter(is_active=True)
+        )
+        teacher_links.extend(
+            (row.teacher_id, row.subject_id, row.academic_year_id)
+            for row in StudentSubject.objects.filter(is_active=True)
+        )
+        teacher_links.extend(
+            (row.responsible_teacher_id, row.subject_id, row.academic_year_id)
+            for row in AssessmentItem.objects.filter(
+                is_active=True, responsible_teacher__isnull=False
+            )
+        )
+        for teacher_id, subject_id, year_id in teacher_links:
+            if not TeacherEnrollment.objects.filter(
+                teacher_id=teacher_id, academic_year_id=year_id, is_active=True
+            ).exists():
+                errors.append(
+                    f'У преподавателя #{teacher_id} отсутствует активное участие '
+                    f'в учебном году #{year_id}.'
+                )
+                break
+            if not TeacherSubject.objects.filter(
+                teacher_id=teacher_id, subject_id=subject_id
+            ).exists():
+                errors.append(
+                    f'У преподавателя #{teacher_id} отсутствует связь с предметом #{subject_id}.'
+                )
+                break
+
         if SubjectResult.objects.filter(
             subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
             is_auto_calculated=False,
