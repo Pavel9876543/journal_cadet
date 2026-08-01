@@ -35,6 +35,7 @@ from .models import (
     AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
+    ErrorLog,
     FinalGradeRule,
     Grade,
     GroupSubject,
@@ -98,6 +99,7 @@ def _admin_guide_view_sync(request: HttpRequest) -> HttpResponse:
         'results_url': reverse('admin:journal_subjectresult_changelist'),
         'applications_url': reverse('admin:journal_courseapplication_changelist'),
         'temporary_credentials_url': reverse('admin:journal_temporarycredential_changelist'),
+        'error_logs_url': reverse('admin:journal_errorlog_changelist'),
         'academic_years_url': reverse('admin:journal_academicyear_changelist'),
         'settings_url': reverse('admin:journal_courseregistrationsettings_changelist'),
         'password_contacts_url': reverse('admin:journal_passwordrecoverycontact_changelist'),
@@ -270,6 +272,7 @@ def clear_database_data() -> dict[str, int]:
 
     deletion_order = (
         # Служебные и регистрационные данные.
+        ErrorLog,
         TemporaryCredential,
         PasswordRecoveryContact,
         CourseApplication,

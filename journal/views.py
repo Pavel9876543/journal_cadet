@@ -127,32 +127,23 @@ def orchestra_part_options_api(request):
 
 
 def csrf_failure_view(request, reason=''):
-    message = (
-        'Не удалось подтвердить отправку формы. Обновите страницу и повторите действие.'
-    )
-    accepts_json = 'application/json' in request.headers.get('Accept', '')
-    is_api_request = (
-        request.path.startswith('/api/')
-        or accepts_json
-        or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-    )
-    if is_api_request:
-        return JsonResponse(
-            {
-                'success': False,
-                'code': 'csrf_failed',
-                'message': message,
-            },
-            status=403,
-        )
-    return render(
+    from .error_views import render_error_response
+
+    return render_error_response(
         request,
-        'errors/csrf_failure.html',
-        {
-            'message': message,
-            'retry_url': request.get_full_path(),
-        },
-        status=403,
+        403,
+        code='csrf_failed',
+        title='Срок действия формы истёк',
+        message=(
+            'Не удалось подтвердить отправку формы. Это происходит, если страница '
+            'была открыта слишком долго или форма уже отправлялась ранее.'
+        ),
+        suggestions=(
+            'Обновите страницу, чтобы получить новый защитный токен.',
+            'Повторно заполните форму и отправьте её только один раз.',
+            'Войдите в систему заново, если сеанс завершился.',
+        ),
+        retry_url=request.get_full_path(),
     )
 
 

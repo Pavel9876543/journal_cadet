@@ -13,6 +13,12 @@ from journal.admin_tools import (
     admin_seed_test_data_view,
 )
 
+
+handler400 = 'journal.error_views.bad_request'
+handler403 = 'journal.error_views.permission_denied'
+handler404 = 'journal.error_views.page_not_found'
+handler500 = 'journal.error_views.server_error'
+
 urlpatterns = [
     path(
         'admin/journal/data-tools/',

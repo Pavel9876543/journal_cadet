@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ status_code }} — {{ title }}</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            display: grid;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            place-items: center;
+            color: #10213d;
+            background: #f2f6fb;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        main {
+            width: min(100%, 720px);
+            padding: clamp(24px, 5vw, 44px);
+            border: 1px solid #d4deeb;
+            border-radius: 20px;
+            background: #fff;
+            box-shadow: 0 18px 52px rgba(25, 45, 75, .12);
+        }
+        .status {
+            display: inline-flex;
+            min-width: 64px;
+            min-height: 36px;
+            padding: 6px 12px;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            color: #0b4f97;
+            background: #e8f2ff;
+            font-weight: 800;
+        }
+        h1 { margin: 18px 0 10px; font-size: clamp(1.65rem, 5vw, 2.35rem); }
+        .message { margin: 0; color: #52657f; font-size: 1.05rem; line-height: 1.65; }
+        .help {
+            margin-top: 26px;
+            padding: 18px 20px;
+            border: 1px solid #dbe5f0;
+            border-radius: 14px;
+            background: #f8fbff;
+        }
+        .help h2 { margin: 0 0 10px; font-size: 1rem; }
+        ul { margin: 0; padding-left: 22px; color: #40536d; line-height: 1.6; }
+        .reference {
+            margin-top: 18px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            color: #3d4d63;
+            background: #f3f5f8;
+            overflow-wrap: anywhere;
+        }
+        .reference strong { color: #162945; }
+        .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+        .button {
+            display: inline-flex;
+            min-height: 44px;
+            padding: 11px 17px;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #1769aa;
+            border-radius: 9px;
+            color: #fff;
+            background: #1769aa;
+            font: inherit;
+            font-weight: 750;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .button.secondary { color: #15558a; background: #fff; }
+        @media (max-width: 520px) {
+            body { padding: 10px; }
+            main { border-radius: 14px; }
+            .actions, .button { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <span class="status">Ошибка {{ status_code }}</span>
+    <h1>{{ title }}</h1>
+    <p class="message">{{ message }}</p>
+
+    {% if suggestions %}
+        <section class="help" aria-labelledby="error-help-title">
+            <h2 id="error-help-title">Что можно сделать</h2>
+            <ul>
+                {% for suggestion in suggestions %}<li>{{ suggestion }}</li>{% endfor %}
+            </ul>
+        </section>
+    {% endif %}
+
+    {% if request_id %}
+        <p class="reference">
+            <strong>Код ошибки:</strong> {{ request_id }}<br>
+            Передайте этот код администратору, если проблема повторяется.
+        </p>
+    {% endif %}
+
+    <div class="actions">
+        {% if retry_url %}<a class="button" href="{{ retry_url }}">Повторить</a>{% endif %}
+        <a class="button{% if retry_url %} secondary{% endif %}" href="{% url 'journal' %}">На главную</a>
+        <button class="button secondary" type="button" onclick="history.back()">Назад</button>
+    </div>
+</main>
+</body>
+</html>

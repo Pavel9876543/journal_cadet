@@ -58,6 +58,7 @@ from .models import (
     AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
+    ErrorLog,
     Grade,
     GroupSubject,
     FinalGradeRule,
@@ -3776,6 +3777,53 @@ class SubjectResultAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescription
             f'{obj} | Экзамен: {exam_grade} | '
             f'Итоговая оценка: {final_grade}'
         )
+
+
+@admin.register(ErrorLog)
+class ErrorLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'created_at',
+        'level',
+        'status_code',
+        'request_id',
+        'method',
+        'path',
+        'user_label',
+    )
+    list_filter = ('level', 'status_code', 'created_at')
+    search_fields = (
+        'request_id',
+        'message',
+        'exception',
+        'path',
+        'user_label',
+        'logger_name',
+    )
+    readonly_fields = (
+        'created_at',
+        'level',
+        'logger_name',
+        'message',
+        'exception',
+        'request_id',
+        'status_code',
+        'method',
+        'path',
+        'user_label',
+        'metadata',
+    )
+    ordering = ('-created_at', '-pk')
+    list_per_page = 100
+    show_full_result_count = False
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return bool(request.user.is_superuser)
+
+    def has_delete_permission(self, request, obj=None):
+        return bool(request.user.is_superuser)
 
 
 # -----------------------------------------------------------------------------

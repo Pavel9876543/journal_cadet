@@ -21,6 +21,9 @@ PRODUCTION_KEYS = {
     'DATA_TOOLS_PASSWORD',
     'TRUSTED_PROXY_COUNT',
     'DB_CONN_MAX_AGE',
+    'ERROR_LOGGING_ENABLED',
+    'ERROR_LOG_MAX_RECORDS',
+    'DJANGO_LOG_LEVEL',
     'CACHE_DEFAULT_TIMEOUT',
     'CACHE_KEY_PREFIX',
     'REDIS_MAXMEMORY',
@@ -48,6 +51,9 @@ TEST_KEYS = {
     'DB_HOST',
     'DB_PORT',
     'DB_CONN_MAX_AGE',
+    'ERROR_LOGGING_ENABLED',
+    'ERROR_LOG_MAX_RECORDS',
+    'DJANGO_LOG_LEVEL',
 }
 
 PLACEHOLDER_MARKERS = (
@@ -191,6 +197,21 @@ def validate_production(
     for key in ('DB_CONN_MAX_AGE', 'BACKUP_RETENTION_DAYS'):
         _nonnegative_int(values, key, errors)
 
+    _positive_int(values, 'ERROR_LOG_MAX_RECORDS', errors)
+    error_log_limit = values.get('ERROR_LOG_MAX_RECORDS')
+    if error_log_limit and error_log_limit.isdigit() and int(error_log_limit) > 1000:
+        errors.append('ERROR_LOG_MAX_RECORDS не может быть больше 1000')
+
+    if values.get('ERROR_LOGGING_ENABLED', '1').lower() not in {
+        '0', '1', 'true', 'false', 'yes', 'no', 'on', 'off',
+    }:
+        errors.append('ERROR_LOGGING_ENABLED должен быть логическим значением')
+
+    if values.get('DJANGO_LOG_LEVEL', 'INFO').upper() not in {
+        'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL',
+    }:
+        errors.append('DJANGO_LOG_LEVEL содержит неподдерживаемое значение')
+
     app_port = values.get('APP_PORT')
     if app_port and app_port.isdigit() and int(app_port) > 65535:
         errors.append('APP_PORT не может быть больше 65535')
@@ -267,6 +288,18 @@ def validate_test(values: dict[str, str]) -> list[str]:
         errors.append('CI-тесты должны использовать PostgreSQL')
     _positive_int(values, 'DB_PORT', errors)
     _nonnegative_int(values, 'DB_CONN_MAX_AGE', errors)
+    _positive_int(values, 'ERROR_LOG_MAX_RECORDS', errors)
+    error_log_limit = values.get('ERROR_LOG_MAX_RECORDS')
+    if error_log_limit and error_log_limit.isdigit() and int(error_log_limit) > 1000:
+        errors.append('ERROR_LOG_MAX_RECORDS не может быть больше 1000')
+    if values.get('ERROR_LOGGING_ENABLED', '0').lower() not in {
+        '0', '1', 'true', 'false', 'yes', 'no', 'on', 'off',
+    }:
+        errors.append('ERROR_LOGGING_ENABLED должен быть логическим значением')
+    if values.get('DJANGO_LOG_LEVEL', 'WARNING').upper() not in {
+        'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL',
+    }:
+        errors.append('DJANGO_LOG_LEVEL содержит неподдерживаемое значение')
     return errors
 
 

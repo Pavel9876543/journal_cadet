@@ -2844,6 +2844,58 @@ class TemporaryCredential(models.Model):
         return self.login
 
 
+class ErrorLog(models.Model):
+    MAX_RECORDS = 1000
+
+    created_at = models.DateTimeField('Дата и время', auto_now_add=True)
+    level = models.CharField('Уровень', max_length=20, default='ERROR')
+    logger_name = models.CharField('Источник', max_length=255, blank=True)
+    message = models.TextField('Сообщение')
+    exception = models.TextField('Трассировка', blank=True)
+    request_id = models.CharField('Код ошибки', max_length=64, blank=True, db_index=True)
+    status_code = models.PositiveSmallIntegerField('HTTP-статус', null=True, blank=True)
+    method = models.CharField('HTTP-метод', max_length=16, blank=True)
+    path = models.CharField('Путь запроса', max_length=512, blank=True)
+    user_label = models.CharField('Пользователь', max_length=150, blank=True)
+    metadata = models.JSONField('Дополнительные данные', default=dict, blank=True)
+
+    class Meta:
+        verbose_name = 'Журнал ошибки'
+        verbose_name_plural = 'Журнал ошибок'
+        ordering = ['-created_at', '-pk']
+        indexes = [
+            models.Index(fields=['-created_at'], name='error_log_created_idx'),
+            models.Index(fields=['level', '-created_at'], name='error_log_level_idx'),
+        ]
+
+    def __str__(self) -> str:
+        reference = f' [{self.request_id}]' if self.request_id else ''
+        timestamp = (
+            self.created_at.strftime('%d.%m.%Y %H:%M:%S')
+            if self.created_at
+            else 'Без даты'
+        )
+        return f'{timestamp} {self.level}{reference}: {self.message[:80]}'
+
+    @classmethod
+    def prune_old_entries(cls, max_records: int | None = None) -> int:
+        """Keep only the newest error records and return the deleted count."""
+        limit = (
+            cls.MAX_RECORDS
+            if max_records is None
+            else max(1, min(int(max_records), cls.MAX_RECORDS))
+        )
+        cutoff_id = (
+            cls.objects.order_by('-pk')
+            .values_list('pk', flat=True)[limit:limit + 1]
+            .first()
+        )
+        if cutoff_id is None:
+            return 0
+        deleted, _ = cls.objects.filter(pk__lte=cutoff_id).delete()
+        return deleted
+
+
 class CourseRegistrationRateLimit(models.Model):
     cache_key = models.CharField('Ключ ограничения', max_length=255, unique=True)
     attempts = models.PositiveSmallIntegerField('Количество попыток', default=0)

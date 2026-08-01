@@ -114,12 +114,14 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'journal.middleware.RequestIdMiddleware',
     'django.middleware.gzip.GZipMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'journal.middleware.UserFriendlyErrorResponseMiddleware',
     'journal.middleware.NoCacheHtmlMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -204,6 +206,7 @@ JAZZMIN_SETTINGS = {
         'journal.CourseApplication',
         'journal.CourseRegistrationSettings',
         'journal.TemporaryCredential',
+        'journal.ErrorLog',
         'journal.PasswordRecoveryContact',
         # Сервисные действия.
         'Запуск тестовых данных',
@@ -240,6 +243,7 @@ JAZZMIN_SETTINGS = {
         'journal.courseregistrationsettings': 'fas fa-cog',
         'journal.passwordrecoverycontact': 'fas fa-headset',
         'journal.temporarycredential': 'fas fa-key',
+        'journal.errorlog': 'fas fa-bug',
     },
     'custom_links': {
         'journal': [
@@ -405,3 +409,61 @@ if _env_bool('USE_X_FORWARDED_PROTO', False):
 
 TRUST_X_FORWARDED_FOR = _env_bool('TRUST_X_FORWARDED_FOR', False)
 TRUSTED_PROXY_COUNT = _env_positive_int('TRUSTED_PROXY_COUNT', 1)
+
+
+ERROR_LOG_MAX_RECORDS = _env_positive_int('ERROR_LOG_MAX_RECORDS', 1000)
+if ERROR_LOG_MAX_RECORDS > 1000:
+    raise ImproperlyConfigured('ERROR_LOG_MAX_RECORDS cannot be greater than 1000.')
+ERROR_LOGGING_ENABLED = _env_bool('ERROR_LOGGING_ENABLED', IS_PRODUCTION_ENV)
+DJANGO_LOG_LEVEL = os.getenv('DJANGO_LOG_LEVEL', 'INFO').strip().upper()
+if DJANGO_LOG_LEVEL not in {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}:
+    raise ImproperlyConfigured(
+        'DJANGO_LOG_LEVEL must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL.'
+    )
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'console': {
+            'format': '{asctime} {levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'console',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': DJANGO_LOG_LEVEL,
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'django.security': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'journal': {
+            'handlers': ['console'],
+            'level': DJANGO_LOG_LEVEL,
+            'propagate': False,
+        },
+    },
+}
+
+if ERROR_LOGGING_ENABLED:
+    LOGGING['handlers']['database_errors'] = {
+        'class': 'journal.error_logging.DatabaseErrorHandler',
+        'level': 'ERROR',
+        'max_records': ERROR_LOG_MAX_RECORDS,
+    }
+    for logger_name in ('django.request', 'django.security', 'journal'):
+        LOGGING['loggers'][logger_name]['handlers'].append('database_errors')
