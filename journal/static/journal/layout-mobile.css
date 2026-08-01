@@ -438,3 +438,133 @@
         max-height: calc(100dvh - 16px) !important;
     }
 }
+
+/*
+ * Карточки журналов и произведений: ни заголовок, ни широкая таблица не
+ * должны расширять мобильный viewport. Таблица прокручивается только внутри
+ * собственного контейнера, а навигация превращается в вертикальный список.
+ */
+@media (max-width: 767.98px),
+       (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
+    body.journal-workspace .assessment-stack,
+    body.journal-workspace #student-assessment-blocks,
+    body.journal-workspace #teacher-assessment-blocks,
+    body.journal-workspace #journal-subject-blocks,
+    body.journal-workspace .assessment-subject-card,
+    body.journal-workspace .table-card,
+    body.journal-workspace .table-panel,
+    body.journal-workspace .table-form,
+    body.journal-workspace .workspace-title,
+    body.journal-workspace .assessment-bulk-actions,
+    body.journal-workspace .journal-tabs {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+
+    body.journal-workspace .workspace-title h1,
+    body.journal-workspace .workspace-title h2,
+    body.journal-workspace .workspace-title h3,
+    body.journal-workspace .workspace-title p,
+    body.journal-workspace .table-card-header h3,
+    body.journal-workspace .table-card-header p,
+    body.journal-workspace .table-panel-head h3,
+    body.journal-workspace .table-panel-head p,
+    body.journal-workspace .journal-tab strong {
+        max-width: 100%;
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: normal;
+    }
+
+    body.journal-workspace .table-card-header,
+    body.journal-workspace .table-panel-head {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        box-sizing: border-box;
+    }
+
+    body.journal-workspace .table-card-header > div,
+    body.journal-workspace .table-title,
+    body.journal-workspace .table-meta,
+    body.journal-workspace .assessment-subject-overview,
+    body.journal-workspace .assessment-subject-meta,
+    body.journal-workspace .assessment-progress {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+
+    body.journal-workspace .assessment-subject-overview {
+        grid-template-columns: minmax(0, 1fr) !important;
+        gap: 12px;
+        padding: 0 12px 14px;
+    }
+
+    body.journal-workspace .assessment-subject-meta,
+    body.journal-workspace .table-meta {
+        justify-content: flex-start;
+        align-items: stretch;
+    }
+
+    body.journal-workspace .assessment-subject-meta > *,
+    body.journal-workspace .table-meta > * {
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    body.journal-workspace details.collapsible-card > summary::after {
+        margin-left: 0;
+        align-self: flex-end;
+    }
+
+    body.journal-workspace .journal-tabs {
+        position: static;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+        overflow: visible;
+    }
+
+    body.journal-workspace .journal-tab {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        align-items: flex-start;
+        box-sizing: border-box;
+    }
+
+    body.journal-workspace .table-scroll,
+    body.journal-workspace .journal-responsive-table,
+    body.journal-workspace .table-responsive {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        contain: inline-size;
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+    }
+
+    body.journal-workspace .table-scroll > table,
+    body.journal-workspace .journal-responsive-table > table,
+    body.journal-workspace .table-responsive > table {
+        width: max-content;
+        min-width: 720px;
+        max-width: none;
+    }
+
+    body.journal-workspace .assessment-bulk-actions button {
+        width: 100%;
+        min-width: 0;
+    }
+}
