@@ -3757,6 +3757,71 @@ class CourseApplicationConcurrencyTests(JournalTestDataMixin, TransactionTestCas
         self.assertEqual(TemporaryCredential.objects.filter(user_id__in=user_ids).count(), 1)
 
 
+class JournalCategoryVisibilityTests(JournalTestDataMixin, TestCase):
+    def test_student_without_assigned_subjects_does_not_see_subject_or_assessment_categories(self):
+        year = self.create_academic_year()
+        group = self.create_group(academic_year=year)
+        student = self.create_student(group=group, username='student_without_subjects')
+        self.client.force_login(student.user)
+
+        response = self.client.get(reverse('journal'), {'academic_year': year.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['has_subjects'])
+        self.assertNotContains(response, 'data-filter-field="subject"')
+        self.assertNotContains(response, 'data-summary-category="subjects"')
+        self.assertNotContains(response, 'data-journal-category="assessments"')
+
+    def test_teacher_with_subject_but_without_assigned_works_sees_only_subject_category(self):
+        data = self.create_base_journal()
+        self.client.force_login(data['teacher'].user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['has_subjects'])
+        self.assertFalse(response.context['assessment_filter_enabled'])
+        self.assertContains(response, 'data-summary-category="subjects"')
+        self.assertNotContains(response, 'data-journal-category="assessments"')
+
+    def test_teacher_with_assigned_work_sees_assessment_category(self):
+        data = self.create_base_journal()
+        assessment_subject = Subject.objects.create(
+            name='Оркестр для личного кабинета',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+        )
+        GroupSubject.objects.create(
+            group=data['group'],
+            subject=assessment_subject,
+            teacher=data['teacher'],
+        )
+        assessment_group = AssessmentGroup.objects.create(
+            name='Назначенная программа',
+            subject=assessment_subject,
+            academic_year=data['year'],
+        )
+        AssessmentItem.objects.create(
+            title='Назначенное произведение',
+            subject=assessment_subject,
+            academic_year=data['year'],
+            group=assessment_group,
+            responsible_teacher=data['teacher'],
+        )
+        self.client.force_login(data['teacher'].user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['assessment_filter_enabled'])
+        self.assertContains(response, 'data-journal-category="assessments"')
+
+
 class AcademicYearJournalAccessTests(JournalTestDataMixin, TestCase):
     def test_student_can_select_only_years_with_enrollment(self):
         old_year = self.create_academic_year(name='2025/2026')
@@ -4411,6 +4476,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             password='Pass12345!',
             email='dashboard-admin@example.com',
         )
+        self.superuser = self.admin_user
 
     def test_dashboard_reference_section_contains_orchestra_parts(self):
         self.client.force_login(self.superuser)
@@ -4764,6 +4830,52 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(individual_response, 'Индивидуальный предмет')
         self.assertContains(individual_response, 'Индивидуальные ученики по этому предмету')
         self.assertNotContains(individual_response, 'Группы, где есть этот предмет')
+
+    def test_subject_change_page_renders_group_assignment_rows_and_related_controls(self):
+        year = self.create_academic_year()
+        group = self.create_group(name='Связанная группа из таблицы', academic_year=year)
+        teacher = self.create_teacher(username='subject_inline_render_teacher')
+        subject = self.create_subject(name='Предмет с группой в карточке')
+        self.create_group_assignment(group=group, subject=subject, teacher=teacher)
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(
+            reverse('admin:journal_subject_change', args=[subject.pk]),
+            {'academic_year': year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Группы, где есть этот предмет')
+        self.assertContains(response, group.name)
+        self.assertContains(response, 'name="group_subjects-TOTAL_FORMS"')
+        self.assertContains(response, 'add-related')
+        self.assertContains(response, 'change-related')
+        self.assertContains(response, 'view-related')
+        self.assertContains(response, 'delete-related')
+
+    def test_subject_change_page_exposes_non_inline_reverse_relations(self):
+        data = self.create_base_journal()
+        Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 10),
+            value='5',
+        )
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(
+            reverse('admin:journal_subject_change', args=[data['solfeggio'].pk]),
+            {'academic_year': data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Связанные данные')
+        self.assertContains(response, 'Оценки')
+        self.assertContains(response, 'Просмотреть / редактировать')
+        self.assertContains(response, 'Удалить')
+        self.assertContains(response, 'subject__id__exact')
 
     def test_subject_group_inline_exposes_full_related_group_controls(self):
         year = self.create_academic_year()
@@ -5332,6 +5444,62 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             0,
             [query['sql'] for query in captured_queries],
         )
+
+    def test_admin_password_reset_removes_temporary_credentials(self):
+        self.create_academic_year()
+        user = User.objects.create_user(
+            username='temporary reset user',
+            password='OldPass123!',
+            is_staff=True,
+        )
+        TemporaryCredential.objects.create(
+            user=user,
+            login=user.username,
+            temporary_password='OldPass123!',
+        )
+        self.client.force_login(self.admin_user)
+
+        response = self.client.post(
+            reverse('admin:auth_user_password_change', args=[user.pk]),
+            {
+                'usable_password': 'true',
+                'password1': 'NewSecurePass456!',
+                'password2': 'NewSecurePass456!',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('NewSecurePass456!'))
+        self.assertFalse(TemporaryCredential.objects.filter(user=user).exists())
+
+    def test_invalid_admin_password_reset_keeps_temporary_credentials(self):
+        self.create_academic_year()
+        user = User.objects.create_user(
+            username='temporary invalid reset user',
+            password='OldPass123!',
+            is_staff=True,
+        )
+        TemporaryCredential.objects.create(
+            user=user,
+            login=user.username,
+            temporary_password='OldPass123!',
+        )
+        self.client.force_login(self.admin_user)
+
+        response = self.client.post(
+            reverse('admin:auth_user_password_change', args=[user.pk]),
+            {
+                'usable_password': 'true',
+                'password1': 'NewSecurePass456!',
+                'password2': 'DifferentPass789!',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('OldPass123!'))
+        self.assertTrue(TemporaryCredential.objects.filter(user=user).exists())
 
     def test_teacher_admin_creates_user_and_temporary_credentials_on_manual_add(self):
         request = type('Request', (), {'user': self.admin_user})()

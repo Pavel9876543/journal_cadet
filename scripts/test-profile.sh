@@ -14,6 +14,7 @@ fi
 
 exec "$PYTHON_BIN" manage.py test \
   journal.tests.AdminDashboardTests \
+  journal.tests.JournalCategoryVisibilityTests \
   journal.tests.PasswordRecoveryViewTests \
   journal.tests.CacheConfigurationTests \
   journal.tests.PerformanceConfigurationTests \
