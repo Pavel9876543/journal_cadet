@@ -44,6 +44,7 @@ from journal.assessment_services import (
     assessment_items_for_teacher,
     assessment_sections_for_teacher,
     available_assessment_items_for_student,
+    enrollments_for_assessment_groups,
     set_assessment_result,
 )
 from journal.birthday_notifications import birthday_notifications_for_user
@@ -10383,6 +10384,144 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
         )
         self.assertEqual([row['student'].pk for row in table['rows']], [self.student.pk])
         self.assertIn('5', table['rows'][0]['grades_by_date'].values())
+
+    def test_existing_result_keeps_assignment_visible_when_legacy_link_is_missing(self):
+        result = AssessmentResult.objects.create(
+            enrollment=self.assignment.enrollment,
+            item=self.item,
+            status=AssessmentResult.STATUS_PASSED,
+            assessed_by=self.teacher,
+        )
+        # QuerySet.delete deliberately simulates a legacy import/admin path that
+        # bypassed the current model-level protection.
+        StudentAssessmentGroup.objects.filter(pk=self.assignment.pk).delete()
+
+        enrollment_ids = set(
+            enrollments_for_assessment_groups(
+                [self.assessment_group.pk],
+                self.year,
+            ).values_list('pk', flat=True)
+        )
+        self.assertIn(result.enrollment_id, enrollment_ids)
+        self.assertIn(
+            self.item,
+            available_assessment_items_for_student(self.student, self.year),
+        )
+
+        Form = type(
+            'LegacySafeAssessmentResultForm',
+            (AssessmentResultAdminForm,),
+            {'parent_academic_year': self.year},
+        )
+        form = Form()
+        self.assertIn(
+            self.student.pk,
+            form.fields['student'].queryset.values_list('pk', flat=True),
+        )
+
+        admin_user = User.objects.create_superuser(
+            username='legacy_assessment_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+        options_response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'result',
+                'academic_year': self.year.pk,
+            },
+        )
+        self.assertEqual(options_response.status_code, 200)
+        self.assertIn(
+            self.student.pk,
+            {row['id'] for row in options_response.json()['students']},
+        )
+
+        admin_response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+        admin_section = next(
+            section for section in admin_response.context['assessment_sections']
+            if section['item'].pk == self.item.pk
+        )
+        self.assertEqual(
+            [row['student'].pk for row in admin_section['rows']],
+            [self.student.pk],
+        )
+
+        self.client.force_login(self.teacher.user)
+        teacher_response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+        teacher_section = next(
+            section for section in teacher_response.context['assessment_sections']
+            if section['item'].pk == self.item.pk
+        )
+        self.assertTrue(teacher_section['can_edit'])
+        self.assertEqual(
+            [row['student'].pk for row in teacher_section['rows']],
+            [self.student.pk],
+        )
+
+    def test_stale_enrollment_flag_does_not_hide_assigned_teacher_data(self):
+        enrollment = self.student.enrollment_for_year(self.year)
+        StudentEnrollment.objects.filter(pk=enrollment.pk).update(is_active=False)
+
+        self.client.force_login(self.teacher.user)
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        ordinary_table = next(
+            table for table in response.context['journal_tables']
+            if table['subject'].pk == self.standard_subject.pk
+        )
+        self.assertEqual(
+            [row['student'].pk for row in ordinary_table['rows']],
+            [self.student.pk],
+        )
+        assessment_section = next(
+            section for section in response.context['assessment_sections']
+            if section['item'].pk == self.item.pk
+        )
+        self.assertEqual(
+            [row['student'].pk for row in assessment_section['rows']],
+            [self.student.pk],
+        )
+
+    def test_explicitly_inactive_assignment_is_not_restored_by_result_fallback(self):
+        AssessmentResult.objects.create(
+            enrollment=self.assignment.enrollment,
+            item=self.item,
+            status=AssessmentResult.STATUS_PASSED,
+            assessed_by=self.teacher,
+        )
+        StudentAssessmentGroup.objects.filter(pk=self.assignment.pk).update(is_active=False)
+
+        self.assertFalse(
+            enrollments_for_assessment_groups(
+                [self.assessment_group.pk],
+                self.year,
+            ).filter(student=self.student).exists()
+        )
+
+    def test_assignment_with_results_cannot_be_disabled_or_deleted_through_model(self):
+        AssessmentResult.objects.create(
+            enrollment=self.assignment.enrollment,
+            item=self.item,
+            status=AssessmentResult.STATUS_PASSED,
+            assessed_by=self.teacher,
+        )
+        self.assignment.is_active = False
+        with self.assertRaises(ValidationError):
+            self.assignment.save()
+        self.assignment.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            self.assignment.delete()
 
     def test_result_form_rejects_cross_student_item_combination(self):
         other_student = self.create_student(
