@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from .models import (
@@ -82,25 +82,68 @@ def available_assessment_items_for_student(
     return queryset
 
 
+def assessment_items_visible_to_teacher(
+    teacher: Teacher,
+    academic_year: AcademicYear,
+    *,
+    include_inactive: bool = False,
+):
+    """Return element-assessment items genuinely connected to a teacher.
+
+    Besides explicitly responsible items, a teacher may inspect an item when
+    the same subject is assigned by that teacher to at least one student who
+    belongs to the item's assessment group. Such linked items are read-only;
+    only the responsible teacher may change their results.
+    """
+    queryset = (
+        AssessmentItem.objects
+        .filter(
+            academic_year=academic_year,
+            subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+        )
+        .filter(
+            Q(responsible_teacher=teacher)
+            | Q(
+                group__student_assignments__academic_year=academic_year,
+                group__student_assignments__is_active=True,
+                group__student_assignments__student__enrollments__academic_year=academic_year,
+                group__student_assignments__student__enrollments__is_active=True,
+                group__student_assignments__student__enrollments__group__group_subjects__teacher=teacher,
+                group__student_assignments__student__enrollments__group__group_subjects__subject_id=F('subject_id'),
+                group__student_assignments__student__enrollments__group__group_subjects__is_active=True,
+            )
+            | Q(
+                group__student_assignments__academic_year=academic_year,
+                group__student_assignments__is_active=True,
+                group__student_assignments__student__enrollments__academic_year=academic_year,
+                group__student_assignments__student__enrollments__is_active=True,
+                group__student_assignments__student__individual_subjects__academic_year=academic_year,
+                group__student_assignments__student__individual_subjects__teacher=teacher,
+                group__student_assignments__student__individual_subjects__subject_id=F('subject_id'),
+                group__student_assignments__student__individual_subjects__is_active=True,
+            )
+        )
+        .select_related('subject', 'academic_year', 'group', 'responsible_teacher')
+        .distinct()
+        .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
+    )
+    if not include_inactive:
+        queryset = queryset.filter(is_active=True, group__is_active=True)
+    return queryset
+
+
 def assessment_items_for_teacher(
     teacher: Teacher,
     academic_year: AcademicYear,
     *,
     include_inactive: bool = False,
 ):
-    queryset = (
-        AssessmentItem.objects
-        .filter(
-            responsible_teacher=teacher,
-            academic_year=academic_year,
-            subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
-        )
-        .select_related('subject', 'academic_year', 'group', 'responsible_teacher')
-        .order_by('subject__name', 'group__sort_order', 'group__name', 'sort_order', 'title', 'pk')
+    """Backward-compatible alias for the teacher-visible item queryset."""
+    return assessment_items_visible_to_teacher(
+        teacher,
+        academic_year,
+        include_inactive=include_inactive,
     )
-    if not include_inactive:
-        queryset = queryset.filter(is_active=True, group__is_active=True)
-    return queryset
 
 
 def enrollments_for_assessment_item(
@@ -490,21 +533,36 @@ def assessment_sections_for_teacher(
     enrollment_by_student = {enrollment.student_id: enrollment for enrollment in enrollments}
     enrollment_ids = [enrollment.pk for enrollment in enrollments]
     subject_ids = {item.subject_id for item in items}
-    allowed_group_subject_pairs = set(
-        GroupSubject.objects.filter(
-            group_id__in={enrollment.group_id for enrollment in enrollments if enrollment.group_id},
-            subject_id__in=subject_ids,
-            is_active=True,
-        ).values_list('group_id', 'subject_id')
+    group_subject_queryset = GroupSubject.objects.filter(
+        group_id__in={
+            enrollment.group_id
+            for enrollment in enrollments
+            if enrollment.group_id
+        },
+        subject_id__in=subject_ids,
+        is_active=True,
     )
-    allowed_individual_subject_pairs = set(
-        StudentSubject.objects.filter(
-            student_id__in=all_student_ids,
-            subject_id__in=subject_ids,
-            academic_year=academic_year,
-            is_active=True,
-        ).values_list('student_id', 'subject_id')
+    individual_subject_queryset = StudentSubject.objects.filter(
+        student_id__in=all_student_ids,
+        subject_id__in=subject_ids,
+        academic_year=academic_year,
+        is_active=True,
     )
+    teacher_group_subject_pairs = set()
+    teacher_individual_subject_pairs = set()
+    if teacher is not None:
+        teacher_group_subject_pairs = set(
+            group_subject_queryset.filter(teacher=teacher).values_list(
+                'group_id',
+                'subject_id',
+            )
+        )
+        teacher_individual_subject_pairs = set(
+            individual_subject_queryset.filter(teacher=teacher).values_list(
+                'student_id',
+                'subject_id',
+            )
+        )
 
     result_by_pair = {
         (result.item_id, result.enrollment_id): result
@@ -524,14 +582,25 @@ def assessment_sections_for_teacher(
 
     sections = []
     for item in items:
+        teacher_is_responsible = bool(
+            teacher is None or item.responsible_teacher_id == teacher.pk
+        )
         item_enrollments = [
             enrollment_by_student[student_id]
             for student_id in student_ids_by_group.get(item.group_id, set())
             if student_id in enrollment_by_student
             and (
-                (enrollment_by_student[student_id].group_id, item.subject_id)
-                in allowed_group_subject_pairs
-                or (student_id, item.subject_id) in allowed_individual_subject_pairs
+                # The responsible teacher is directly connected to the work
+                # through AssessmentItem and must see every student explicitly
+                # assigned to that work group. Requiring an additional
+                # GroupSubject/StudentSubject row hid legitimate assignments.
+                teacher_is_responsible
+                or (
+                    (enrollment_by_student[student_id].group_id, item.subject_id)
+                    in teacher_group_subject_pairs
+                    or (student_id, item.subject_id)
+                    in teacher_individual_subject_pairs
+                )
             )
         ]
         item_enrollments.sort(key=lambda enrollment: (enrollment.full_name, enrollment.pk))
@@ -555,6 +624,7 @@ def assessment_sections_for_teacher(
         section = {
             'item': item,
             'rows': rows,
+            'can_edit': teacher_is_responsible,
             'student_count': len(rows),
             'passed_count': passed_count,
             'failed_count': failed_count,

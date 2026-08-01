@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Optional
 
@@ -49,7 +50,14 @@ def html_date_input(attrs=None):
 
 
 def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
-    """Limit an optional orchestra-part field to the selected instrument."""
+    """Configure a dynamically filtered orchestra-part field.
+
+    The browser receives a complete, instrument-scoped option map. This keeps
+    the dependency reliable in Django Admin/Jazzmin even when an AJAX request
+    is blocked by a proxy, stale browser cache or a Select2 lifecycle race.
+    Server-side validation still verifies that the selected part belongs to
+    the selected instrument.
+    """
     if 'orchestra_part' not in form.fields or instrument_field_name not in form.fields:
         return
 
@@ -67,23 +75,42 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
         custom_instrument = (form.instance.custom_instrument or '').strip()
         selected_part_id = form.instance.orchestra_part_id
 
-    queryset = OrchestraPart.objects.none()
-    if instrument_id and not custom_instrument:
+    available_parts = OrchestraPart.objects.filter(is_active=True)
+    if selected_part_id:
         try:
-            queryset = OrchestraPart.objects.filter(
-                instrument_id=instrument_id,
-            ).filter(
+            available_parts = OrchestraPart.objects.filter(
                 Q(is_active=True) | Q(pk=selected_part_id),
-            ).order_by('name')
+            )
         except (TypeError, ValueError):
-            pass
+            available_parts = OrchestraPart.objects.filter(is_active=True)
+    available_parts = available_parts.select_related('instrument').order_by(
+        'instrument__name',
+        'name',
+        'pk',
+    )
+    part_rows = list(
+        available_parts.values('id', 'name', 'instrument_id')
+    )
+    parts_by_instrument: dict[str, list[dict[str, object]]] = {}
+    for part in part_rows:
+        parts_by_instrument.setdefault(str(part['instrument_id']), []).append({
+            'id': part['id'],
+            'name': part['name'],
+        })
 
     field = form.fields['orchestra_part']
     field.required = False
-    field.queryset = queryset
+    # Keep all active choices available to ModelChoiceField. The visible list
+    # is narrowed by JavaScript and clean() rejects a mismatched instrument.
+    field.queryset = available_parts
     field.empty_label = 'Не выбрана'
-    has_available_parts = bool(instrument_id and queryset.exists())
-    field.disabled = bool(custom_instrument or not has_available_parts)
+    has_available_parts = bool(
+        instrument_id
+        and parts_by_instrument.get(str(instrument_id))
+    )
+    # Do not set forms.Field.disabled: Django would then ignore the submitted
+    # value even after JavaScript unlocks the HTML select.
+    field.disabled = False
     field.help_text = (
         'Поле становится доступным только для инструмента, у которого в справочнике '
         'созданы активные партии оркестра.'
@@ -91,7 +118,13 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
     field.widget.attrs.update({
         'data-orchestra-part': '1',
         'data-orchestra-parts-url': reverse('orchestra_part_options_api'),
+        'data-orchestra-parts-map': json.dumps(
+            parts_by_instrument,
+            ensure_ascii=False,
+            separators=(',', ':'),
+        ),
         'data-instrument-field': instrument_field_name,
+        'data-selected-orchestra-part': str(selected_part_id or ''),
         'aria-disabled': 'false' if has_available_parts and not custom_instrument else 'true',
     })
     if custom_instrument or not has_available_parts:
@@ -876,7 +909,7 @@ class CourseApplicationPublicForm(BaseCourseApplicationForm):
         super().__init__(*args, age_limit=True, include_status=False, **kwargs)
 
     class Media:
-        js = ('journal/orchestra_part_dependencies_v2.js',)
+        js = ('journal/orchestra_part_dependencies_v4.js',)
 
 
 class CourseApplicationAdminForm(BaseCourseApplicationForm):
@@ -889,7 +922,7 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
         super().__init__(*args, age_limit=False, include_status=True, **kwargs)
 
     class Media:
-        js = ('journal/orchestra_part_dependencies_v2.js',)
+        js = ('journal/orchestra_part_dependencies_v4.js',)
 
 
 # -----------------------------------------------------------------------------

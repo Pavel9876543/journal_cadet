@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from django.db.models import Q
 
+from .assessment_services import assessment_items_visible_to_teacher
 from .models import (
     AcademicYear,
     AssessmentGroup,
@@ -100,6 +101,12 @@ def _available_items(
     *,
     fixed_teacher: Teacher | None = None,
 ):
+    if fixed_teacher is not None:
+        return assessment_items_visible_to_teacher(
+            fixed_teacher,
+            selection.academic_year,
+        )
+
     items = AssessmentItem.objects.filter(
         academic_year=selection.academic_year,
         subject__assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
@@ -107,8 +114,6 @@ def _available_items(
     ).select_related('subject', 'academic_year', 'group', 'responsible_teacher')
     if selection.academic_year.is_active:
         items = items.filter(is_active=True, group__is_active=True)
-    if fixed_teacher is not None:
-        items = items.filter(responsible_teacher=fixed_teacher)
     return items.distinct()
 
 
@@ -155,6 +160,23 @@ def assessment_filter_querysets(
         ).values('student_id'),
     ).order_by('full_name', 'pk')
 
+    editable_items = group_items
+    if fixed_teacher is not None:
+        editable_items = editable_items.filter(responsible_teacher=fixed_teacher)
+    editable_assessment_groups = AssessmentGroup.objects.filter(
+        pk__in=editable_items.values('group_id'),
+    ).select_related('subject', 'academic_year').distinct().order_by(
+        'subject__name',
+        'sort_order',
+        'name',
+    )
+    editable_students = Student.objects.filter(
+        pk__in=_eligible_enrollments_for_items(
+            selection,
+            editable_items,
+        ).values('student_id'),
+    ).order_by('full_name', 'pk')
+
     return {
         'academic_years': allowed_academic_years.order_by('-starts_on', '-pk'),
         'teachers': teachers,
@@ -162,6 +184,16 @@ def assessment_filter_querysets(
         'assessment_groups': assessment_groups,
         'items': items,
         'students': students,
+        'editable_items': editable_items.order_by(
+            'subject__name',
+            'group__sort_order',
+            'group__name',
+            'sort_order',
+            'title',
+            'pk',
+        ),
+        'editable_assessment_groups': editable_assessment_groups,
+        'editable_students': editable_students,
     }
 
 
@@ -192,7 +224,21 @@ def _eligible_enrollments_for_items(
     return enrollments.select_related('student', 'group', 'academic_year').distinct()
 
 
-def serialize_assessment_filter_options(options: dict) -> dict:
+def serialize_assessment_filter_options(
+    options: dict,
+    *,
+    editable_only: bool = False,
+) -> dict:
+    items = options['editable_items'] if editable_only else options['items']
+    assessment_groups = (
+        options['editable_assessment_groups']
+        if editable_only
+        else options['assessment_groups']
+    )
+    students = options['editable_students'] if editable_only else options['students']
+    subjects = Subject.objects.filter(
+        pk__in=items.values('subject_id'),
+    ).order_by('name')
     return {
         'academic_years': [
             {'id': item.pk, 'label': item.name}
@@ -204,7 +250,7 @@ def serialize_assessment_filter_options(options: dict) -> dict:
         ],
         'subjects': [
             {'id': item.pk, 'label': item.name}
-            for item in options['subjects']
+            for item in subjects
         ],
         'assessment_groups': [
             {
@@ -212,7 +258,7 @@ def serialize_assessment_filter_options(options: dict) -> dict:
                 'label': item.name,
                 'subject_id': item.subject_id,
             }
-            for item in options['assessment_groups']
+            for item in assessment_groups
         ],
         'items': [
             {
@@ -221,10 +267,10 @@ def serialize_assessment_filter_options(options: dict) -> dict:
                 'subject_id': item.subject_id,
                 'assessment_group_id': item.group_id,
             }
-            for item in options['items']
+            for item in items
         ],
         'students': [
             {'id': item.pk, 'label': item.full_name}
-            for item in options['students']
+            for item in students
         ],
     }

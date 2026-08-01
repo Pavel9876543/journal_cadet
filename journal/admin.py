@@ -1090,7 +1090,7 @@ class StudentAdminForm(forms.ModelForm):
     class Media:
         js = (
             'journal/admin_responsive.js',
-            'journal/orchestra_part_dependencies_v2.js',
+            'journal/orchestra_part_dependencies_v4.js',
         )
 
     def clean(self):
@@ -1113,6 +1113,58 @@ class StudentAdminForm(forms.ModelForm):
                 'Выбранная партия не относится к выбранному инструменту.',
             )
         return cleaned_data
+
+
+class AcademicYearHistoryInlineMixin:
+    """Read-only proof that one profile is reused across academic years."""
+
+    extra = 0
+    can_delete = False
+    show_change_link = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class TeacherEnrollmentHistoryInline(AcademicYearHistoryInlineMixin, admin.TabularInline):
+    model = TeacherEnrollment
+    fk_name = 'teacher'
+    fields = ('academic_year', 'is_active', 'created_at', 'updated_at')
+    readonly_fields = fields
+    verbose_name = 'Участие преподавателя в учебном году'
+    verbose_name_plural = 'История участия преподавателя по учебным годам'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('academic_year').order_by(
+            '-academic_year__starts_on',
+            '-academic_year_id',
+        )
+
+
+class StudentEnrollmentHistoryInline(AcademicYearHistoryInlineMixin, admin.TabularInline):
+    model = StudentEnrollment
+    fk_name = 'student'
+    fields = (
+        'academic_year',
+        'group',
+        'is_active',
+        'instrument_name',
+        'orchestra_part',
+        'created_at',
+        'updated_at',
+    )
+    readonly_fields = fields
+    verbose_name = 'Зачисление ученика в учебный год'
+    verbose_name_plural = 'История зачислений ученика по учебным годам'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'academic_year',
+            'group',
+        ).order_by('-academic_year__starts_on', '-academic_year_id')
 
 
 class GroupSubjectAdminForm(forms.ModelForm):
@@ -2974,6 +3026,7 @@ class TeacherAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     )
     autocomplete_fields = ('user',)
     inlines = (
+        TeacherEnrollmentHistoryInline,
         GroupSubjectForTeacherInline,
         StudentSubjectForTeacherInline,
         AssessmentItemForTeacherInline,
@@ -3212,6 +3265,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     )
     autocomplete_fields = ('user', 'group')
     inlines = (
+        StudentEnrollmentHistoryInline,
         StudentSubjectInline,
         StudentAssessmentGroupInline,
         SubjectResultInline,
@@ -3261,7 +3315,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     )
 
     class Media:
-        js = ('journal/orchestra_part_dependencies_v2.js',)
+        js = ('journal/orchestra_part_dependencies_v4.js',)
 
     def get_queryset(self, request):
         academic_year = self.selected_academic_year(request)
