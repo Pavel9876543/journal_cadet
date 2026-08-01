@@ -21,6 +21,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import Count, Q
+from django.http import HttpResponse
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings, tag
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -56,6 +57,7 @@ from journal.account_utils import (
     split_user_name,
 )
 from journal.admin import (
+    AcademicYearHistoryInlineForm,
     AcademicYearAdmin,
     AssessmentGroupForSubjectAdminForm,
     AssessmentItemAdminForm,
@@ -83,6 +85,7 @@ from journal.admin import (
     SubjectResultAdminForm,
     TeacherAdminForm,
 )
+from journal.middleware import ErrorLoggingMiddleware
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -3365,6 +3368,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         grade.refresh_from_db()
         self.assertEqual(grade.value, '5')
+        self.assertEqual(grade.teacher, self.data['teacher'])
 
     def test_journal_table_builder_batches_assignment_queries(self):
         second_group = self.create_group(
@@ -9725,3 +9729,162 @@ class SharedProfilesAcrossYearsRegressionTests(JournalTestDataMixin, TestCase):
         )
         self.assertIn(StudentEnrollmentHistoryInline, StudentAdmin.inlines)
         self.assertIn(TeacherEnrollmentHistoryInline, TeacherAdmin.inlines)
+
+
+class TeacherAccessAndErrorLoggingRegressionTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.data = self.create_base_journal()
+
+    def test_teacher_sees_assigned_grade_even_when_legacy_owner_differs(self):
+        lesson_date = date(2025, 10, 10)
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=lesson_date,
+            value='4',
+        )
+        # Simulate a legacy/admin import where the author field no longer
+        # matches the current assignment. Visibility is assignment-based.
+        Grade.objects.filter(pk=grade.pk).update(
+            teacher=self.data['other_teacher'],
+        )
+
+        self.client.force_login(self.data['teacher'].user)
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        table = next(
+            item
+            for item in response.context['journal_tables']
+            if item['subject'].pk == self.data['solfeggio'].pk
+        )
+        row = next(
+            item
+            for item in table['rows']
+            if item['student'].pk == self.data['student'].pk
+        )
+        self.assertEqual(row['grades_by_date'][lesson_date], '4')
+
+    def test_teacher_can_edit_only_currently_assigned_grade_cells(self):
+        lesson_date = date(2025, 10, 10)
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=lesson_date,
+            value='4',
+        )
+        Grade.objects.filter(pk=grade.pk).update(
+            teacher=self.data['other_teacher'],
+        )
+
+        self.client.force_login(self.data['teacher'].user)
+        response = self.client.post(
+            f"{reverse('journal')}?academic_year={self.data['year'].pk}",
+            {
+                'action': 'inline_edit',
+                (
+                    f'grade__{self.data["solfeggio"].pk}__'
+                    f'{self.data["student"].pk}__{lesson_date.isoformat()}'
+                ): '5',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '5')
+
+    def test_readonly_archived_enrollment_form_does_not_raise_missing_field_value_error(self):
+        old_enrollment = StudentEnrollment.objects.get(
+            student=self.data['student'],
+            academic_year=self.data['year'],
+        )
+        self.create_academic_year(name='2026/2027')
+        old_enrollment.refresh_from_db()
+
+        class EnrollmentHistoryForm(AcademicYearHistoryInlineForm):
+            class Meta:
+                model = StudentEnrollment
+                fields = ()
+
+        form = EnrollmentHistoryForm(data={}, instance=old_enrollment)
+
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    def test_unhandled_exception_is_written_to_error_log(self):
+        request = RequestFactory().post('/admin/journal/student/419/change/')
+        request.user = self.data['teacher'].user
+        request.request_id = 'student-change-error'
+        middleware = ErrorLoggingMiddleware(lambda current_request: HttpResponse())
+
+        middleware.process_exception(
+            request,
+            ValueError("'StudentEnrollmentForm' has no field named 'academic_year'."),
+        )
+
+        entry = ErrorLog.objects.get(request_id='student-change-error')
+        self.assertEqual(entry.status_code, 500)
+        self.assertEqual(entry.path, '/admin/journal/student/419/change/')
+        self.assertIn('StudentEnrollmentForm', entry.message)
+        self.assertIn('ValueError', entry.exception)
+        self.assertFalse(entry.metadata['handled'])
+
+    def test_handled_http_error_response_is_written_to_error_log(self):
+        request = RequestFactory().post('/journal/handled-error/')
+        request.user = self.data['teacher'].user
+        request.request_id = 'handled-response-error'
+        middleware = ErrorLoggingMiddleware(lambda current_request: HttpResponse())
+
+        response = middleware.process_response(
+            request,
+            HttpResponse('Ошибка данных', status=409),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        entry = ErrorLog.objects.get(request_id='handled-response-error')
+        self.assertEqual(entry.status_code, 409)
+        self.assertTrue(entry.metadata['handled'])
+
+    def test_admin_and_registration_reject_same_mismatched_orchestra_part(self):
+        selected_instrument = self.data['instrument']
+        another_instrument = self.create_instrument(name='Домра')
+        wrong_part = OrchestraPart.objects.create(
+            instrument=another_instrument,
+            name='Первая домра',
+        )
+
+        admin_form = StudentAdminForm(data={
+            'full_name': 'Проверочный Ученик',
+            'gender': Student.GENDER_MALE,
+            'birth_date': '2010-01-01',
+            'city_church': '',
+            'music_education': Student.MUSIC_EDUCATION_SELF,
+            'student_phone': '',
+            'parent_contacts': '',
+            'comments': '',
+            'group': self.data['group'].pk,
+            'instrument': selected_instrument.pk,
+            'custom_instrument': '',
+            'orchestra_part': wrong_part.pk,
+            'is_active': 'on',
+            'user': '',
+        })
+        registration_form = CourseApplicationPublicForm(data={
+            **self.application_form_payload(
+                instrument_reference=selected_instrument,
+            ),
+            'orchestra_part': wrong_part.pk,
+        })
+
+        self.assertFalse(admin_form.is_valid())
+        self.assertFalse(registration_form.is_valid())
+        self.assertEqual(
+            admin_form.errors['orchestra_part'],
+            registration_form.errors['orchestra_part'],
+        )
