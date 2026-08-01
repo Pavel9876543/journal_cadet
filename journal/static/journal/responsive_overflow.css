@@ -2,6 +2,52 @@
  * Двухосевая прокрутка всех таблиц на телефонах и планшетах.
  * Размеры текста и элементов управления задаются профильными layout-файлами.
  */
+
+/*
+ * Базовая защита рабочего кабинета от растягивания широкими таблицами.
+ * Администратор и преподаватель видят больше блоков, а назначение группы
+ * произведений добавляет дополнительные таблицы. Без min-width: 0 один такой
+ * блок мог расширить всю CSS-grid и создать впечатление, что стили страницы
+ * полностью сбросились.
+ */
+body.journal-workspace {
+    max-width: 100%;
+    overflow-x: clip;
+}
+
+body.journal-workspace .app-shell,
+body.journal-workspace .main,
+body.journal-workspace .toolbar,
+body.journal-workspace .quick-entry,
+body.journal-workspace .table-stack,
+body.journal-workspace .table-panel,
+body.journal-workspace .workspace-section,
+body.journal-workspace details,
+body.journal-workspace section,
+body.journal-workspace article,
+body.journal-workspace form {
+    min-width: 0;
+    max-width: 100%;
+}
+
+body.journal-workspace .table-scroll,
+body.journal-workspace .journal-responsive-table,
+body.journal-workspace .table-responsive {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+body.journal-workspace .table-scroll > table,
+body.journal-workspace .journal-responsive-table > table,
+body.journal-workspace .table-responsive > table {
+    min-width: 100%;
+}
+
 @media (max-width: 767.98px),
        (max-width: 1023.98px) and (orientation: landscape) and (pointer: coarse) {
     .table-scroll,

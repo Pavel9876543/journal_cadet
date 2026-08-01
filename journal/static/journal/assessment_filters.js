@@ -63,6 +63,9 @@
             if (changedField) {
                 url.searchParams.set('changed', changedField);
             }
+            if (form.dataset.assessmentEditableOnly === '1') {
+                url.searchParams.set('editable', '1');
+            }
             return url;
         }
 

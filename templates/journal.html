@@ -1294,7 +1294,7 @@
 </style>
 {% include "journal/device_styles.html" %}
 </head>
-<body>
+<body class="journal-workspace journal-workspace--{{ role_mode|default:'unknown' }}">
 <svg class="icon-sprite" aria-hidden="true">
     <symbol id="icon-book" viewBox="0 0 24 24">
         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
@@ -1796,7 +1796,7 @@
                         </div>
                         <div class="dependency-status" data-assessment-filter-status role="status" aria-live="polite"></div>
                     </form>
-                    {% if can_edit_journal %}
+                    {% if can_edit_journal and assessment_has_editable_items %}
                         <section class="quick-entry assessment-quick-entry" aria-labelledby="quick-assessment-title">
                             <div class="section-head">
                                 <div class="section-title">
@@ -1815,6 +1815,7 @@
                                     class="grade-form assessment-result-form"
                                     data-save-context="quick-assessment"
                                     data-assessment-filter-url="{% url 'assessment_filter_options_api' %}"
+                                    data-assessment-editable-only="1"
                                     data-fixed-teacher="{% if assessment_fixed_teacher %}{{ assessment_fixed_teacher.id }}{% endif %}"
                                     data-fixed-academic-year="{{ selected_academic_year_id }}"
                                 >
@@ -1824,7 +1825,7 @@
                                         <label for="quick_assessment_group">Оркестр (группа произведений)</label>
                                         <select id="quick_assessment_group" name="assessment_group" required data-searchable-select data-search-placeholder="Найти оркестр">
                                             <option value="">Выберите оркестр</option>
-                                            {% for group in assessment_filter_options.assessment_groups %}
+                                            {% for group in assessment_filter_options.editable_assessment_groups %}
                                                 <option value="{{ group.id }}" {% if assessment_selection.assessment_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
                                             {% endfor %}
                                         </select>
@@ -1833,7 +1834,7 @@
                                         <label for="quick_assessment_item">Произведение</label>
                                         <select id="quick_assessment_item" name="assessment_item" required data-searchable-select data-search-placeholder="Найти произведение">
                                             <option value="">Выберите произведение</option>
-                                            {% for item in assessment_filter_options.items %}
+                                            {% for item in assessment_filter_options.editable_items %}
                                                 <option value="{{ item.id }}" {% if assessment_selection.item_id == item.id %}selected{% endif %}>{{ item.title }}</option>
                                             {% endfor %}
                                         </select>
@@ -1842,7 +1843,7 @@
                                         <label for="quick_assessment_student">Ученик</label>
                                         <select id="quick_assessment_student" name="assessment_student" required data-searchable-select data-search-placeholder="Найти ученика">
                                             <option value="">Выберите ученика</option>
-                                            {% for student in assessment_filter_options.students %}
+                                            {% for student in assessment_filter_options.editable_students %}
                                                 <option value="{{ student.id }}" {% if assessment_selection.student_id == student.id %}selected{% endif %}>{{ student.full_name }}</option>
                                             {% endfor %}
                                         </select>
@@ -1888,6 +1889,9 @@
                                     <p>Произведение / элемент: {{ section.item.title }}</p>
                                 </div>
                                 <div class="assessment-card-metrics" aria-label="Результаты по произведению">
+                                    {% if assessment_fixed_teacher and not section.can_edit %}
+                                        <span class="assessment-status">Только просмотр</span>
+                                    {% endif %}
                                     <span class="assessment-status assessment-status--passed">Зачёт: {{ section.passed_count }}</span>
                                     <span class="assessment-status assessment-status--failed">Незачёт: {{ section.failed_count }}</span>
                                     <span class="assessment-status">Не оценено: {{ section.not_evaluated_count }}</span>
@@ -1910,7 +1914,7 @@
                                             <td>{% if row.enrollment.group %}{{ row.enrollment.group.name }}{% else %}—{% endif %}</td>
                                             <td>{% if row.final_result %}{{ row.final_result.final_grade|default:'Не рассчитано' }}{% else %}Не рассчитано{% endif %}</td>
                                             <td>
-                                                {% if can_edit_journal %}
+                                                {% if can_edit_journal and section.can_edit %}
                                                     <form method="post" class="assessment-actions" data-save-context="assessment-{{ section.item.id }}-{{ row.student.id }}">
                                                         {% csrf_token %}
                                                         <input type="hidden" name="action" value="assessment_result">

@@ -478,7 +478,10 @@ def _assessment_filter_options_api_sync(request):
         allowed_academic_years=academic_years,
         fixed_teacher=fixed_teacher,
     )
-    return JsonResponse(serialize_assessment_filter_options(options))
+    return JsonResponse(serialize_assessment_filter_options(
+        options,
+        editable_only=request.GET.get('editable') == '1',
+    ))
 
 
 def _assessment_options_api_sync(request):
@@ -987,6 +990,10 @@ def _assessment_workspace_context(
         'assessment_sections': sections,
         'assessment_summary': assessment_summary_for_teacher(sections),
         'assessment_fixed_teacher': fixed_teacher,
+        'assessment_has_editable_items': any(
+            section.get('can_edit', False)
+            for section in sections
+        ),
     }
 
 
