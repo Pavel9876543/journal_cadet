@@ -2689,12 +2689,12 @@ class PasswordRecoveryContact(models.Model):
         help_text='Укажите один или несколько мессенджеров, например: Telegram, WhatsApp.',
     )
     messenger_username = models.CharField(
-        'Имя пользователя в мессенджере',
+        'Имя пользователя в Telegram',
         max_length=100,
         blank=True,
         help_text=(
-            'Укажите имя без символа @. Оно используется для прямой ссылки, '
-            'когда выбранный мессенджер поддерживает имена пользователей.'
+            'Укажите имя Telegram без символа @. Для Telegram оно имеет приоритет '
+            'над номером телефона; для остальных мессенджеров всегда используется телефон.'
         ),
     )
     is_active = models.BooleanField('Показывать пользователям', default=True)
@@ -2743,6 +2743,19 @@ class PasswordRecoveryContact(models.Model):
     def phone_uri(self) -> str:
         return f'tel:+{self.phone_digits}' if self.phone_digits else ''
 
+    @staticmethod
+    def _is_telegram_name(name: str) -> bool:
+        normalized = name.casefold().replace('ё', 'е')
+        return 'telegram' in normalized or normalized in {'tg', 'телеграм'}
+
+    @property
+    def has_telegram_messenger(self) -> bool:
+        return any(
+            self._is_telegram_name(raw_name.strip())
+            for raw_name in self.messengers.split(',')
+            if raw_name.strip()
+        )
+
     @property
     def messenger_links(self) -> list[dict[str, str]]:
         username = quote(self.messenger_username, safe='._-') if self.messenger_username else ''
@@ -2753,9 +2766,9 @@ class PasswordRecoveryContact(models.Model):
             if not name:
                 continue
             normalized = name.casefold().replace('ё', 'е')
-            if 'telegram' in normalized or normalized in {'tg', 'телеграм'}:
+            if self._is_telegram_name(name):
                 url = f'https://t.me/{username}' if username else (
-                    f'tg://resolve?phone={digits}' if digits else self.phone_uri
+                    f'tg://resolve?phone=%2B{digits}' if digits else self.phone_uri
                 )
             elif 'whatsapp' in normalized or 'ватсап' in normalized or 'вотсап' in normalized:
                 url = f'https://wa.me/{digits}' if digits else self.phone_uri

@@ -265,12 +265,12 @@ def write_configuration_sheets(
             ('Администратор', lambda item: item.name),
             ('Телефон', lambda item: item.phone),
             ('Мессенджеры', lambda item: item.messengers),
-            ('Имя пользователя', lambda item: item.messenger_username),
+            ('Имя пользователя в Telegram', lambda item: item.messenger_username),
             ('Показывать пользователям', lambda item: item.is_active),
             ('Порядок показа', lambda item: item.display_order),
             ('Дата изменения', lambda item: item.updated_at),
         ],
-        text_headers={'Телефон', 'Имя пользователя'},
+        text_headers={'Телефон', 'Имя пользователя в Telegram'},
     )
 
 

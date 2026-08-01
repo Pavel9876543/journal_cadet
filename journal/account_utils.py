@@ -24,12 +24,13 @@ def _name_parts(full_name: str) -> list[str]:
 
 
 def build_display_name_from_full_name(full_name: str) -> str:
+    """Return the login/display name for ``Фамилия Имя Отчество`` input."""
     parts = _name_parts(full_name)
     if not parts:
         return ''
     if len(parts) == 1:
         return parts[0]
-    return f'{parts[-1]} {parts[0]}'
+    return f'{parts[0]} {parts[1]}'
 
 
 def build_username_from_full_name(full_name: str, *, existing_usernames: set[str] | None = None) -> str:
@@ -59,12 +60,13 @@ def build_course_application_login(last_name: str, first_name: str, *, existing_
 
 
 def split_user_name(full_name: str) -> tuple[str, str]:
+    """Map ``Фамилия Имя Отчество`` to Django's first_name/last_name."""
     parts = _name_parts(full_name)
     if not parts:
         return '', ''
     if len(parts) == 1:
         return parts[0], ''
-    return parts[0], parts[-1]
+    return parts[1], parts[0]
 
 
 def generate_temporary_password(length: int = 8) -> str:
@@ -181,7 +183,8 @@ def display_name_for_user(user: User) -> str:
     if teacher_profile is not None:
         return build_display_name_from_full_name(teacher_profile.full_name)
 
-    full_name = user.get_full_name().strip()
-    if full_name:
-        return build_display_name_from_full_name(full_name)
+    if user.last_name or user.first_name:
+        return ' '.join(
+            part for part in (user.last_name.strip(), user.first_name.strip()) if part
+        )
     return user.username
