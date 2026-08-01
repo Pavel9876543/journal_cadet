@@ -120,6 +120,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'journal.middleware.ErrorLoggingMiddleware',
     'journal.middleware.UserFriendlyErrorResponseMiddleware',
     'journal.middleware.NoCacheHtmlMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -414,7 +415,7 @@ TRUSTED_PROXY_COUNT = _env_positive_int('TRUSTED_PROXY_COUNT', 1)
 ERROR_LOG_MAX_RECORDS = _env_positive_int('ERROR_LOG_MAX_RECORDS', 1000)
 if ERROR_LOG_MAX_RECORDS > 1000:
     raise ImproperlyConfigured('ERROR_LOG_MAX_RECORDS cannot be greater than 1000.')
-ERROR_LOGGING_ENABLED = _env_bool('ERROR_LOGGING_ENABLED', IS_PRODUCTION_ENV)
+ERROR_LOGGING_ENABLED = _env_bool('ERROR_LOGGING_ENABLED', not IS_TEST_ENV)
 DJANGO_LOG_LEVEL = os.getenv('DJANGO_LOG_LEVEL', 'INFO').strip().upper()
 if DJANGO_LOG_LEVEL not in {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}:
     raise ImproperlyConfigured(

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.core.exceptions import PermissionDenied, SuspiciousOperation, ValidationError
+from django.http import Http404
+from django.utils.deprecation import MiddlewareMixin
+
+from .error_logging import persist_error
 
 
 class NoCacheDevelopmentStaticMiddleware:
@@ -73,6 +78,53 @@ class RequestIdMiddleware:
         request.request_id = self._incoming_request_id(request) or uuid4().hex[:16]
         response = self.get_response(request)
         response['X-Request-ID'] = request.request_id
+        return response
+
+
+class ErrorLoggingMiddleware(MiddlewareMixin):
+    """Persist both unhandled exceptions and handled HTTP error responses."""
+
+    @staticmethod
+    def _status_for_exception(exception: BaseException) -> int:
+        if isinstance(exception, Http404):
+            return 404
+        if isinstance(exception, PermissionDenied):
+            return 403
+        if isinstance(exception, (SuspiciousOperation, ValidationError)):
+            return 400
+        return 500
+
+    def process_exception(self, request, exception):
+        persist_error(
+            request=request,
+            message=str(exception) or exception.__class__.__name__,
+            exception=exception,
+            status_code=self._status_for_exception(exception),
+            logger_name='journal.request.exception',
+            metadata={
+                'handled': False,
+                'exception_type': exception.__class__.__name__,
+            },
+            max_records=getattr(settings, 'ERROR_LOG_MAX_RECORDS', 1000),
+        )
+        return None
+
+    def process_response(self, request, response):
+        if (
+            response.status_code >= 400
+            and not getattr(request, '_journal_error_logged', False)
+        ):
+            persist_error(
+                request=request,
+                message=(
+                    getattr(response, 'reason_phrase', '')
+                    or f'HTTP {response.status_code}'
+                ),
+                status_code=response.status_code,
+                logger_name='journal.request.response',
+                metadata={'handled': True},
+                max_records=getattr(settings, 'ERROR_LOG_MAX_RECORDS', 1000),
+            )
         return response
 
 

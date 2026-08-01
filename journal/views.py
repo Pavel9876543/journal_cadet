@@ -45,6 +45,7 @@ from .academic_year_context import (
     get_selected_admin_academic_year,
 )
 from .account_utils import user_has_temporary_credential
+from .error_logging import log_handled_error
 from .assignment_options import (
     active_group_queryset,
     active_student_queryset,
@@ -1056,6 +1057,12 @@ def _handle_assessment_result_post(
             )
             messages.success(request, 'Результат сохранён. Итоговая оценка пересчитана.')
     except (PermissionDenied, ValidationError) as exc:
+        log_handled_error(
+            request,
+            exc,
+            status_code=403 if isinstance(exc, PermissionDenied) else 400,
+            logger_name='journal.assessment',
+        )
         error_messages = getattr(exc, 'messages', None) or [str(exc)]
         messages.error(request, '; '.join(error_messages))
     return _redirect_current_journal(request)
@@ -1487,6 +1494,11 @@ def _save_inline_grades(
                 try:
                     normalized_value = _normalize_final_grade_value(subject, value)
                 except ValidationError as exc:
+                    log_handled_error(
+                        request,
+                        exc,
+                        logger_name='journal.inline_grades',
+                    )
                     messages.error(request, '; '.join(exc.messages))
                     transaction.set_rollback(True)
                     return False
@@ -1515,6 +1527,11 @@ def _save_inline_grades(
                 try:
                     result.save()
                 except ValidationError as exc:
+                    log_handled_error(
+                        request,
+                        exc,
+                        logger_name='journal.inline_grades',
+                    )
                     messages.error(request, '; '.join(exc.messages))
                     transaction.set_rollback(True)
                     return False
@@ -1543,6 +1560,7 @@ def _save_inline_grades(
                     student_id=student_id,
                     subject_id=subject_id,
                     date=grade_date,
+                    academic_year=selected_academic_year,
                     student_id__in=student_ids,
                     subject_id__in=subject_ids,
                 )
@@ -1552,8 +1570,18 @@ def _save_inline_grades(
             if grade is None:
                 continue
 
-            if role_mode == 'teacher' and (teacher is None or grade.teacher_id != teacher.pk):
-                continue
+            if role_mode == 'teacher':
+                if teacher is None:
+                    continue
+                group_subject_key = (
+                    enrollment_group_by_student.get(student_id),
+                    subject_id,
+                )
+                if (
+                    group_subject_key not in teacher_group_subject_pairs
+                    and (student_id, subject_id) not in teacher_individual_subject_pairs
+                ):
+                    continue
 
             if normalized_grade_value == '':
                 grade.delete()
@@ -1564,9 +1592,19 @@ def _save_inline_grades(
                 continue
 
             grade.value = normalized_grade_value
+            if role_mode == 'teacher' and teacher is not None:
+                # Legacy/admin imports may carry an outdated author. Once the
+                # currently assigned teacher edits the cell, align ownership
+                # with the active assignment so model validation remains true.
+                grade.teacher = teacher
             try:
                 grade.save()
             except ValidationError as exc:
+                log_handled_error(
+                    request,
+                    exc,
+                    logger_name='journal.inline_grades',
+                )
                 messages.error(request, '; '.join(exc.messages))
                 transaction.set_rollback(True)
                 return False
@@ -1881,7 +1919,6 @@ def _journal_for_teacher(
     grade_qs = (
         Grade.objects
         .filter(
-            teacher=teacher,
             enrollment_id__in=[enrollment.pk for enrollment in enrollments],
             subject__in=subjects_to_show,
             academic_year=selected_academic_year,
@@ -2121,6 +2158,13 @@ def _handle_grade_form(
             grade_form.save()
             messages.success(request, 'Оценка успешно добавлена.')
             return _redirect_current_journal(request)
+
+        log_handled_error(
+            request,
+            ValidationError('Форма добавления оценки содержит ошибки.'),
+            logger_name='journal.grade_form',
+            metadata={'errors': grade_form.errors.get_json_data()},
+        )
 
         return grade_form
 

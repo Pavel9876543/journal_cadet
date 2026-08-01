@@ -36,10 +36,12 @@ from .assignment_options import (
     student_subject_queryset,
 )
 from .assessment_services import enrollments_for_assessment_item
+from .error_logging import log_handled_error
 from .forms import (
     CourseApplicationAdminForm,
     CourseRegistrationSettingsForm,
     configure_instrument_selection_fields,
+    clean_instrument_selection,
     html_date_input,
 )
 from .grade_options import (
@@ -117,12 +119,46 @@ class JournalAdminDescriptionMixin(RelatedRecordsAdminMixin):
         return super().changelist_view(request, extra_context=extra_context)
 
     def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
-        return super().changeform_view(
+        response = super().changeform_view(
             request,
             object_id=object_id,
             form_url=form_url,
             extra_context=self._year_extra_context(request, extra_context),
         )
+        if request.method == 'POST' and getattr(response, 'status_code', 200) == 200:
+            context = getattr(response, 'context_data', None) or {}
+            admin_form = context.get('adminform')
+            form_errors = (
+                admin_form.form.errors.get_json_data()
+                if admin_form is not None and admin_form.form.errors
+                else {}
+            )
+            inline_errors = []
+            for inline_admin_formset in context.get('inline_admin_formsets', ()):
+                formset = inline_admin_formset.formset
+                if formset.non_form_errors() or any(form.errors for form in formset.forms):
+                    inline_errors.append({
+                        'prefix': formset.prefix,
+                        'non_form_errors': list(formset.non_form_errors()),
+                        'forms': [
+                            form.errors.get_json_data()
+                            for form in formset.forms
+                            if form.errors
+                        ],
+                    })
+            if form_errors or inline_errors:
+                log_handled_error(
+                    request,
+                    ValidationError('Форма администратора содержит ошибки.'),
+                    logger_name='journal.admin.form',
+                    metadata={
+                        'model': self.model._meta.label,
+                        'object_id': object_id or '',
+                        'form_errors': form_errors,
+                        'inline_errors': inline_errors,
+                    },
+                )
+        return response
 
     @staticmethod
     def _keep_change_form_open(request):
@@ -1064,24 +1100,7 @@ class StudentAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        instrument = cleaned_data.get('instrument')
-        custom = (cleaned_data.get('custom_instrument') or '').strip()
-        orchestra_part = cleaned_data.get('orchestra_part')
-        cleaned_data['custom_instrument'] = custom
-        if instrument and custom:
-            self.add_error('custom_instrument', 'Оставьте только один способ указания инструмента.')
-        elif not instrument and not custom:
-            self.add_error('custom_instrument', 'Выберите инструмент или укажите собственный.')
-        if instrument:
-            cleaned_data['custom_instrument'] = ''
-        if custom:
-            cleaned_data['orchestra_part'] = None
-        elif orchestra_part and instrument and orchestra_part.instrument_id != instrument.pk:
-            self.add_error(
-                'orchestra_part',
-                'Выбранная партия не относится к выбранному инструменту.',
-            )
-        return cleaned_data
+        return clean_instrument_selection(self, cleaned_data, 'instrument')
 
 
 class AcademicYearHistoryInlineMixin:
@@ -1098,8 +1117,26 @@ class AcademicYearHistoryInlineMixin:
         return False
 
 
+class AcademicYearHistoryInlineForm(forms.ModelForm):
+    """Do not revalidate immutable archived rows on a parent change POST.
+
+    Django still constructs ModelForms for read-only inline history rows. A
+    normal ``ModelForm._post_clean`` calls ``instance.full_clean()`` and may
+    receive a validation error for ``academic_year`` even though that field is
+    intentionally absent from the editable form. Django then raises ValueError
+    while trying to attach the error to a non-existent field. Existing history
+    rows are immutable, so unchanged rows must bypass model revalidation.
+    """
+
+    def _post_clean(self):
+        if self.instance and self.instance.pk:
+            return
+        super()._post_clean()
+
+
 class TeacherEnrollmentHistoryInline(AcademicYearHistoryInlineMixin, admin.TabularInline):
     model = TeacherEnrollment
+    form = AcademicYearHistoryInlineForm
     fk_name = 'teacher'
     fields = ('academic_year', 'is_active', 'created_at', 'updated_at')
     readonly_fields = fields
@@ -1115,6 +1152,7 @@ class TeacherEnrollmentHistoryInline(AcademicYearHistoryInlineMixin, admin.Tabul
 
 class StudentEnrollmentHistoryInline(AcademicYearHistoryInlineMixin, admin.TabularInline):
     model = StudentEnrollment
+    form = AcademicYearHistoryInlineForm
     fk_name = 'student'
     fields = (
         'academic_year',

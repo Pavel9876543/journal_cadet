@@ -210,6 +210,45 @@ def configure_instrument_selection_fields(
         })
 
 
+def clean_instrument_selection(
+    form: forms.BaseForm,
+    cleaned_data: dict,
+    instrument_field_name: str,
+) -> dict:
+    """Validate instrument/custom instrument/orchestra part identically.
+
+    This helper is shared by the public course-registration form and the
+    student form in Django Admin. Keeping one server-side rule set prevents a
+    value accepted by one workflow from being rejected by the other.
+    """
+    instrument = cleaned_data.get(instrument_field_name)
+    custom = (cleaned_data.get('custom_instrument') or '').strip()
+    orchestra_part = cleaned_data.get('orchestra_part')
+    cleaned_data['custom_instrument'] = custom
+
+    if instrument and custom:
+        form.add_error(
+            'custom_instrument',
+            'Нельзя одновременно выбрать инструмент из справочника и указать собственный.',
+        )
+    elif not instrument and not custom:
+        form.add_error(
+            'custom_instrument',
+            'Выберите инструмент из справочника или укажите собственное название.',
+        )
+
+    if instrument:
+        cleaned_data['custom_instrument'] = ''
+    if custom:
+        cleaned_data['orchestra_part'] = None
+    elif orchestra_part and instrument and orchestra_part.instrument_id != instrument.pk:
+        form.add_error(
+            'orchestra_part',
+            'Выбранная партия не относится к выбранному инструменту.',
+        )
+    return cleaned_data
+
+
 # -----------------------------------------------------------------------------
 # Общие queryset/helper-функции для форм журнала
 # -----------------------------------------------------------------------------
@@ -914,30 +953,11 @@ class BaseCourseApplicationForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        reference = cleaned_data.get('instrument_reference')
-        custom = (cleaned_data.get('custom_instrument') or '').strip()
-        orchestra_part = cleaned_data.get('orchestra_part')
-        cleaned_data['custom_instrument'] = custom
-        if reference and custom:
-            self.add_error(
-                'custom_instrument',
-                'Нельзя одновременно выбрать инструмент из справочника и указать собственный.',
-            )
-        elif not reference and not custom:
-            self.add_error(
-                'custom_instrument',
-                'Выберите инструмент или укажите собственное название.',
-            )
-        if reference:
-            cleaned_data['custom_instrument'] = ''
-        if custom:
-            cleaned_data['orchestra_part'] = None
-        elif orchestra_part and reference and orchestra_part.instrument_id != reference.pk:
-            self.add_error(
-                'orchestra_part',
-                'Выбранная партия не относится к выбранному инструменту.',
-            )
-        return cleaned_data
+        return clean_instrument_selection(
+            self,
+            cleaned_data,
+            'instrument_reference',
+        )
 
     def clean_student_phone(self):
         return normalize_phone_number(self.cleaned_data['student_phone'])
