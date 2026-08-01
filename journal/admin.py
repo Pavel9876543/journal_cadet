@@ -1090,7 +1090,7 @@ class StudentAdminForm(forms.ModelForm):
     class Media:
         js = (
             'journal/admin_responsive.js',
-            'journal/orchestra_part_dependencies.js',
+            'journal/orchestra_part_dependencies_v2.js',
         )
 
     def clean(self):
@@ -3261,7 +3261,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     )
 
     class Media:
-        js = ('journal/orchestra_part_dependencies.js',)
+        js = ('journal/orchestra_part_dependencies_v2.js',)
 
     def get_queryset(self, request):
         academic_year = self.selected_academic_year(request)

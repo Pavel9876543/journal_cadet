@@ -2977,7 +2977,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         response = self.client.get(reverse('course_registration'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'journal/orchestra_part_dependencies.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v2.js')
         self.assertContains(response, 'data-orchestra-part="1"')
 
     def test_grade_options_api_keeps_upstream_groups_independent_of_children(self):
@@ -5057,7 +5057,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             [domra_part],
         )
         self.assertIn(
-            'journal/orchestra_part_dependencies.js',
+            'journal/orchestra_part_dependencies_v2.js',
             StudentAdminForm.Media.js,
         )
 
@@ -5105,7 +5105,18 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'data-instrument-reference="1"')
         self.assertContains(response, 'data-custom-instrument="1"')
         self.assertContains(response, 'data-orchestra-part="1"')
-        self.assertContains(response, 'journal/orchestra_part_dependencies.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v2.js')
+
+    def test_orchestra_part_script_refreshes_jazzmin_select2_after_api_load(self):
+        javascript = Path(
+            'journal/static/journal/orchestra_part_dependencies_v2.js'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn("trigger('change.select2')", javascript)
+        self.assertIn("select2:select select2:clear", javascript)
+        self.assertIn("new URL(endpoint, window.location.origin)", javascript)
+        self.assertIn("parts.forEach(function (part)", javascript)
+        self.assertIn("field.removeAttribute('disabled')", javascript)
 
     def test_used_subject_delete_page_confirms_and_cascades_related_data(self):
         data = self.create_base_journal()

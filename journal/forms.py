@@ -876,7 +876,7 @@ class CourseApplicationPublicForm(BaseCourseApplicationForm):
         super().__init__(*args, age_limit=True, include_status=False, **kwargs)
 
     class Media:
-        js = ('journal/orchestra_part_dependencies.js',)
+        js = ('journal/orchestra_part_dependencies_v2.js',)
 
 
 class CourseApplicationAdminForm(BaseCourseApplicationForm):
@@ -889,7 +889,7 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
         super().__init__(*args, age_limit=False, include_status=True, **kwargs)
 
     class Media:
-        js = ('journal/orchestra_part_dependencies.js',)
+        js = ('journal/orchestra_part_dependencies_v2.js',)
 
 
 # -----------------------------------------------------------------------------
