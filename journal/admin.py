@@ -1047,6 +1047,10 @@ class StudentAdminForm(forms.ModelForm):
 
         if 'instrument' in self.fields:
             self.fields['instrument'].empty_label = 'Другой инструмент'
+            self.fields['instrument'].help_text = (
+                'Выберите инструмент из справочника. Если нужного значения нет, '
+                'выберите «Другой инструмент» и заполните поле ниже.'
+            )
             self.fields['instrument'].widget.attrs['data-instrument-reference'] = '1'
         if 'custom_instrument' in self.fields:
             self.fields['custom_instrument'].widget.attrs.update({
@@ -1175,7 +1179,12 @@ class GroupSubjectAdminForm(forms.ModelForm):
 class GroupSubjectForSubjectAdminForm(GroupSubjectAdminForm):
     """Inline form with complete controls for the related study group."""
 
+    parent_subject = None
+
     def __init__(self, *args, **kwargs):
+        instance = kwargs.get('instance')
+        if self.parent_subject is not None and instance is not None and not instance.subject_id:
+            instance.subject = self.parent_subject
         super().__init__(*args, **kwargs)
         group_field = self.fields.get('group')
         if group_field is None:
@@ -2044,15 +2053,25 @@ class GroupSubjectForTeacherInline(SelectedAcademicYearGroupSubjectInlineMixin, 
 
 class GroupSubjectForSubjectInline(SelectedAcademicYearGroupSubjectInlineMixin, ArchivedAcademicYearInlineMixin, admin.TabularInline):
     model = GroupSubject
+    fk_name = 'subject'
     form = GroupSubjectForSubjectAdminForm
     formset = GroupSubjectInlineFormSet
-    extra = 0
+    extra = 1
     fields = ('group', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
     classes = ('collapse',)
     verbose_name = 'Групповой предмет'
     verbose_name_plural = 'Группы, где есть этот предмет'
     can_delete = True
+
+    def get_formset(self, request, obj=None, **kwargs):
+        base_form = self.form
+        kwargs['form'] = type(
+            'InlineGroupSubjectForSubjectAdminForm',
+            (base_form,),
+            {'parent_subject': obj},
+        )
+        return super().get_formset(request, obj, **kwargs)
 
 
 class StudentSubjectInline(

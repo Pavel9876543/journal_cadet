@@ -95,15 +95,9 @@
                 </div>
 
                 {% block after_field_sets %}{% endblock %}
-                {% block inline_field_sets %}
-                    {% if inline_admin_formsets %}
-                        <div class="col-12 journal-inline-sections">
-                            {% for inline_admin_formset in inline_admin_formsets %}
-                                {% include inline_admin_formset.opts.template %}
-                            {% endfor %}
-                        </div>
-                    {% endif %}
-                {% endblock %}
+                {# Jazzmin renders inline formsets inside get_changeform_template. #}
+                {# Rendering them here a second time duplicates controls and management forms. #}
+                {% block inline_field_sets %}{% endblock %}
                 {% block after_related_objects %}
                     {% if journal_related_records_template %}
                         <div class="col-12">

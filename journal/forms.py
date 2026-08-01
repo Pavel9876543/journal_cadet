@@ -82,7 +82,8 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
     field.required = False
     field.queryset = queryset
     field.empty_label = 'Не выбрана'
-    field.disabled = bool(custom_instrument or not instrument_id)
+    has_available_parts = bool(instrument_id and queryset.exists())
+    field.disabled = bool(custom_instrument or not has_available_parts)
     field.help_text = (
         'Выберите партию для указанного инструмента или оставьте поле пустым, '
         'если ученик едет на курсы впервые.'
