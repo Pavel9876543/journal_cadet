@@ -2982,7 +2982,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         response = self.client.get(reverse('course_registration'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'journal/orchestra_part_dependencies_v4.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v5.js')
         self.assertContains(response, 'data-orchestra-part="1"')
 
     def test_grade_options_api_keeps_upstream_groups_independent_of_children(self):
@@ -5069,7 +5069,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             [{'id': domra_part.pk, 'name': domra_part.name}],
         )
         self.assertIn(
-            'journal/orchestra_part_dependencies_v4.js',
+            'journal/orchestra_part_dependencies_v5.js',
             StudentAdminForm.Media.js,
         )
 
@@ -5117,11 +5117,11 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'data-instrument-reference="1"')
         self.assertContains(response, 'data-custom-instrument="1"')
         self.assertContains(response, 'data-orchestra-part="1"')
-        self.assertContains(response, 'journal/orchestra_part_dependencies_v4.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v5.js')
 
     def test_orchestra_part_script_refreshes_jazzmin_select2_after_api_load(self):
         javascript = Path(
-            'journal/static/journal/orchestra_part_dependencies_v4.js'
+            'journal/static/journal/orchestra_part_dependencies_v5.js'
         ).read_text(encoding='utf-8')
 
         self.assertIn("wrapped.trigger('change')", javascript)
@@ -9372,11 +9372,11 @@ class CabinetAndDependencyRegressionTests(JournalTestDataMixin, TestCase):
         self.assertIn(domra_part, field.queryset)
         self.assertIn(bayan_part, field.queryset)
         self.assertIn(
-            'journal/orchestra_part_dependencies_v4.js',
+            'journal/orchestra_part_dependencies_v5.js',
             tuple(str(item) for item in form.media._js),
         )
 
-    def test_student_admin_page_contains_local_part_map_and_v4_script(self):
+    def test_student_admin_page_contains_local_part_map_and_v5_script(self):
         OrchestraPart.objects.create(
             instrument=self.instrument,
             name='Вторая домра',
@@ -9392,7 +9392,111 @@ class CabinetAndDependencyRegressionTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'data-orchestra-parts-map=')
         self.assertContains(response, 'Вторая домра')
-        self.assertContains(response, 'journal/orchestra_part_dependencies_v4.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v5.js')
+
+    def test_admin_and_registration_share_instrument_dependency_contract(self):
+        OrchestraPart.objects.create(
+            instrument=self.instrument,
+            name='Контрактная партия',
+        )
+
+        admin_form = StudentAdminForm()
+        registration_form = CourseApplicationPublicForm()
+
+        for form, instrument_name in (
+            (admin_form, 'instrument'),
+            (registration_form, 'instrument_reference'),
+        ):
+            instrument_field = form.fields[instrument_name]
+            custom_field = form.fields['custom_instrument']
+            part_field = form.fields['orchestra_part']
+
+            self.assertEqual(instrument_field.label, 'Инструмент')
+            self.assertEqual(instrument_field.empty_label, 'Другой инструмент')
+            self.assertEqual(
+                instrument_field.widget.attrs['data-instrument-reference'],
+                '1',
+            )
+            self.assertEqual(custom_field.label, 'Собственный инструмент')
+            self.assertEqual(custom_field.widget.attrs['data-custom-instrument'], '1')
+            self.assertEqual(part_field.label, 'Партия в оркестре')
+            self.assertEqual(part_field.widget.attrs['data-orchestra-part'], '1')
+            self.assertEqual(
+                part_field.widget.attrs['data-native-dependent-select'],
+                '1',
+            )
+
+        self.assertEqual(
+            admin_form.fields['orchestra_part'].widget.attrs['data-orchestra-parts-map'],
+            registration_form.fields['orchestra_part'].widget.attrs['data-orchestra-parts-map'],
+        )
+        self.assertIn(
+            'journal/orchestra_part_dependencies_v5.js',
+            tuple(str(item) for item in admin_form.media._js),
+        )
+        self.assertIn(
+            'journal/orchestra_part_dependencies_v5.js',
+            tuple(str(item) for item in registration_form.media._js),
+        )
+
+    def test_student_admin_form_saves_selected_instrument_part(self):
+        part = OrchestraPart.objects.create(
+            instrument=self.instrument,
+            name='Сохраняемая партия',
+        )
+        form = StudentAdminForm(data={
+            'full_name': 'Проверочный Ученик',
+            'gender': Student.GENDER_MALE,
+            'birth_date': '2010-01-01',
+            'city_church': '',
+            'music_education': Student.MUSIC_EDUCATION_SELF,
+            'student_phone': '',
+            'parent_contacts': '',
+            'comments': '',
+            'group': self.group.pk,
+            'instrument': self.instrument.pk,
+            'custom_instrument': '',
+            'orchestra_part': part.pk,
+            'is_active': 'on',
+            'user': '',
+        })
+
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+        student = form.save()
+        self.assertEqual(student.instrument, self.instrument)
+        self.assertEqual(student.orchestra_part, part)
+        self.assertEqual(student.custom_instrument, '')
+
+    def test_v5_orchestra_script_keeps_admin_part_select_native_and_refreshable(self):
+        source = Path(
+            'journal/static/journal/orchestra_part_dependencies_v5.js'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('ensureNativeDependentSelect', source)
+        self.assertIn("wrapped.select2('destroy')", source)
+        self.assertIn("field.classList.add('journal-native-dependent-select')", source)
+        self.assertIn('data.orchestraPartsMap', source.replace('dataset', 'data'))
+        self.assertIn("select2:select.journalOrchestraParts", source)
+        self.assertIn("refreshFromServer(instrumentId", source)
+
+    def test_mobile_journal_layout_contains_width_guards_for_cards_and_tabs(self):
+        css = Path(
+            'journal/static/journal/layout-mobile.css'
+        ).read_text(encoding='utf-8')
+        template = Path('templates/journal.html').read_text(encoding='utf-8')
+
+        self.assertIn('body.journal-workspace .assessment-subject-card', css)
+        self.assertIn('body.journal-workspace .journal-tabs', css)
+        self.assertIn('contain: inline-size', css)
+        self.assertIn('grid-template-columns: minmax(0, 1fr)', css)
+        self.assertEqual(
+            template.count(
+                '<form method="post" class="table-form" '
+                'data-save-context="journal-table-{{ table.academic_year.id }}-'
+                '{{ table.group.id }}-{{ table.subject.id }}">'
+            ),
+            1,
+        )
 
     def test_responsive_table_script_ignores_detached_tables(self):
         source = Path(
