@@ -19,6 +19,7 @@ from .academic_year_context import (
 )
 from .account_utils import (
     build_username_from_full_name,
+    clear_temporary_credentials_for_user,
     display_name_for_user,
     ensure_temporary_credential_for_user,
     generate_temporary_password,
@@ -529,6 +530,23 @@ class UserAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionMixi
             | Q(student_profile__enrollments__academic_year=academic_year)
             | Q(teacher_profile__academic_year_memberships__academic_year=academic_year),
         ).distinct()
+
+    def user_change_password(self, request, id, form_url=''):
+        user = self.get_object(request, id)
+        previous_password = getattr(user, 'password', None)
+        response = super().user_change_password(request, id, form_url=form_url)
+
+        if request.method == 'POST' and user is not None:
+            user.refresh_from_db(fields=['password'])
+            if user.password != previous_password:
+                deleted_count, _details = clear_temporary_credentials_for_user(user)
+                if deleted_count:
+                    self.message_user(
+                        request,
+                        'Временные учетные данные пользователя удалены после сброса пароля.',
+                        level=messages.SUCCESS,
+                    )
+        return response
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
