@@ -1,0 +1,72 @@
+{% if journal_related_sections %}
+<section class="journal-related-records" aria-labelledby="journal-related-records-title">
+    <div class="journal-related-records-heading">
+        <div>
+            <h2 id="journal-related-records-title">Связанные данные</h2>
+            <p>
+                Здесь показаны обратные связи, для которых нет отдельной вкладки выше.
+                Записи открываются в отдельном окне; удаление проходит через стандартное подтверждение Django.
+            </p>
+        </div>
+    </div>
+
+    {% for section in journal_related_sections %}
+        <details class="journal-related-section" {% if section.records %}open{% endif %}>
+            <summary>
+                <span>{{ section.title }}</span>
+                <span class="journal-related-count">{{ section.count }}</span>
+            </summary>
+            <div class="journal-related-toolbar">
+                {% if section.add_url %}
+                    <a class="button" href="{{ section.add_url }}" target="_blank" rel="noopener">
+                        Добавить связанную запись
+                    </a>
+                {% endif %}
+                {% if section.list_url %}
+                    <a class="button button-secondary" href="{{ section.list_url }}" target="_blank" rel="noopener">
+                        Открыть таблицу
+                    </a>
+                {% endif %}
+            </div>
+            {% if section.records %}
+                <div class="table-scroll" tabindex="0" role="region" aria-label="{{ section.title }}">
+                    <table class="journal-related-table">
+                        <thead>
+                        <tr>
+                            <th scope="col">Запись</th>
+                            <th scope="col">Действия</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for record in section.records %}
+                            <tr>
+                                <td>{{ record.label }}</td>
+                                <td>
+                                    <div class="journal-related-actions">
+                                        {% for action in record.actions %}
+                                            <a
+                                                class="button button-secondary {{ action.css_class }}"
+                                                href="{{ action.url }}"
+                                                target="_blank"
+                                                rel="noopener"
+                                            >{{ action.label }}</a>
+                                        {% empty %}
+                                            <span>Только просмотр списка</span>
+                                        {% endfor %}
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if section.truncated %}
+                    <p class="help">Показаны первые 100 записей. Полный список доступен по кнопке «Открыть таблицу».</p>
+                {% endif %}
+            {% else %}
+                <p class="journal-related-empty">Связанных записей пока нет.</p>
+            {% endif %}
+        </details>
+    {% endfor %}
+</section>
+{% endif %}

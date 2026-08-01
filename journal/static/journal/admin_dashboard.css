@@ -1893,3 +1893,102 @@ body.change-form .inline-group .card-header {
         max-width: 100% !important;
     }
 }
+
+/* Universal reverse-relation workspace on every admin change page. */
+.journal-inline-sections,
+.journal-related-records {
+    width: 100%;
+    min-width: 0;
+    margin-top: 14px;
+}
+
+.journal-related-records {
+    padding: 16px;
+    border: 1px solid var(--journal-admin-border);
+    border-radius: 12px;
+    background: var(--journal-admin-surface, #fff);
+}
+
+.journal-related-records-heading h2,
+.journal-related-records-heading p {
+    margin: 0;
+}
+
+.journal-related-records-heading p {
+    margin-top: 6px;
+    color: var(--journal-admin-muted, #5f6b7a);
+}
+
+.journal-related-section {
+    margin-top: 12px;
+    border: 1px solid var(--journal-admin-border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.journal-related-section > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 46px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-weight: 700;
+    background: rgba(127, 127, 127, 0.06);
+}
+
+.journal-related-count {
+    min-width: 28px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-align: center;
+    background: rgba(13, 110, 253, 0.12);
+}
+
+.journal-related-toolbar,
+.journal-related-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.journal-related-toolbar {
+    padding: 12px 14px 0;
+}
+
+.journal-related-table {
+    width: 100%;
+    min-width: 620px;
+    margin: 12px 0 0;
+}
+
+.journal-related-table th,
+.journal-related-table td {
+    vertical-align: middle;
+}
+
+.journal-related-empty,
+.journal-related-section .help {
+    margin: 12px 14px;
+}
+
+.related-action-delete {
+    border-color: #b42318 !important;
+    color: #b42318 !important;
+}
+
+@media (max-width: 767.98px) {
+    .journal-related-records {
+        padding: 10px;
+        border-radius: 8px;
+    }
+
+    .journal-related-toolbar .button,
+    .journal-related-actions .button {
+        flex: 1 1 100%;
+        width: 100%;
+        min-height: 44px;
+        text-align: center;
+    }
+}

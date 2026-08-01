@@ -76,10 +76,6 @@
                     </div>
                 {% endblock %}
 
-                {% block after_field_sets %}{% endblock %}
-                {% block inline_field_sets %}{% endblock %}
-                {% block after_related_objects %}{% endblock %}
-
                 <div class="col-12 col-lg-3">
                     <div id="jazzy-actions" class="{{ jazzmin_ui.actions_classes }}">
                         {% block submit_buttons_bottom %}
@@ -97,6 +93,24 @@
                         {% endblock %}
                     </div>
                 </div>
+
+                {% block after_field_sets %}{% endblock %}
+                {% block inline_field_sets %}
+                    {% if inline_admin_formsets %}
+                        <div class="col-12 journal-inline-sections">
+                            {% for inline_admin_formset in inline_admin_formsets %}
+                                {% include inline_admin_formset.opts.template %}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endblock %}
+                {% block after_related_objects %}
+                    {% if journal_related_records_template %}
+                        <div class="col-12">
+                            {% include journal_related_records_template %}
+                        </div>
+                    {% endif %}
+                {% endblock %}
 
                 {% block admin_change_form_document_ready %}
                     <script type="text/javascript" id="django-admin-form-add-constants" src="{% static 'admin/js/change_form.js' %}" {% if adminform and add %}data-model-name="{{ opts.model_name }}"{% endif %}></script>

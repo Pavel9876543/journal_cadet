@@ -26,6 +26,7 @@ from .account_utils import (
     username_with_spaces_validator,
     user_has_temporary_credential,
 )
+from .admin_relations import RelatedRecordsAdminMixin
 from .assignment_options import (
     active_group_queryset,
     active_student_queryset,
@@ -98,7 +99,7 @@ USERNAME_WITH_SPACES_HELP_TEXT = (
 )
 
 
-class JournalAdminDescriptionMixin:
+class JournalAdminDescriptionMixin(RelatedRecordsAdminMixin):
     change_list_template = 'admin/journal/change_list_with_description.html'
     change_form_template = 'admin/journal/change_form_with_year.html'
     changelist_description = ''
