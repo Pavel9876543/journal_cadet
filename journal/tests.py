@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from threading import Barrier, Lock, Thread
 from io import BytesIO, StringIO
@@ -118,6 +119,7 @@ from journal.models import (
     AssessmentResult,
     CourseApplication,
     CourseRegistrationSettings,
+    ErrorLog,
     Grade,
     GroupSubject,
     FinalGradeRule,
@@ -4718,6 +4720,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
                 'journal.CourseApplication',
                 'journal.CourseRegistrationSettings',
                 'journal.TemporaryCredential',
+                'journal.ErrorLog',
                 'journal.PasswordRecoveryContact',
             ],
         )
@@ -4749,6 +4752,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(admin_response, reverse('admin:journal_student_changelist'))
         self.assertContains(admin_response, reverse('admin:journal_assessmentelement_changelist'))
         self.assertContains(admin_response, reverse('admin:journal_assessmentgroup_changelist'))
+        self.assertContains(admin_response, reverse('admin:journal_errorlog_changelist'))
         self.assertContains(admin_response, reverse('admin_export_all_data_excel'))
         self.assertContains(admin_response, 'Любую таблицу можно прокручивать пальцем')
         self.assertContains(admin_response, 'два непересекающихся учебных периода по 14 дней')
@@ -9188,3 +9192,91 @@ class ExportCommandsCompatibilityTests(JournalTestDataMixin, TestCase):
         self.assertIn('Иванов Иван', csv_output)
         self.assertIn('Temp12345!', csv_output)
         self.assertIn('+7 (999) 123-45-67', csv_output)
+
+
+class RelatedResultAndErrorHandlingTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.year = self.create_academic_year()
+        self.group = self.create_group(academic_year=self.year)
+        self.subject = self.create_subject()
+        self.teacher = self.create_teacher()
+        self.student = self.create_student(group=self.group)
+        self.create_group_assignment(
+            group=self.group,
+            subject=self.subject,
+            teacher=self.teacher,
+        )
+        self.result = SubjectResult.objects.create(
+            student=self.student,
+            subject=self.subject,
+            academic_year=self.year,
+            exam_grade='4+',
+            final_grade='5-',
+        )
+
+    def test_related_subject_result_label_contains_exam_and_final_grades(self):
+        model_admin = django_admin.site._registry[SubjectResult]
+        label = model_admin.get_related_record_label(self.result)
+        self.assertIn('Экзамен: 4+', label)
+        self.assertIn('Итоговая оценка: 5-', label)
+
+    @override_settings(DEBUG=False)
+    def test_custom_404_page_contains_actionable_message_and_request_id(self):
+        response = self.client.get('/definitely-missing-page/')
+        self.assertEqual(response.status_code, 404)
+        self.assertContains(response, 'Страница не найдена', status_code=404)
+        self.assertContains(response, 'Код ошибки:', status_code=404)
+        self.assertTrue(response.headers.get('X-Request-ID'))
+
+    @override_settings(DEBUG=False)
+    def test_custom_404_json_has_stable_error_shape(self):
+        response = self.client.get(
+            '/definitely-missing-api/',
+            HTTP_ACCEPT='application/json',
+        )
+        self.assertEqual(response.status_code, 404)
+        payload = response.json()
+        self.assertFalse(payload['success'])
+        self.assertEqual(payload['error']['status'], 404)
+        self.assertEqual(payload['error']['code'], 'http_404')
+        self.assertEqual(payload['error']['request_id'], response.headers['X-Request-ID'])
+
+    def test_error_log_cleanup_keeps_only_newest_1000_records(self):
+        ErrorLog.objects.bulk_create(
+            [
+                ErrorLog(level='ERROR', logger_name='test', message=f'Ошибка {index}')
+                for index in range(1005)
+            ],
+            batch_size=250,
+        )
+        deleted = ErrorLog.prune_old_entries()
+        self.assertEqual(deleted, 5)
+        self.assertEqual(ErrorLog.objects.count(), 1000)
+        self.assertFalse(ErrorLog.objects.filter(message='Ошибка 0').exists())
+        self.assertTrue(ErrorLog.objects.filter(message='Ошибка 1004').exists())
+
+    def test_database_error_handler_stores_request_context(self):
+        from journal.error_logging import DatabaseErrorHandler
+
+        request = RequestFactory().get('/journal/test-error/')
+        request.request_id = 'request-test-1234'
+        request.user = User.objects.create_user(username='error-user')
+        record = logging.LogRecord(
+            name='journal.test',
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg='Проверочная ошибка',
+            args=(),
+            exc_info=None,
+        )
+        record.request = request
+        record.status_code = 500
+
+        DatabaseErrorHandler(max_records=1000).emit(record)
+
+        saved = ErrorLog.objects.get(message='Проверочная ошибка')
+        self.assertEqual(saved.request_id, 'request-test-1234')
+        self.assertEqual(saved.status_code, 500)
+        self.assertEqual(saved.path, '/journal/test-error/')
+        self.assertEqual(saved.user_label, 'error-user')
