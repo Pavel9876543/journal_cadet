@@ -49,6 +49,7 @@ from journal.account_utils import (
     display_name_for_user,
     ensure_temporary_credential_for_user,
     generate_temporary_password,
+    split_user_name,
 )
 from journal.admin import (
     AcademicYearAdmin,
@@ -4014,7 +4015,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         new_year = self.create_academic_year(name='2026/2027')
         new_group = self.create_group(name='Новая группа', academic_year=new_year)
         new_student = self.create_student(
-            full_name='Новый Ученик',
+            full_name='Сидоров Семён Сергеевич',
             group=new_group,
             instrument=instrument,
             username='new_student',
@@ -4721,6 +4722,12 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             ],
         )
 
+    def test_admin_copyright_uses_current_year(self):
+        self.assertEqual(
+            settings.JAZZMIN_SETTINGS['copyright'],
+            f'© {date.today().year} Электронный журнал музыкальной школы. Все права защищены.',
+        )
+
     def test_admin_guide_is_visible_only_for_superuser(self):
         User.objects.create_user(
             username='guide_staff',
@@ -4744,7 +4751,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(admin_response, reverse('admin:journal_assessmentgroup_changelist'))
         self.assertContains(admin_response, reverse('admin_export_all_data_excel'))
         self.assertContains(admin_response, 'Любую таблицу можно прокручивать пальцем')
-        self.assertContains(admin_response, 'архивный 2024/2025 и активный 2025/2026')
+        self.assertContains(admin_response, 'два непересекающихся учебных периода по 14 дней')
+        self.assertContains(admin_response, 'Одни и те же ученики зачисляются в оба периода')
         self.assertContains(admin_response, reverse('admin_data_tools'))
 
     def test_admin_changelist_add_button_is_ordered_before_search(self):
@@ -4852,6 +4860,51 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'change-related')
         self.assertContains(response, 'view-related')
         self.assertContains(response, 'delete-related')
+
+    def test_subject_change_page_saves_manually_added_group_relation_once(self):
+        year = self.create_academic_year()
+        group = self.create_group(name='Группа для ручной связи', academic_year=year)
+        teacher = self.create_teacher(username='subject_inline_post_teacher')
+        subject = self.create_subject(name='Предмет для ручной связи')
+        TeacherSubject.objects.create(teacher=teacher, subject=subject)
+        self.client.force_login(self.admin_user)
+        url = reverse('admin:journal_subject_change', args=[subject.pk])
+
+        get_response = self.client.get(url, {'academic_year': year.pk})
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(
+            get_response.content.count(b'name="group_subjects-TOTAL_FORMS"'),
+            1,
+        )
+
+        response = self.client.post(
+            f'{url}?academic_year={year.pk}',
+            {
+                'name': subject.name,
+                'assessment_mode': Subject.ASSESSMENT_MODE_STANDARD,
+                'final_grade_type': Subject.FINAL_GRADE_TYPE_NUMERIC,
+                'is_active': 'on',
+                'group_subjects-TOTAL_FORMS': '1',
+                'group_subjects-INITIAL_FORMS': '0',
+                'group_subjects-MIN_NUM_FORMS': '0',
+                'group_subjects-MAX_NUM_FORMS': '1000',
+                'group_subjects-0-group': str(group.pk),
+                'group_subjects-0-teacher': str(teacher.pk),
+                'group_subjects-0-sort_order': '10',
+                'group_subjects-0-is_active': 'on',
+                '_save': 'Сохранить',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            GroupSubject.objects.filter(
+                group=group,
+                subject=subject,
+                teacher=teacher,
+            ).exists(),
+        )
 
     def test_subject_change_page_exposes_non_inline_reverse_relations(self):
         data = self.create_base_journal()
@@ -4965,6 +5018,32 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             'journal/orchestra_part_dependencies.js',
             StudentAdminForm.Media.js,
         )
+
+    def test_student_admin_instrument_fields_follow_reference_availability(self):
+        domra = self.create_instrument(name='Домра с партиями')
+        piano = self.create_instrument(name='Фортепиано без партий')
+        OrchestraPart.objects.create(instrument=domra, name='Первая партия')
+
+        empty_form = StudentAdminForm()
+        domra_form = StudentAdminForm(data={
+            'instrument': domra.pk,
+            'custom_instrument': '',
+        })
+        piano_form = StudentAdminForm(data={
+            'instrument': piano.pk,
+            'custom_instrument': '',
+        })
+        custom_form = StudentAdminForm(data={
+            'instrument': '',
+            'custom_instrument': 'Гусли',
+        })
+
+        self.assertEqual(empty_form.fields['instrument'].empty_label, 'Другой инструмент')
+        self.assertFalse(empty_form.fields['custom_instrument'].disabled)
+        self.assertTrue(empty_form.fields['orchestra_part'].disabled)
+        self.assertFalse(domra_form.fields['orchestra_part'].disabled)
+        self.assertTrue(piano_form.fields['orchestra_part'].disabled)
+        self.assertTrue(custom_form.fields['orchestra_part'].disabled)
 
     def test_used_subject_delete_page_confirms_and_cascades_related_data(self):
         data = self.create_base_journal()
@@ -5505,7 +5584,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         request = type('Request', (), {'user': self.admin_user})()
         model_admin = django_admin.site._registry[Teacher]
         teacher = Teacher(
-            full_name='Новый Преподаватель',
+            full_name='Иванов Иван Иванович',
             email='new-teacher@example.com',
         )
 
@@ -5513,7 +5592,9 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         teacher.refresh_from_db()
         self.assertIsNotNone(teacher.user)
-        self.assertEqual(teacher.user.username, 'Преподаватель Новый')
+        self.assertEqual(teacher.user.username, 'Иванов Иван')
+        self.assertEqual(teacher.user.first_name, 'Иван')
+        self.assertEqual(teacher.user.last_name, 'Иванов')
         self.assertTrue(teacher.user.groups.filter(name='Преподаватель').exists())
         credential = TemporaryCredential.objects.get(login=teacher.user.username)
         self.assertEqual(credential.user, teacher.user)
@@ -5523,7 +5604,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
     def test_teacher_admin_update_preserves_password_and_temporary_password(self):
         request = type('Request', (), {'user': self.admin_user})()
         model_admin = django_admin.site._registry[Teacher]
-        teacher = Teacher(full_name='Новый Преподаватель')
+        teacher = Teacher(full_name='Иванов Иван Иванович')
         model_admin.save_model(request, teacher, form=None, change=False)
 
         user = teacher.user
@@ -5531,7 +5612,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         original_password_hash = user.password
         original_temporary_password = credential.temporary_password
 
-        teacher.full_name = 'Обновлённый Преподаватель'
+        teacher.full_name = 'Петров Пётр Петрович'
         teacher.phone = '+7 (999) 555-44-33'
         model_admin.save_model(request, teacher, form=None, change=True)
 
@@ -5564,7 +5645,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         request = type('Request', (), {'user': self.admin_user})()
         model_admin = django_admin.site._registry[Student]
         student = Student(
-            full_name='Новый Ученик',
+            full_name='Сидоров Семён Сергеевич',
             group=self.create_group(),
             instrument=self.create_instrument(),
             student_phone='+7 (999) 111-22-33',
@@ -5574,7 +5655,9 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         student.refresh_from_db()
         self.assertIsNotNone(student.user)
-        self.assertEqual(student.user.username, 'Ученик Новый')
+        self.assertEqual(student.user.username, 'Сидоров Семён')
+        self.assertEqual(student.user.first_name, 'Семён')
+        self.assertEqual(student.user.last_name, 'Сидоров')
         self.assertTrue(student.user.groups.filter(name='Ученик').exists())
         credential = TemporaryCredential.objects.get(login=student.user.username)
         self.assertEqual(credential.user, student.user)
@@ -5598,7 +5681,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         original_password_hash = user.password
         original_temporary_password = credential.temporary_password
 
-        student.full_name = 'Обновлённый Ученик'
+        student.full_name = 'Кузнецов Кирилл Олегович'
         student.student_phone = '+7 (999) 111-22-44'
         model_admin.save_model(request, student, form=None, change=True)
 
@@ -5929,6 +6012,49 @@ class PasswordRecoveryViewTests(TestCase):
         self.assertContains(response, '@first_admin')
         self.assertContains(response, 'Второй администратор')
         self.assertNotContains(response, 'Скрытый администратор')
+
+    def test_telegram_username_is_used_only_for_telegram(self):
+        contact = PasswordRecoveryContact.objects.create(
+            name='Администратор',
+            phone='+7 (999) 123-45-67',
+            messengers='Telegram, WhatsApp, Viber, MAX',
+            messenger_username='journal_admin',
+        )
+
+        links = {item['name']: item['url'] for item in contact.messenger_links}
+
+        self.assertTrue(contact.has_telegram_messenger)
+        self.assertEqual(links['Telegram'], 'https://t.me/journal_admin')
+        self.assertEqual(links['WhatsApp'], 'https://wa.me/79991234567')
+        self.assertEqual(links['Viber'], 'viber://chat?number=%2B79991234567')
+        self.assertEqual(links['MAX'], 'tel:+79991234567')
+
+    def test_telegram_uses_phone_when_username_is_empty(self):
+        contact = PasswordRecoveryContact.objects.create(
+            name='Администратор',
+            phone='+7 (999) 123-45-67',
+            messengers='Telegram',
+            messenger_username='',
+        )
+
+        self.assertEqual(
+            contact.messenger_links[0]['url'],
+            'tg://resolve?phone=%2B79991234567',
+        )
+
+    def test_non_telegram_contact_does_not_expose_telegram_username(self):
+        contact = PasswordRecoveryContact.objects.create(
+            name='Администратор',
+            phone='+7 (999) 123-45-67',
+            messengers='WhatsApp',
+            messenger_username='unused_username',
+        )
+
+        response = self.client.get(reverse('password_help'))
+
+        self.assertFalse(contact.has_telegram_messenger)
+        self.assertNotContains(response, '@unused_username')
+        self.assertContains(response, 'href="https://wa.me/79991234567"')
 
     def test_password_help_has_empty_state_without_configured_contacts(self):
         response = self.client.get(reverse('password_help'))
@@ -6814,8 +6940,18 @@ class ExportTemporaryCredentialsAdminXlsxTests(JournalTestDataMixin, TestCase):
 
 class AccountUtilityTests(JournalTestDataMixin, TestCase):
     def test_build_username_helpers_use_name_and_surname(self):
-        self.assertEqual(build_display_name_from_full_name('Иван Иванов'), 'Иванов Иван')
-        self.assertEqual(build_username_from_full_name('Иван Иванов'), 'Иванов Иван')
+        self.assertEqual(
+            build_display_name_from_full_name('Иванов Иван Иванович'),
+            'Иванов Иван',
+        )
+        self.assertEqual(
+            build_username_from_full_name('Иванов Иван Иванович'),
+            'Иванов Иван',
+        )
+        self.assertEqual(
+            split_user_name('Иванов Иван Иванович'),
+            ('Иван', 'Иванов'),
+        )
         self.assertEqual(build_course_application_login('Иванов', 'Иван'), 'Иванов Иван')
 
     def test_temporary_passwords_are_short_and_easy_to_type(self):
@@ -6838,7 +6974,7 @@ class AccountUtilityTests(JournalTestDataMixin, TestCase):
         )
 
         Student.objects.create(
-            full_name='Иван Иванов',
+            full_name='Иванов Иван Иванович',
             group=group,
             instrument=instrument,
             user=user,
@@ -6854,7 +6990,7 @@ class AccountUtilityTests(JournalTestDataMixin, TestCase):
             last_name='Иванов',
         )
 
-        Teacher.objects.create(full_name='Пётр Петров', user=user)
+        Teacher.objects.create(full_name='Петров Пётр Петрович', user=user)
 
         self.assertEqual(display_name_for_user(user), 'Петров Пётр')
 
@@ -7271,22 +7407,15 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(CourseRegistrationSettings.objects.filter(academic_year__is_active=True).exists())
         self.assertEqual(PasswordRecoveryContact.objects.count(), 2)
         self.assertEqual(AcademicYear.objects.count(), 2)
-        self.assertTrue(
-            AcademicYear.objects.filter(
-                name='2025/2026',
-                starts_on=date(2025, 9, 1),
-                ends_on=date(2026, 8, 31),
-                is_active=True,
-            ).exists(),
-        )
-        self.assertTrue(
-            AcademicYear.objects.filter(
-                name='2024/2025',
-                starts_on=date(2024, 9, 1),
-                ends_on=date(2025, 8, 31),
-                is_active=False,
-            ).exists(),
-        )
+        years = list(AcademicYear.objects.order_by('starts_on'))
+        archived_year, active_year = years
+        self.assertFalse(archived_year.is_active)
+        self.assertTrue(active_year.is_active)
+        self.assertEqual((archived_year.ends_on - archived_year.starts_on).days, 13)
+        self.assertEqual((active_year.ends_on - active_year.starts_on).days, 13)
+        self.assertLess(archived_year.ends_on, active_year.starts_on)
+        self.assertTrue(archived_year.name.startswith('Арх '))
+        self.assertTrue(active_year.name.startswith('Акт '))
         self.assertTrue(Instrument.objects.exists())
         self.assertEqual(OrchestraPart.objects.count(), 10)
         self.assertTrue(
@@ -7299,6 +7428,8 @@ class SeedDataCommandTests(TestCase):
         self.assertTrue(Subject.objects.exists())
         self.assertTrue(Teacher.objects.exists())
         self.assertTrue(Student.objects.exists())
+        self.assertTrue(Student.objects.filter(orchestra_part__isnull=False).exists())
+        self.assertTrue(Student.objects.filter(custom_instrument='Гусли').exists())
         self.assertTrue(GroupSubject.objects.exists())
         self.assertTrue(StudentSubject.objects.exists())
         self.assertTrue(Grade.objects.exists())
@@ -7322,9 +7453,8 @@ class SeedDataCommandTests(TestCase):
             ).filter(assessment_group_count__gte=2).exists(),
         )
 
-    def test_seed_data_uses_distinct_compact_cohorts_for_two_years(self):
-        archived_year = AcademicYear.objects.get(name='2024/2025')
-        active_year = AcademicYear.objects.get(name='2025/2026')
+    def test_seed_data_reuses_same_compact_student_cohort_for_two_years(self):
+        archived_year, active_year = AcademicYear.objects.order_by('starts_on')
         main_group_names = {
             'Подготовительная группа',
             '1 класс (начинающие)',
@@ -7332,24 +7462,21 @@ class SeedDataCommandTests(TestCase):
             '3 класс (продвинутые)',
             'Старший ансамбль',
         }
-        archived_names = set(
+        archived_students = set(
             StudentEnrollment.objects.filter(
                 academic_year=archived_year,
                 group__name__in=main_group_names,
-            ).values_list('full_name', flat=True)
+            ).values_list('student_id', flat=True)
         )
-        active_names = set(
+        active_students = set(
             StudentEnrollment.objects.filter(
                 academic_year=active_year,
                 group__name__in=main_group_names,
-            ).values_list('full_name', flat=True)
+            ).values_list('student_id', flat=True)
         )
 
-        self.assertTrue(archived_names)
-        self.assertTrue(active_names)
-        self.assertTrue(archived_names.isdisjoint(active_names))
-        self.assertEqual(len(archived_names), 15)
-        self.assertEqual(len(active_names), 15)
+        self.assertEqual(len(archived_students), 15)
+        self.assertEqual(active_students, archived_students)
         self.assertEqual(
             TeacherEnrollment.objects.values('teacher_id')
             .annotate(years=Count('academic_year_id'))
@@ -7548,8 +7675,8 @@ class SeedDataCommandTests(TestCase):
         self.assertGreaterEqual(Subject.objects.count(), 21)
         self.assertGreaterEqual(StudyGroup.objects.count(), 13)
         self.assertGreaterEqual(Teacher.objects.count(), 9)
-        self.assertGreaterEqual(Student.objects.count(), 30)
-        self.assertLessEqual(Student.objects.count(), 35)
+        self.assertGreaterEqual(Student.objects.count(), 17)
+        self.assertLessEqual(Student.objects.count(), 20)
         self.assertGreaterEqual(GroupSubject.objects.count(), 60)
         self.assertGreaterEqual(StudentSubject.objects.count(), 60)
         self.assertLessEqual(StudentSubject.objects.count(), 75)
@@ -7595,10 +7722,10 @@ class SeedDataCommandTests(TestCase):
             .exists(),
         )
         self.assertEqual(
-            set(Grade.objects.values_list('academic_year__name', flat=True)),
-            {'2024/2025', '2025/2026'},
+            set(Grade.objects.values_list('academic_year_id', flat=True)),
+            set(AcademicYear.objects.values_list('id', flat=True)),
         )
-        self.assertFalse(CourseApplication.objects.exclude(academic_year__name='2025/2026').exists())
+        self.assertFalse(CourseApplication.objects.exclude(academic_year__is_active=True).exists())
         for academic_year in AcademicYear.objects.all():
             self.assertFalse(
                 Grade.objects.filter(academic_year=academic_year).filter(
@@ -8891,6 +9018,10 @@ class SelectedAcademicYearExportTests(JournalTestDataMixin, TestCase):
         self.assertEqual(
             workbook['Настройки регистрации']['A2'].value,
             settings_obj.academic_year.name,
+        )
+        self.assertEqual(
+            workbook['Контакты восстановления']['D1'].value,
+            'Имя пользователя в Telegram',
         )
         self.assertEqual(
             workbook['Контакты восстановления']['D2'].value,
