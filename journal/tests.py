@@ -26,6 +26,7 @@ from django.http import HttpResponse
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings, tag
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 from openpyxl import load_workbook
 
 from journal.academic_year_context import (
@@ -8451,7 +8452,7 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(type(inline).__name__, 'AssessmentResultForItemInline')
         self.assertEqual(inline.extra, 0)
-        self.assertIn(self.assignment.enrollment, blank_form.fields['enrollment'].queryset)
+        self.assertIn(self.student, blank_form.fields['student'].queryset)
         self.assertEqual(blank_form.fields['assessed_by'].initial, self.teacher.pk)
 
     def test_assessment_result_options_api_returns_only_valid_related_values(self):
@@ -8470,8 +8471,8 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(
-            [row['id'] for row in payload['enrollments']],
-            [self.assignment.enrollment_id],
+            [row['id'] for row in payload['students']],
+            [self.student.pk],
         )
         self.assertEqual([row['id'] for row in payload['teachers']], [self.teacher.pk])
         self.assertEqual(payload['defaults']['assessed_by_id'], self.teacher.pk)
@@ -10131,36 +10132,34 @@ class AssessmentResultAdminOptionsAndFriendlyErrorsTests(JournalTestDataMixin, T
             {'parent_academic_year': self.year},
         )
 
-    def test_result_add_form_has_year_candidates_before_item_selection(self):
+    def test_result_add_form_starts_with_assigned_students(self):
         form = self.form_class()()
 
         self.assertIn(
-            self.item.pk,
-            form.fields['item'].queryset.values_list('pk', flat=True),
+            self.student.pk,
+            form.fields['student'].queryset.values_list('pk', flat=True),
         )
-        self.assertIn(
-            self.enrollment.pk,
-            form.fields['enrollment'].queryset.values_list('pk', flat=True),
-        )
-        self.assertIn(
-            self.teacher.pk,
-            form.fields['assessed_by'].queryset.values_list('pk', flat=True),
+        self.assertFalse(form.fields['item'].queryset.exists())
+        self.assertFalse(form.fields['assessed_by'].queryset.exists())
+
+    def test_result_fields_follow_student_item_teacher_order(self):
+        student_form = self.form_class()(data={'student': str(self.student.pk)})
+        self.assertEqual(
+            list(student_form.fields['item'].queryset.values_list('pk', flat=True)),
+            [self.item.pk],
         )
 
-    def test_result_fields_narrow_to_selected_item(self):
-        form = self.form_class()(data={'item': str(self.item.pk)})
-
+        item_form = self.form_class()(data={
+            'student': str(self.student.pk),
+            'item': str(self.item.pk),
+        })
         self.assertEqual(
-            list(form.fields['enrollment'].queryset.values_list('pk', flat=True)),
-            [self.enrollment.pk],
-        )
-        self.assertEqual(
-            list(form.fields['assessed_by'].queryset.values_list('pk', flat=True)),
+            list(item_form.fields['assessed_by'].queryset.values_list('pk', flat=True)),
             [self.teacher.pk],
         )
-        self.assertEqual(form.fields['assessed_by'].initial, self.teacher.pk)
+        self.assertEqual(item_form.fields['assessed_by'].initial, self.teacher.pk)
 
-    def test_result_options_api_returns_enrollments_and_teachers_without_item(self):
+    def test_result_options_api_follows_student_item_teacher_order(self):
         admin_user = User.objects.create_superuser(
             username='assessment_result_admin',
             password='Pass12345!',
@@ -10174,15 +10173,48 @@ class AssessmentResultAdminOptionsAndFriendlyErrorsTests(JournalTestDataMixin, T
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertIn(self.enrollment.pk, {row['id'] for row in payload['enrollments']})
-        self.assertIn(self.teacher.pk, {row['id'] for row in payload['teachers']})
-        self.assertIn(self.item.pk, {row['id'] for row in payload['items']})
+        self.assertIn(self.student.pk, {row['id'] for row in payload['students']})
+        self.assertEqual(payload['items'], [])
+        self.assertEqual(payload['teachers'], [])
+
+        item_response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'result',
+                'academic_year': self.year.pk,
+                'student': self.student.pk,
+                'changed': 'student',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(item_response.status_code, 200)
+        self.assertEqual(
+            {row['id'] for row in item_response.json()['items']},
+            {self.item.pk},
+        )
+
+        teacher_response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'result',
+                'academic_year': self.year.pk,
+                'student': self.student.pk,
+                'item': self.item.pk,
+                'changed': 'item',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(teacher_response.status_code, 200)
+        self.assertEqual(
+            {row['id'] for row in teacher_response.json()['teachers']},
+            {self.teacher.pk},
+        )
 
     def test_admin_required_errors_have_plain_user_message_and_are_logged(self):
         class RequiredFieldsForm(forms.Form):
-            enrollment = forms.ModelChoiceField(
-                queryset=StudentEnrollment.objects.all(),
-                label='Зачисление ученика',
+            student = forms.ModelChoiceField(
+                queryset=Student.objects.all(),
+                label='Ученик',
             )
             assessed_by = forms.ModelChoiceField(
                 queryset=Teacher.objects.all(),
@@ -10232,3 +10264,227 @@ class AssessmentResultAdminOptionsAndFriendlyErrorsTests(JournalTestDataMixin, T
 
         self.assertIn('data-user-friendly-error-message', template)
         self.assertIn("form.querySelector('[data-user-friendly-error-message]')", javascript)
+
+
+class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.year = self.create_academic_year()
+        self.group = self.create_group(academic_year=self.year)
+        self.student = self.create_student(
+            full_name='Назначенный Ученик',
+            group=self.group,
+            username='assigned_assessment_student',
+        )
+        self.teacher = self.create_teacher(
+            full_name='Назначенный Преподаватель',
+            username='assigned_assessment_teacher',
+        )
+        TeacherEnrollment.objects.get_or_create(
+            teacher=self.teacher,
+            academic_year=self.year,
+            defaults={'is_active': True},
+        )
+        self.element_subject = Subject.objects.create(
+            name='Сдача оркестровой программы',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        self.assessment_group = AssessmentGroup.objects.create(
+            name='Концертная программа',
+            subject=self.element_subject,
+            academic_year=self.year,
+        )
+        self.item = AssessmentItem.objects.create(
+            title='Концертное произведение',
+            subject=self.element_subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+        )
+        self.assignment = StudentAssessmentGroup.objects.create(
+            student=self.student,
+            assessment_group=self.assessment_group,
+            academic_year=self.year,
+        )
+
+        self.standard_subject = Subject.objects.create(
+            name='Назначенный обычный предмет',
+            assessment_mode=Subject.ASSESSMENT_MODE_STANDARD,
+        )
+        GroupSubject.objects.create(
+            group=self.group,
+            subject=self.standard_subject,
+            teacher=self.teacher,
+        )
+        Grade.objects.create(
+            student=self.student,
+            subject=self.standard_subject,
+            teacher=self.teacher,
+            academic_year=self.year,
+            date=date(self.year.starts_on.year, 10, 1),
+            value='5',
+        )
+
+    def test_admin_and_responsible_teacher_see_assigned_assessment_students(self):
+        # Simulate an old/imported row whose denormalized helper columns are
+        # stale. The group and student relations remain authoritative.
+        old_year = self.create_academic_year(name='2024/2025', is_active=False)
+        StudentAssessmentGroup.objects.filter(pk=self.assignment.pk).update(
+            academic_year=old_year,
+            enrollment=None,
+        )
+
+        admin_user = User.objects.create_superuser(
+            username='assessment_workspace_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+        admin_response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+        self.assertEqual(admin_response.status_code, 200)
+        admin_section = next(
+            section for section in admin_response.context['assessment_sections']
+            if section['item'].pk == self.item.pk
+        )
+        self.assertEqual(
+            [row['student'].pk for row in admin_section['rows']],
+            [self.student.pk],
+        )
+
+        self.client.force_login(self.teacher.user)
+        teacher_response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+        self.assertEqual(teacher_response.status_code, 200)
+        teacher_section = next(
+            section for section in teacher_response.context['assessment_sections']
+            if section['item'].pk == self.item.pk
+        )
+        self.assertTrue(teacher_section['can_edit'])
+        self.assertEqual(
+            [row['student'].pk for row in teacher_section['rows']],
+            [self.student.pk],
+        )
+
+    def test_teacher_standard_subject_and_grade_remain_visible(self):
+        self.client.force_login(self.teacher.user)
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        table = next(
+            table for table in response.context['journal_tables']
+            if table['subject'].pk == self.standard_subject.pk
+        )
+        self.assertEqual([row['student'].pk for row in table['rows']], [self.student.pk])
+        self.assertIn('5', table['rows'][0]['grades_by_date'].values())
+
+    def test_result_form_rejects_cross_student_item_combination(self):
+        other_student = self.create_student(
+            full_name='Другой Ученик',
+            group=self.group,
+            username='other_assessment_student',
+        )
+        Form = type(
+            'YearScopedAssessmentResultForm',
+            (AssessmentResultAdminForm,),
+            {'parent_academic_year': self.year},
+        )
+        form = Form(data={
+            'student': other_student.pk,
+            'item': self.item.pk,
+            'status': AssessmentResult.STATUS_PASSED,
+            'assessed_by': self.teacher.pk,
+            'assessed_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'comment': '',
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('item', form.errors)
+
+    def test_result_form_saves_enrollment_from_primary_student(self):
+        Form = type(
+            'YearScopedAssessmentResultCreateForm',
+            (AssessmentResultAdminForm,),
+            {'parent_academic_year': self.year},
+        )
+        form = Form(data={
+            'student': self.student.pk,
+            'item': self.item.pk,
+            'status': AssessmentResult.STATUS_PASSED,
+            'assessed_by': self.teacher.pk,
+            'assessed_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'comment': 'Готово',
+        })
+
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+        result = form.save()
+        self.assertEqual(result.enrollment.student_id, self.student.pk)
+        self.assertEqual(result.item_id, self.item.pk)
+        self.assertEqual(result.assessed_by_id, self.teacher.pk)
+
+    def test_subject_result_form_uses_student_then_subject(self):
+        form = SubjectResultAdminForm(fixed_academic_year=self.year)
+        self.assertIn(
+            self.student.pk,
+            form.fields['student'].queryset.values_list('pk', flat=True),
+        )
+        self.assertFalse(form.fields['subject'].queryset.exists())
+
+        selected_form = SubjectResultAdminForm(
+            data={
+                'student': self.student.pk,
+                'subject': self.standard_subject.pk,
+                'academic_year': self.year.pk,
+                'exam_grade': '5',
+                'final_grade': '5',
+            },
+            fixed_academic_year=self.year,
+        )
+        self.assertIn(
+            self.standard_subject.pk,
+            selected_form.fields['subject'].queryset.values_list('pk', flat=True),
+        )
+        self.assertTrue(selected_form.is_valid(), selected_form.errors.as_json())
+
+    def test_subject_result_options_api_requires_student_before_subject(self):
+        admin_user = User.objects.create_superuser(
+            username='subject_result_options_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+
+        initial_response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'mode': 'subject_result',
+                'academic_year': self.year.pk,
+            },
+        )
+        self.assertEqual(initial_response.status_code, 200)
+        self.assertIn(
+            self.student.pk,
+            {row['id'] for row in initial_response.json()['students']},
+        )
+        self.assertEqual(initial_response.json()['subjects'], [])
+
+        selected_response = self.client.get(
+            reverse('grade_options_api'),
+            {
+                'mode': 'subject_result',
+                'academic_year': self.year.pk,
+                'student': self.student.pk,
+                'changed': 'student',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(selected_response.status_code, 200)
+        self.assertEqual(
+            {row['id'] for row in selected_response.json()['subjects']},
+            {self.standard_subject.pk},
+        )
