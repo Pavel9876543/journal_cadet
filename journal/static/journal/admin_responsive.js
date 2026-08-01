@@ -183,15 +183,11 @@
                 return;
             }
             reference.dataset.instrumentToggleReady = '1';
-            var customRow = custom.closest('.form-row, .fieldBox, .field-custom_instrument, .form-group') || custom.parentElement;
-
             function sync() {
                 var useCustom = !reference.value;
-                if (customRow) {
-                    customRow.hidden = !useCustom;
-                }
                 custom.disabled = !useCustom;
                 custom.required = useCustom;
+                custom.setAttribute('aria-disabled', useCustom ? 'false' : 'true');
                 if (!useCustom) {
                     custom.value = '';
                     custom.setCustomValidity('');

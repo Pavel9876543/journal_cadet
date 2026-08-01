@@ -85,14 +85,19 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
     has_available_parts = bool(instrument_id and queryset.exists())
     field.disabled = bool(custom_instrument or not has_available_parts)
     field.help_text = (
-        'Выберите партию для указанного инструмента или оставьте поле пустым, '
-        'если ученик едет на курсы впервые.'
+        'Поле становится доступным только для инструмента, у которого в справочнике '
+        'созданы активные партии оркестра.'
     )
     field.widget.attrs.update({
         'data-orchestra-part': '1',
         'data-orchestra-parts-url': reverse('orchestra_part_options_api'),
         'data-instrument-field': instrument_field_name,
+        'aria-disabled': 'false' if has_available_parts and not custom_instrument else 'true',
     })
+    if custom_instrument or not has_available_parts:
+        field.widget.attrs['disabled'] = True
+    else:
+        field.widget.attrs.pop('disabled', None)
 
 
 # -----------------------------------------------------------------------------

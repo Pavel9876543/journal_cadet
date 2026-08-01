@@ -17,6 +17,11 @@
         field.value = '';
     }
 
+    function setDisabled(field, disabled) {
+        field.disabled = disabled;
+        field.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    }
+
     function initialisePartField(partField) {
         if (partField.dataset.orchestraPartReady === '1') {
             return;
@@ -36,13 +41,28 @@
         partField.dataset.orchestraPartReady = '1';
         var requestNumber = 0;
 
+        function syncCustomField() {
+            if (!customField) {
+                return;
+            }
+            var useCustom = !instrumentField.value;
+            customField.disabled = !useCustom;
+            customField.required = useCustom;
+            customField.setAttribute('aria-disabled', useCustom ? 'false' : 'true');
+            if (!useCustom) {
+                customField.value = '';
+                customField.setCustomValidity('');
+            }
+        }
+
         function disable(label) {
             requestNumber += 1;
             resetOptions(partField, label);
-            partField.disabled = true;
+            setDisabled(partField, true);
         }
 
         function loadParts(forceReload) {
+            syncCustomField();
             var instrumentId = instrumentField.value;
             var hasCustomInstrument = Boolean(
                 customField && String(customField.value || '').trim()
@@ -61,14 +81,14 @@
                 && partField.options.length > 1
                 && partField.dataset.loadedInstrument === instrumentId
             ) {
-                partField.disabled = false;
+                setDisabled(partField, false);
                 return;
             }
 
             var selectedValue = forceReload ? '' : partField.value;
             var currentRequest = ++requestNumber;
             resetOptions(partField, 'Загрузка партий…');
-            partField.disabled = true;
+            setDisabled(partField, true);
 
             var separator = endpoint.indexOf('?') === -1 ? '?' : '&';
             fetch(endpoint + separator + 'instrument=' + encodeURIComponent(instrumentId), {
@@ -99,7 +119,7 @@
                         partField.value = selectedValue;
                     }
                     partField.dataset.loadedInstrument = instrumentId;
-                    partField.disabled = parts.length === 0;
+                    setDisabled(partField, parts.length === 0);
                 })
                 .catch(function () {
                     if (currentRequest !== requestNumber) {
