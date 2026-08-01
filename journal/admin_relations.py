@@ -222,7 +222,9 @@ class RelatedRecordsAdminMixin:
             if delete_url:
                 actions.append(RelatedRecordAction('Удалить', delete_url, 'related-action-delete'))
 
-        return RelatedRecordRow(label=str(related_obj), actions=tuple(actions))
+        label_builder = getattr(related_admin, 'get_related_record_label', None)
+        label = label_builder(related_obj) if callable(label_builder) else str(related_obj)
+        return RelatedRecordRow(label=str(label), actions=tuple(actions))
 
     def _related_add_url(
         self,

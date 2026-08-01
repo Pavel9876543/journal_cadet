@@ -3769,6 +3769,14 @@ class SubjectResultAdmin(ArchivedAcademicYearAdminMixin, JournalAdminDescription
             return obj.subject.name
         return obj.subject_name_snapshot or obj.subject.name
 
+    def get_related_record_label(self, obj):
+        exam_grade = obj.exam_grade or '—'
+        final_grade = obj.final_grade or '—'
+        return (
+            f'{obj} | Экзамен: {exam_grade} | '
+            f'Итоговая оценка: {final_grade}'
+        )
+
 
 # -----------------------------------------------------------------------------
 # Заявки на курсы и служебные настройки
