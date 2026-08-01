@@ -1,3 +1,19 @@
-*.sh text eol=lf
-Dockerfile text eol=lf
-*.cmd text eol=crlf
+# Store every text file in the repository with Unix LF line endings.
+* text=auto eol=lf
+
+# Binary files must never be line-ending normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.sqlite3 binary
