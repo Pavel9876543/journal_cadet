@@ -101,10 +101,15 @@ def academic_year_ids_for_user(user) -> Iterable[int]:
         teacher = None
     if teacher is not None:
         # An inactive membership still proves that the teacher participated in
-        # the year and therefore may inspect its archived journal.
+        # the year and therefore may inspect its archived journal.  Real
+        # assignments are also authoritative: older databases may contain
+        # group/individual/assessment assignments without a participation row.
         year_ids.update(
             teacher.academic_year_memberships.values_list('academic_year_id', flat=True),
         )
+        from .teacher_access import teacher_assignment_year_ids
+
+        year_ids.update(teacher_assignment_year_ids(teacher))
 
     # Existing installations may have a bootstrap administrator without an
     # explicit membership yet. Keep all years available only until the first

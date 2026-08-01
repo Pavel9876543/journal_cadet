@@ -89,6 +89,7 @@ from .models import (
     TemporaryCredential,
     CourseRegistrationRateLimit,
 )
+from .teacher_access import teacher_has_active_assignment
 
 
 async def _run_db_sync(func, *args, **kwargs):
@@ -521,6 +522,10 @@ def _assessment_options_api_sync(request):
         ),
         request.GET.get('item'),
     )
+    current_assessment_item = _get_selected_object(
+        AssessmentItem.objects.select_related('element', 'group'),
+        request.GET.get('current_item'),
+    )
     enrollment = _get_selected_object(
         StudentEnrollment.objects.select_related('student', 'group', 'academic_year'),
         request.GET.get('enrollment'),
@@ -580,6 +585,13 @@ def _assessment_options_api_sync(request):
         items = items.filter(responsible_teacher=selected_teacher)
     if group is not None:
         items = items.filter(group=group)
+    if assessment_type == 'item' and element is not None:
+        occupied_groups = AssessmentItem.objects.filter(
+            element=element,
+        )
+        if current_assessment_item is not None:
+            occupied_groups = occupied_groups.exclude(pk=current_assessment_item.pk)
+        groups = groups.exclude(pk__in=occupied_groups.values('group_id'))
     if assessment_type == 'student_group' and group is not None:
         students = Student.objects.filter(
             enrollments__academic_year=group.academic_year,
@@ -647,10 +659,21 @@ def _assessment_options_api_sync(request):
             defaults['responsible_teacher_id'] = group.items.filter(
                 responsible_teacher__isnull=False
             ).values_list('responsible_teacher_id', flat=True).first()
-        available_elements = elements.exclude(
-            group_placements__group=group,
+        occupied_items = AssessmentItem.objects.filter(
+            group=group,
+            element__isnull=False,
         )
-        if element is not None:
+        if current_assessment_item is not None:
+            occupied_items = occupied_items.exclude(pk=current_assessment_item.pk)
+        available_elements = elements.exclude(
+            pk__in=occupied_items.values('element_id'),
+        )
+        if (
+            element is not None
+            and current_assessment_item is not None
+            and current_assessment_item.group_id == group.pk
+            and current_assessment_item.element_id == element.pk
+        ):
             available_elements = _include_selected_option(
                 available_elements,
                 AssessmentElement,
@@ -1875,11 +1898,13 @@ def _journal_for_teacher(
     groups = get_grade_groups(teacher=teacher, academic_year=selected_academic_year).select_related('academic_year')
     selected_group = _get_selected_object(groups, selected_group_id)
     groups_to_show = [selected_group] if selected_group else list(groups)
-    selected_membership = teacher.membership_for_year(selected_academic_year)
+    has_active_assignment = teacher_has_active_assignment(teacher, selected_academic_year)
+    # Assignment rows are the access source of truth.  Participation records
+    # are historical metadata and may be missing or stale in upgraded databases.
+    # A teacher may edit an active year exactly when an active assignment exists.
     can_edit_journal = bool(
         _can_edit_academic_year(selected_academic_year)
-        and selected_membership
-        and selected_membership.is_active
+        and has_active_assignment
     )
 
     subjects = get_teacher_subjects(

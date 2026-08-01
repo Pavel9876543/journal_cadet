@@ -122,6 +122,9 @@
             if (source.dataset.parentAcademicYearId && !url.searchParams.has('academic_year')) {
                 url.searchParams.set('academic_year', source.dataset.parentAcademicYearId);
             }
+            if (source.dataset.currentAssessmentItemId) {
+                url.searchParams.set('current_item', source.dataset.currentAssessmentItemId);
+            }
             if (changed) {
                 url.searchParams.set('changed', changed);
                 url.searchParams.set('strict', '1');
@@ -245,6 +248,9 @@
                     config.fields.forEach(function (name) {
                         var payloadName = config.payload[name];
                         var preserve = !strict || changed === name;
+                        if (type === 'item' && name === 'element' && !source.dataset.currentAssessmentItemId) {
+                            preserve = false;
+                        }
                         reload = replaceOptions(name, payload[payloadName] || [], preserve) || reload;
                     });
                     reload = applyDefaults(payload.defaults || {}, changed) || reload;
@@ -264,9 +270,138 @@
         load('', false);
     }
 
-    document.addEventListener('DOMContentLoaded', function () { start(document); });
-    document.addEventListener('formset:added', function (event) { start(event.target || document); });
+    function refreshItemInlineUniqueness(form) {
+        if (!form) {
+            return;
+        }
+        var rows = [];
+        form.querySelectorAll('select[data-assessment-type="item"][name$="-element"]').forEach(function (elementField) {
+            var prefix = inlinePrefix(elementField.name);
+            if (!prefix) {
+                return;
+            }
+            var groupField = form.querySelector('[name="' + prefix + '-group"]');
+            if (!groupField) {
+                return;
+            }
+            rows.push({groupField: groupField, element: elementField});
+        });
+
+        var claimed = new Set();
+        rows.forEach(function (row) {
+            var groupValue = String(row.groupField.value || '');
+            var selected = String(row.element.value || '');
+            var key = groupValue && selected ? groupValue + ':' + selected : '';
+            if (key && claimed.has(key)) {
+                row.element.value = '';
+                syncSelect2(row.element);
+                setInlineConflict(
+                    row.element,
+                    'Это произведение уже выбрано выше для той же группы.'
+                );
+            } else {
+                if (key) {
+                    claimed.add(key);
+                }
+                setInlineConflict(row.element, '');
+            }
+        });
+
+        rows.forEach(function (row) {
+            var ownGroup = String(row.groupField.value || '');
+            var ownValue = String(row.element.value || '');
+            var occupied = new Set();
+            rows.forEach(function (other) {
+                var otherGroup = String(other.groupField.value || '');
+                if (other === row || !ownGroup || otherGroup !== ownGroup) {
+                    return;
+                }
+                var value = String(other.element.value || '');
+                if (value) {
+                    occupied.add(value);
+                }
+            });
+            Array.prototype.forEach.call(row.element.options, function (option) {
+                option.disabled = Boolean(
+                    option.value
+                    && option.value !== ownValue
+                    && occupied.has(String(option.value))
+                );
+            });
+            syncSelect2(row.element);
+
+            var occupiedGroups = new Set();
+            if (ownValue) {
+                rows.forEach(function (other) {
+                    if (other === row || String(other.element.value || '') !== ownValue) {
+                        return;
+                    }
+                    var otherGroup = String(other.groupField.value || '');
+                    if (otherGroup) {
+                        occupiedGroups.add(otherGroup);
+                    }
+                });
+            }
+            Array.prototype.forEach.call(row.groupField.options, function (option) {
+                option.disabled = Boolean(
+                    option.value
+                    && option.value !== ownGroup
+                    && occupiedGroups.has(String(option.value))
+                );
+            });
+            syncSelect2(row.groupField);
+        });
+    }
+
+    function setInlineConflict(select, message) {
+        var wrapper = select.closest('.related-widget-wrapper') || select.parentElement;
+        if (!wrapper || !wrapper.parentNode) {
+            return;
+        }
+        var node = wrapper.parentNode.querySelector('[data-inline-assessment-conflict="1"]');
+        if (!node && message) {
+            node = document.createElement('div');
+            node.dataset.inlineAssessmentConflict = '1';
+            node.className = 'errornote journal-admin-field-status journal-admin-field-status--error';
+            wrapper.parentNode.insertBefore(node, wrapper.nextSibling);
+        }
+        if (node) {
+            node.textContent = message || '';
+            node.hidden = !message;
+        }
+    }
+
+    function syncSelect2(select) {
+        if (window.django && window.django.jQuery && select) {
+            window.django.jQuery(select).trigger('change.select2');
+        }
+    }
+
+    document.addEventListener('change', function (event) {
+        var target = event.target;
+        if (!target || target.dataset.assessmentType !== 'item') {
+            return;
+        }
+        refreshItemInlineUniqueness(target.closest('form'));
+    });
+
+    document.addEventListener('journal:options-updated', function (event) {
+        refreshItemInlineUniqueness(event.target && event.target.closest('form'));
+    });
+
+    document.addEventListener('DOMContentLoaded', function () {
+        start(document);
+        refreshItemInlineUniqueness(document.querySelector('form'));
+    });
+    document.addEventListener('formset:added', function (event) {
+        start(event.target || document);
+        refreshItemInlineUniqueness((event.target && event.target.closest('form')) || document.querySelector('form'));
+    });
     if (window.django && window.django.jQuery) {
-        window.django.jQuery(document).on('formset:added', function (_event, row) { start(row && row[0] ? row[0] : document); });
+        window.django.jQuery(document).on('formset:added', function (_event, row) {
+            var root = row && row[0] ? row[0] : document;
+            start(root);
+            refreshItemInlineUniqueness((root.closest && root.closest('form')) || document.querySelector('form'));
+        });
     }
 }());

@@ -49,13 +49,11 @@ def _assignment_querysets(
             is_active=True,
             group__is_active=True,
             subject__is_active=True,
-            teacher__is_active=True,
         )
         individual_assignments = individual_assignments.filter(
             is_active=True,
             student__is_active=True,
             subject__is_active=True,
-            teacher__is_active=True,
         )
     return year, group_assignments, individual_assignments
 

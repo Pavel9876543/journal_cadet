@@ -1,6 +1,7 @@
 from urllib.parse import urlencode
 
 from django import forms
+from django.forms.models import BaseInlineFormSet
 from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin, UserAdmin as BaseUserAdmin
@@ -1459,6 +1460,10 @@ class AssessmentDependencyFormMixin:
                     'data-assessment-options-url': endpoint,
                     'data-assessment-type': self.assessment_type,
                 })
+                if self.assessment_type == 'item' and getattr(self.instance, 'pk', None):
+                    self.fields[field_name].widget.attrs[
+                        'data-current-assessment-item-id'
+                    ] = str(self.instance.pk)
                 for attribute_name, data_attribute in parent_attrs.items():
                     parent = getattr(self, attribute_name, None)
                     parent_id = getattr(parent, 'pk', parent)
@@ -1592,12 +1597,28 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         if subject is not None:
             elements = elements.filter(subject=subject)
         if group is not None:
-            elements = elements.exclude(group_placements__group=group)
-        self._set_queryset('element', self._include_selected(
-            elements.select_related('subject').order_by('subject__name', 'title'),
-            AssessmentElement,
+            occupied = AssessmentItem.objects.filter(
+                group=group,
+                element__isnull=False,
+            )
+            if self.instance and self.instance.pk:
+                occupied = occupied.exclude(pk=self.instance.pk)
+            elements = elements.exclude(
+                pk__in=occupied.values('element_id'),
+            )
+        # Keep only the value owned by the edited row.  A submitted value that
+        # is already occupied by another row must not be silently reintroduced
+        # into the dropdown, otherwise the database constraint is reached.
+        if self.instance and self.instance.pk and self.instance.element_id:
+            elements = AssessmentElement.objects.filter(
+                Q(pk__in=elements.values('pk')) | Q(pk=self.instance.element_id),
+            )
+        self._set_queryset(
             'element',
-        ))
+            elements.select_related('subject').distinct().order_by(
+                'subject__name', 'title'
+            ),
+        )
         if 'element' in self.fields:
             self.fields['element'].required = True
             self.fields['element'].help_text = (
@@ -1620,11 +1641,31 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         groups = AssessmentGroup.objects.filter(is_active=True)
         if year is not None:
             groups = groups.filter(academic_year=year)
-        self._set_queryset('group', self._include_selected(
-            groups.select_related('subject', 'academic_year').order_by('sort_order', 'name'),
-            AssessmentGroup,
+        selected_element = (
+            self._selected_object(AssessmentElement.objects.all(), 'element')
+            or (
+                self.instance.element
+                if self.instance and self.instance.pk and self.instance.element_id
+                else None
+            )
+        )
+        if selected_element is not None:
+            occupied_groups = AssessmentItem.objects.filter(
+                element=selected_element,
+            )
+            if self.instance and self.instance.pk:
+                occupied_groups = occupied_groups.exclude(pk=self.instance.pk)
+            groups = groups.exclude(pk__in=occupied_groups.values('group_id'))
+        if self.instance and self.instance.pk and self.instance.group_id:
+            groups = AssessmentGroup.objects.filter(
+                Q(pk__in=groups.values('pk')) | Q(pk=self.instance.group_id),
+            )
+        self._set_queryset(
             'group',
-        ))
+            groups.select_related('subject', 'academic_year').distinct().order_by(
+                'sort_order', 'name'
+            ),
+        )
         teachers = Teacher.objects.filter(is_active=True)
         if year is not None:
             teachers = teachers.filter(
@@ -1654,7 +1695,53 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             cleaned_data['academic_year'] = group.academic_year
             self.instance.subject = group.subject
             self.instance.academic_year = group.academic_year
+
+        element = cleaned_data.get('element')
+        if group is not None and element is not None:
+            duplicate = AssessmentItem.objects.filter(
+                group=group,
+                element=element,
+            )
+            if self.instance and self.instance.pk:
+                duplicate = duplicate.exclude(pk=self.instance.pk)
+            if duplicate.exists():
+                self.add_error(
+                    'element',
+                    'Это произведение уже добавлено в выбранную группу. '
+                    'Выберите другое значение.',
+                )
         return cleaned_data
+
+
+class AssessmentItemInlineFormSet(BaseInlineFormSet):
+    """Reject duplicate group/element pairs before database constraints."""
+
+    def clean(self):
+        super().clean()
+        seen = {}
+        for form in self.forms:
+            cleaned_data = getattr(form, 'cleaned_data', None) or {}
+            if not cleaned_data or cleaned_data.get('DELETE'):
+                continue
+            group = (
+                cleaned_data.get('group')
+                or getattr(form, 'parent_assessment_group', None)
+                or getattr(form.instance, 'group', None)
+            )
+            element = cleaned_data.get('element')
+            if group is None or element is None:
+                continue
+            key = (group.pk, element.pk)
+            previous_form = seen.get(key)
+            if previous_form is None:
+                seen[key] = form
+                continue
+            message = (
+                'Это произведение уже выбрано в другой строке для той же группы.'
+            )
+            form.add_error('element', message)
+            if 'element' not in previous_form.errors:
+                previous_form.add_error('element', message)
 
 
 class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
@@ -2374,6 +2461,7 @@ class AssessmentItemForGroupInline(
 ):
     model = AssessmentItem
     form = AssessmentItemAdminForm
+    formset = AssessmentItemInlineFormSet
     fk_name = 'group'
     extra = 0
     fields = ('element', 'responsible_teacher', 'sort_order', 'is_required', 'is_active')
@@ -2521,6 +2609,7 @@ class AssessmentItemForTeacherInline(
 ):
     model = AssessmentItem
     form = AssessmentItemAdminForm
+    formset = AssessmentItemInlineFormSet
     fk_name = 'responsible_teacher'
     academic_year_lookup = 'academic_year'
     extra = 0
