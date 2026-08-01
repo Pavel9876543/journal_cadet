@@ -88,6 +88,8 @@ from journal.admin import (
     TeacherAdminForm,
 )
 from journal.middleware import ErrorLoggingMiddleware
+from journal.error_logging import log_handled_error
+from journal.user_error_messages import build_admin_form_user_message
 from journal.forms import (
     CourseApplicationAdminForm,
     CourseApplicationPublicForm,
@@ -10075,3 +10077,158 @@ class TeacherAssignmentVisibilityAndAssessmentChoiceTests(JournalTestDataMixin, 
                 for form in formset.forms
             )
         )
+
+
+class AssessmentResultAdminOptionsAndFriendlyErrorsTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.year = self.create_academic_year()
+        self.study_group = self.create_group(academic_year=self.year)
+        self.subject = Subject.objects.create(
+            name='Оркестровая сдача',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        self.teacher = self.create_teacher(
+            full_name='Дирижёр Проверочный',
+            username='assessment_result_teacher',
+        )
+        TeacherEnrollment.objects.get_or_create(
+            teacher=self.teacher,
+            academic_year=self.year,
+            defaults={'is_active': True},
+        )
+        self.student = self.create_student(
+            full_name='Ученик Проверочный',
+            group=self.study_group,
+            username='assessment_result_student',
+        )
+        self.assessment_group = AssessmentGroup.objects.create(
+            name='Проверочная программа',
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        self.item = AssessmentItem.objects.create(
+            title='Проверочное произведение',
+            subject=self.subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.teacher,
+        )
+        StudentAssessmentGroup.objects.create(
+            student=self.student,
+            assessment_group=self.assessment_group,
+            academic_year=self.year,
+        )
+        self.enrollment = StudentEnrollment.objects.get(
+            student=self.student,
+            academic_year=self.year,
+        )
+
+    def form_class(self):
+        return type(
+            'YearScopedAssessmentResultAdminFormForTest',
+            (AssessmentResultAdminForm,),
+            {'parent_academic_year': self.year},
+        )
+
+    def test_result_add_form_has_year_candidates_before_item_selection(self):
+        form = self.form_class()()
+
+        self.assertIn(
+            self.item.pk,
+            form.fields['item'].queryset.values_list('pk', flat=True),
+        )
+        self.assertIn(
+            self.enrollment.pk,
+            form.fields['enrollment'].queryset.values_list('pk', flat=True),
+        )
+        self.assertIn(
+            self.teacher.pk,
+            form.fields['assessed_by'].queryset.values_list('pk', flat=True),
+        )
+
+    def test_result_fields_narrow_to_selected_item(self):
+        form = self.form_class()(data={'item': str(self.item.pk)})
+
+        self.assertEqual(
+            list(form.fields['enrollment'].queryset.values_list('pk', flat=True)),
+            [self.enrollment.pk],
+        )
+        self.assertEqual(
+            list(form.fields['assessed_by'].queryset.values_list('pk', flat=True)),
+            [self.teacher.pk],
+        )
+        self.assertEqual(form.fields['assessed_by'].initial, self.teacher.pk)
+
+    def test_result_options_api_returns_enrollments_and_teachers_without_item(self):
+        admin_user = User.objects.create_superuser(
+            username='assessment_result_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(
+            reverse('assessment_options_api'),
+            {'type': 'result', 'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn(self.enrollment.pk, {row['id'] for row in payload['enrollments']})
+        self.assertIn(self.teacher.pk, {row['id'] for row in payload['teachers']})
+        self.assertIn(self.item.pk, {row['id'] for row in payload['items']})
+
+    def test_admin_required_errors_have_plain_user_message_and_are_logged(self):
+        class RequiredFieldsForm(forms.Form):
+            enrollment = forms.ModelChoiceField(
+                queryset=StudentEnrollment.objects.all(),
+                label='Зачисление ученика',
+            )
+            assessed_by = forms.ModelChoiceField(
+                queryset=Teacher.objects.all(),
+                label='Преподаватель, выставивший результат',
+            )
+
+        form = RequiredFieldsForm(data={})
+        self.assertFalse(form.is_valid())
+        message = build_admin_form_user_message(form)
+
+        self.assertEqual(
+            message,
+            (
+                'Не удалось сохранить запись. '
+                'Выберите ученика и преподавателя, который выставил результат.'
+            ),
+        )
+        self.assertNotIn('(required)', message)
+        self.assertNotIn('Обязательное поле', message)
+
+        request = RequestFactory().post('/admin/journal/assessmentresult/add/')
+        request.user = User.objects.create_superuser(
+            username='friendly_error_admin',
+            password='Pass12345!',
+        )
+        request.request_id = 'friendly-assessment-error'
+        log_handled_error(
+            request,
+            ValidationError('Форма администратора содержит ошибки.'),
+            logger_name='journal.admin.form',
+            user_message=message,
+        )
+
+        entry = ErrorLog.objects.get(request_id='friendly-assessment-error')
+        self.assertEqual(entry.user_message, message)
+        self.assertIn('Форма администратора', entry.message)
+
+    def test_default_timezone_is_moscow(self):
+        self.assertEqual(settings.TIME_ZONE, 'Europe/Moscow')
+
+    def test_admin_summary_uses_server_friendly_message(self):
+        project_root = Path(__file__).resolve().parent.parent
+        template = (project_root / 'templates/admin/change_form.html').read_text(encoding='utf-8')
+        javascript = (
+            project_root / 'journal/static/journal/admin_responsive.js'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('data-user-friendly-error-message', template)
+        self.assertIn("form.querySelector('[data-user-friendly-error-message]')", javascript)
