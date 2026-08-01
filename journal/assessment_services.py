@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import F, Q
@@ -83,6 +85,42 @@ def assessment_assignments_for_groups(
     return queryset
 
 
+def _normalized_primary_key_values(values, *, mapping_keys=('pk', 'id')) -> set[int]:
+    """Return positive integer primary keys from common queryset/value shapes.
+
+    Django ``QuerySet.values()`` yields dictionaries, while ``values_list()``
+    yields scalars or one-item tuples.  Service helpers are intentionally
+    tolerant of all of these shapes so a harmless queryset refactor cannot
+    take the journal page down with ``unhashable type: 'dict'``.  Unknown or
+    malformed values are ignored instead of being passed to an ``__in`` lookup.
+    """
+    normalized: set[int] = set()
+    if values is None:
+        return normalized
+
+    for raw_value in values:
+        value = raw_value
+        if isinstance(value, Mapping):
+            value = next(
+                (value[key] for key in mapping_keys if key in value),
+                None,
+            )
+        elif isinstance(value, (tuple, list)) and len(value) == 1:
+            value = value[0]
+        elif hasattr(value, 'pk'):
+            value = value.pk
+
+        if value is None or value == '' or isinstance(value, bool):
+            continue
+        try:
+            primary_key = int(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if primary_key > 0:
+            normalized.add(primary_key)
+    return normalized
+
+
 def assessment_student_ids_by_group(
     group_ids,
     academic_year: AcademicYear,
@@ -98,11 +136,10 @@ def assessment_student_ids_by_group(
     compatibility fallback only when no explicit inactive assignment exists,
     so a deliberate deactivation is never silently undone in the UI.
     """
-    normalized_group_ids = {
-        int(group_id)
-        for group_id in group_ids
-        if group_id not in {None, ''}
-    }
+    normalized_group_ids = _normalized_primary_key_values(
+        group_ids,
+        mapping_keys=('group_id', 'assessment_group_id', 'pk', 'id'),
+    )
     if not normalized_group_ids:
         return {}
 

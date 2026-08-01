@@ -43,6 +43,7 @@ from journal.assignment_availability import (
 from journal.assessment_services import (
     assessment_items_for_teacher,
     assessment_sections_for_teacher,
+    assessment_student_ids_by_group,
     available_assessment_items_for_student,
     enrollments_for_assessment_groups,
     set_assessment_result,
@@ -10325,6 +10326,41 @@ class AssessmentWorkspaceIntegrityRegressionTests(JournalTestDataMixin, TestCase
             date=date(self.year.starts_on.year, 10, 1),
             value='5',
         )
+
+    def test_group_id_normalization_accepts_values_rows_and_ignores_bad_values(self):
+        group_rows = AssessmentItem.objects.filter(pk=self.item.pk).values('group_id')
+
+        student_ids_by_group = assessment_student_ids_by_group(
+            [
+                *group_rows,
+                (self.assessment_group.pk,),
+                self.assessment_group,
+                {'unexpected': self.assessment_group.pk},
+                None,
+                '',
+            ],
+            self.year,
+        )
+
+        self.assertEqual(
+            student_ids_by_group[self.assessment_group.pk],
+            {self.student.pk},
+        )
+
+    def test_admin_journal_handles_assessment_group_values_queryset(self):
+        admin_user = User.objects.create_superuser(
+            username='assessment_group_values_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(
+            reverse('journal'),
+            {'academic_year': self.year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.item.title)
 
     def test_admin_and_responsible_teacher_see_assigned_assessment_students(self):
         # Simulate an old/imported row whose denormalized helper columns are

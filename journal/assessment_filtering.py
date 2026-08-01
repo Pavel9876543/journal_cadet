@@ -205,7 +205,7 @@ def _eligible_enrollments_for_items(
     # Requiring a second GroupSubject/StudentSubject link incorrectly removed
     # students that were explicitly assigned in the admin panel.
     return enrollments_for_assessment_groups(
-        items.values('group_id'),
+        items.values_list('group_id', flat=True),
         selection.academic_year,
         include_inactive=not selection.academic_year.is_active,
     )
