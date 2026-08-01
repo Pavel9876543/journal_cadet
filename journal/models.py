@@ -1897,7 +1897,7 @@ class SubjectResult(models.Model):
             in_assessment_groups = StudentAssessmentGroup.objects.filter(
                 student_id=self.student_id,
                 assessment_group__subject_id=self.subject_id,
-                academic_year_id=self.academic_year_id,
+                assessment_group__academic_year_id=self.academic_year_id,
                 is_active=True,
             ).exists()
             preserves_automatic_history = self.is_auto_calculated and bool(self.pk)
@@ -2416,7 +2416,7 @@ class AssessmentResult(models.Model):
             if not StudentAssessmentGroup.objects.filter(
                 student_id=self.enrollment.student_id,
                 assessment_group_id=self.item.group_id,
-                academic_year_id=self.item.academic_year_id,
+                assessment_group__academic_year_id=self.item.academic_year_id,
                 is_active=True,
             ).exists():
                 raise ValidationError({'item': 'Произведение не назначено этому ученику.'})

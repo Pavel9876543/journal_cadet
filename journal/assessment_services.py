@@ -49,6 +49,69 @@ class FinalGradeCalculation:
 
 
 
+def assessment_assignments_for_groups(
+    group_ids,
+    academic_year: AcademicYear,
+    *,
+    include_inactive: bool = False,
+):
+    """Return canonical year-scoped assessment-group assignments.
+
+    ``StudentAssessmentGroup.academic_year`` and ``enrollment`` are denormalized
+    convenience fields.  Older imports may contain stale values there even
+    though the authoritative ``assessment_group`` and ``student`` relations are
+    correct.  The journal therefore scopes by the group's academic year and
+    resolves the current enrollment separately.
+    """
+    queryset = (
+        StudentAssessmentGroup.objects
+        .filter(
+            assessment_group_id__in=group_ids,
+            assessment_group__academic_year=academic_year,
+        )
+        .select_related(
+            'student',
+            'assessment_group',
+            'assessment_group__subject',
+            'enrollment',
+            'enrollment__group',
+            'enrollment__academic_year',
+        )
+    )
+    if not include_inactive:
+        queryset = queryset.filter(is_active=True, student__is_active=True)
+    return queryset
+
+
+def enrollments_for_assessment_groups(
+    group_ids,
+    academic_year: AcademicYear,
+    *,
+    include_inactive: bool = False,
+):
+    """Return one enrollment per student assigned to the selected work groups."""
+    assignments = assessment_assignments_for_groups(
+        group_ids,
+        academic_year,
+        include_inactive=include_inactive,
+    )
+    enrollment_ids = assignments.exclude(enrollment_id=None).filter(
+        enrollment__academic_year=academic_year,
+    ).values('enrollment_id')
+    student_ids = assignments.values('student_id')
+    queryset = (
+        StudentEnrollment.objects
+        .filter(academic_year=academic_year)
+        .filter(Q(pk__in=enrollment_ids) | Q(student_id__in=student_ids))
+        .select_related('student', 'group', 'academic_year')
+        .distinct()
+        .order_by('full_name', 'pk')
+    )
+    if not include_inactive:
+        queryset = queryset.filter(is_active=True, student__is_active=True)
+    return queryset
+
+
 def available_assessment_items_for_student(
     student: Student,
     academic_year: AcademicYear,
@@ -58,7 +121,7 @@ def available_assessment_items_for_student(
 ):
     assignment_filter = Q(
         group__student_assignments__student=student,
-        group__student_assignments__academic_year=academic_year,
+        group__student_assignments__assessment_group__academic_year=academic_year,
         group__student_assignments__is_active=True,
     )
     queryset = (
@@ -104,7 +167,6 @@ def assessment_items_visible_to_teacher(
         .filter(
             Q(responsible_teacher=teacher)
             | Q(
-                group__student_assignments__academic_year=academic_year,
                 group__student_assignments__is_active=True,
                 group__student_assignments__student__enrollments__academic_year=academic_year,
                 group__student_assignments__student__enrollments__is_active=True,
@@ -113,7 +175,6 @@ def assessment_items_visible_to_teacher(
                 group__student_assignments__student__enrollments__group__group_subjects__is_active=True,
             )
             | Q(
-                group__student_assignments__academic_year=academic_year,
                 group__student_assignments__is_active=True,
                 group__student_assignments__student__enrollments__academic_year=academic_year,
                 group__student_assignments__student__enrollments__is_active=True,
@@ -151,24 +212,11 @@ def enrollments_for_assessment_item(
     *,
     include_inactive: bool = False,
 ):
-    assignment_filter = Q(
-        student__assessment_group_assignments__assessment_group=item.group,
-        student__assessment_group_assignments__academic_year=item.academic_year,
-        student__assessment_group_assignments__is_active=True,
+    return enrollments_for_assessment_groups(
+        [item.group_id],
+        item.academic_year,
+        include_inactive=include_inactive,
     )
-    queryset = (
-        StudentEnrollment.objects
-        .filter(
-            assignment_filter,
-            academic_year=item.academic_year,
-        )
-        .select_related('student', 'group', 'academic_year')
-        .distinct()
-        .order_by('full_name', 'pk')
-    )
-    if not include_inactive:
-        queryset = queryset.filter(is_active=True, student__is_active=True)
-    return queryset
 
 
 def students_for_assessment_item(item: AssessmentItem, *, include_inactive: bool = False):
@@ -493,14 +541,10 @@ def assessment_sections_for_teacher(
 
     group_ids = {item.group_id for item in items}
     assignments = list(
-        StudentAssessmentGroup.objects
-        .filter(
-            assessment_group_id__in=group_ids,
-            academic_year=academic_year,
-            is_active=True,
-            student__is_active=True,
+        assessment_assignments_for_groups(
+            group_ids,
+            academic_year,
         )
-        .select_related('student', 'assessment_group')
     )
     student_ids_by_group: dict[int, set[int]] = {}
     all_student_ids: set[int] = set()

@@ -15,8 +15,8 @@
             payload: {subject: 'subjects', academic_year: 'academic_years', assessment_group: 'groups'}
         },
         result: {
-            fields: ['item', 'enrollment', 'assessed_by'],
-            payload: {item: 'items', enrollment: 'enrollments', assessed_by: 'teachers'}
+            fields: ['student', 'item', 'assessed_by'],
+            payload: {student: 'students', item: 'items', assessed_by: 'teachers'}
         }
     };
 
@@ -214,6 +214,7 @@
         function applyDefaults(defaults, changed) {
             var changedAny = false;
             changedAny = setValue('academic_year', defaults.academic_year_id, false) || changedAny;
+            changedAny = setValue('student', defaults.student_id, false) || changedAny;
             changedAny = setValue('subject', defaults.subject_id, changed === 'group' || changed === 'assessment_group') || changedAny;
             changedAny = setValue('responsible_teacher', defaults.responsible_teacher_id, false) || changedAny;
             changedAny = setValue('assessed_by', defaults.assessed_by_id, false) || changedAny;

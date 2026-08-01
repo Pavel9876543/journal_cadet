@@ -30,7 +30,7 @@ from .assessment_services import (
     assessment_subject_sections_for_student,
     assessment_summary_for_teacher,
     clear_assessment_result,
-    enrollments_for_assessment_item,
+    enrollments_for_assessment_groups,
     set_assessment_result,
 )
 from .assessment_filtering import (
@@ -273,6 +273,40 @@ def _grade_options_api_sync(request):
                 {'id': item.pk, 'label': item.full_name}
                 for item in teachers
             ],
+            'defaults': {},
+        })
+
+    if mode == 'subject_result':
+        students = get_grade_students(
+            academic_year=academic_year,
+        )
+        if student is not None and not students.filter(pk=student.pk).exists():
+            student = None
+        subjects = (
+            get_grade_subjects(
+                student=student,
+                academic_year=academic_year,
+            )
+            if student is not None
+            else Subject.objects.none()
+        )
+        if subject is not None and not subjects.filter(pk=subject.pk).exists():
+            subject = None
+        return JsonResponse({
+            'groups': [],
+            'students': [
+                {'id': item.pk, 'label': item.full_name}
+                for item in students
+            ],
+            'subjects': [
+                {
+                    'id': item.pk,
+                    'label': item.name,
+                    'is_individual': item.is_specialty,
+                }
+                for item in subjects
+            ],
+            'teachers': [],
             'defaults': {},
         })
 
@@ -565,9 +599,8 @@ def _assessment_options_api_sync(request):
         'element', 'subject', 'academic_year', 'group', 'responsible_teacher'
     )
     if assessment_type == 'result':
-        # A result can only be authored by the item's responsible teacher.
-        # Hide incomplete items instead of presenting a choice that can never
-        # pass model validation.
+        # A result starts with the student. Only fully configured works can be
+        # selected, and the remaining fields are narrowed from that choice.
         items = items.filter(responsible_teacher__isnull=False)
     enrollments = StudentEnrollment.objects.none()
 
@@ -605,27 +638,44 @@ def _assessment_options_api_sync(request):
         if student is None:
             students = students.filter(is_active=True)
     if assessment_type == 'result':
-        if item is None:
-            teachers = teachers.filter(
-                pk__in=items.values('responsible_teacher_id'),
-            )
+        result_groups = AssessmentGroup.objects.filter(
+            pk__in=items.values('group_id'),
+        )
+        if academic_year is not None:
+            result_groups = result_groups.filter(academic_year=academic_year)
         if item is not None:
-            enrollments = enrollments_for_assessment_item(
-                item,
+            result_groups = result_groups.filter(pk=item.group_id)
+
+        enrollments = (
+            enrollments_for_assessment_groups(
+                result_groups.values('pk'),
+                academic_year,
                 include_inactive=bool(enrollment),
             )
-            if item.responsible_teacher_id:
-                teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
-                if selected_teacher is not None and selected_teacher.pk != item.responsible_teacher_id:
-                    teachers = Teacher.objects.filter(
-                        Q(pk=item.responsible_teacher_id) | Q(pk=selected_teacher.pk)
-                    )
-        elif academic_year is not None:
-            enrollments = StudentEnrollment.objects.filter(
-                academic_year=academic_year,
-                is_active=True,
-                student__is_active=True,
-            ).select_related('student', 'group', 'academic_year')
+            if academic_year is not None
+            else StudentEnrollment.objects.none()
+        )
+        students = Student.objects.filter(
+            pk__in=enrollments.values('student_id'),
+        )
+        if student is not None:
+            items = items.filter(
+                group__student_assignments__student=student,
+                group__student_assignments__assessment_group__academic_year=academic_year,
+                group__student_assignments__is_active=True,
+            )
+        elif item is None:
+            # Enforce the documented order: student -> work -> teacher.
+            items = items.none()
+
+        if item is not None and item.responsible_teacher_id:
+            teachers = Teacher.objects.filter(pk=item.responsible_teacher_id)
+            if selected_teacher is not None and selected_teacher.pk != item.responsible_teacher_id:
+                teachers = Teacher.objects.filter(
+                    Q(pk=item.responsible_teacher_id) | Q(pk=selected_teacher.pk)
+                )
+        else:
+            teachers = Teacher.objects.none()
 
     if not strict_options or changed_field in {'group', 'assessment_group'}:
         groups = _include_selected_option(groups, AssessmentGroup, group)
@@ -690,6 +740,8 @@ def _assessment_options_api_sync(request):
             )
         elements = available_elements
     elements = elements.distinct().order_by('subject__name', 'title')
+    if enrollment is not None:
+        defaults['student_id'] = enrollment.student_id
     if item is not None and item.responsible_teacher_id:
         defaults['assessed_by_id'] = item.responsible_teacher_id
 
@@ -1937,15 +1989,25 @@ def _journal_for_teacher(
         StudentEnrollment.objects
         .filter(
             academic_year=selected_academic_year,
-            group__in=groups_to_show,
             student_id__in=eligible_students.values_list('pk', flat=True),
         )
         .select_related('student', 'student__instrument', 'student__user', 'group', 'academic_year')
         .order_by('full_name')
     )
+    if selected_group is not None:
+        enrollments_qs = enrollments_qs.filter(group=selected_group)
     if can_edit_journal:
         enrollments_qs = enrollments_qs.filter(is_active=True, student__is_active=True)
     enrollments = list(enrollments_qs)
+    if selected_group is None:
+        # Derive the rendering groups from the actual assigned enrollments as
+        # well as the selector queryset. This prevents a stale/missing helper
+        # relation from hiding otherwise valid teacher data.
+        groups_by_id = {group.pk: group for group in groups_to_show if group is not None}
+        for enrollment in enrollments:
+            if enrollment.group_id and enrollment.group is not None:
+                groups_by_id.setdefault(enrollment.group_id, enrollment.group)
+        groups_to_show = sorted(groups_by_id.values(), key=lambda group: (group.name, group.pk))
     student_ids = [enrollment.student_id for enrollment in enrollments]
     students_qs = Student.objects.filter(pk__in=student_ids).order_by('full_name')
     students = list(students_qs)

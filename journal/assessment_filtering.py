@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django.db.models import Q
-
-from .assessment_services import assessment_items_visible_to_teacher
+from .assessment_services import (
+    assessment_items_visible_to_teacher,
+    enrollments_for_assessment_groups,
+)
 from .models import (
     AcademicYear,
     AssessmentGroup,
     AssessmentItem,
     Student,
-    StudentEnrollment,
     Subject,
     Teacher,
 )
@@ -201,27 +201,14 @@ def _eligible_enrollments_for_items(
     selection: AssessmentFilterSelection,
     items,
 ):
-    assessment_group_ids = items.values('group_id')
-    subject_ids = items.values('subject_id')
-    enrollments = StudentEnrollment.objects.filter(
-        academic_year=selection.academic_year,
-        student__assessment_group_assignments__academic_year=selection.academic_year,
-        student__assessment_group_assignments__assessment_group_id__in=assessment_group_ids,
-        student__assessment_group_assignments__is_active=True,
-    ).filter(
-        Q(
-            group__group_subjects__subject_id__in=subject_ids,
-            group__group_subjects__is_active=True,
-        )
-        | Q(
-            student__individual_subjects__subject_id__in=subject_ids,
-            student__individual_subjects__academic_year=selection.academic_year,
-            student__individual_subjects__is_active=True,
-        )
+    # Assignment to an assessment group is itself the authoritative relation.
+    # Requiring a second GroupSubject/StudentSubject link incorrectly removed
+    # students that were explicitly assigned in the admin panel.
+    return enrollments_for_assessment_groups(
+        items.values('group_id'),
+        selection.academic_year,
+        include_inactive=not selection.academic_year.is_active,
     )
-    if selection.academic_year.is_active:
-        enrollments = enrollments.filter(is_active=True, student__is_active=True)
-    return enrollments.select_related('student', 'group', 'academic_year').distinct()
 
 
 def serialize_assessment_filter_options(

@@ -1322,7 +1322,7 @@ class Command(BaseCommand):
                 errors.append(f'Нет групп произведений для {academic_year}.')
             if not AssessmentItem.objects.filter(academic_year=academic_year).exists():
                 errors.append(f'Нет произведений для {academic_year}.')
-            if not StudentAssessmentGroup.objects.filter(academic_year=academic_year).exists():
+            if not StudentAssessmentGroup.objects.filter(assessment_group__academic_year=academic_year).exists():
                 errors.append(f'Нет назначений произведений для {academic_year}.')
             if Grade.objects.filter(academic_year=academic_year).filter(
                 Q(date__lt=academic_year.starts_on) | Q(date__gt=academic_year.ends_on),

@@ -531,7 +531,7 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
         ],
     )
     assignments = (
-        StudentAssessmentGroup.objects.filter(academic_year=academic_year)
+        StudentAssessmentGroup.objects.filter(assessment_group__academic_year=academic_year)
         .select_related('student', 'assessment_group', 'assessment_group__subject', 'academic_year')
         .order_by('student__full_name', 'assessment_group__subject__name', 'assessment_group__name')
         if academic_year else StudentAssessmentGroup.objects.none()
@@ -545,7 +545,7 @@ def write_assessment_sheets(workbook: Workbook, academic_year: AcademicYear | No
             ('Группа произведений', lambda item: item.assessment_group.name),
             ('Предмет', lambda item: item.assessment_group.subject.name),
             ('Активно', lambda item: item.is_active),
-            ('Учебный год', lambda item: item.academic_year.name),
+            ('Учебный год', lambda item: item.assessment_group.academic_year.name),
         ],
     )
     assessment_results = (

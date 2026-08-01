@@ -14,6 +14,7 @@ _STATUS_MESSAGES = {
 
 _REQUIRED_SELECTIONS = {
     'enrollment': 'ученика',
+    'student': 'ученика',
     'assessed_by': 'преподавателя, который выставил результат',
     'item': 'произведение или элемент',
     'status': 'результат',
