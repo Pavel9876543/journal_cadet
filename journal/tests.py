@@ -4725,10 +4725,19 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             ],
         )
 
-    def test_admin_copyright_uses_current_year(self):
+    def test_admin_copyright_uses_current_year_without_duplicate_text(self):
+        copyright_name = settings.JAZZMIN_SETTINGS['copyright']
+
+        self.assertEqual(copyright_name, 'Электронный журнал музыкальных курсов')
+        self.assertNotIn('©', copyright_name)
+        self.assertNotIn(str(date.today().year), copyright_name)
+        self.assertNotIn('Все права защищены', copyright_name)
         self.assertEqual(
-            settings.JAZZMIN_SETTINGS['copyright'],
-            f'© {date.today().year} Электронный журнал музыкальной школы. Все права защищены.',
+            f'Copyright © {date.today().year} {copyright_name}. Все права защищены.',
+            (
+                f'Copyright © {date.today().year} Электронный журнал '
+                'музыкальных курсов. Все права защищены.'
+            ),
         )
 
     def test_admin_guide_is_visible_only_for_superuser(self):
@@ -5072,11 +5081,31 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         })
 
         self.assertEqual(empty_form.fields['instrument'].empty_label, 'Другой инструмент')
-        self.assertFalse(empty_form.fields['custom_instrument'].disabled)
-        self.assertTrue(empty_form.fields['orchestra_part'].disabled)
-        self.assertFalse(domra_form.fields['orchestra_part'].disabled)
-        self.assertTrue(piano_form.fields['orchestra_part'].disabled)
-        self.assertTrue(custom_form.fields['orchestra_part'].disabled)
+        self.assertEqual(
+            empty_form.fields['instrument'].widget.attrs['data-placeholder'],
+            'Другой инструмент',
+        )
+        self.assertNotIn('disabled', empty_form.fields['custom_instrument'].widget.attrs)
+        self.assertIn('disabled', domra_form.fields['custom_instrument'].widget.attrs)
+        self.assertIn('disabled', piano_form.fields['custom_instrument'].widget.attrs)
+        self.assertNotIn('disabled', custom_form.fields['custom_instrument'].widget.attrs)
+        self.assertIn('disabled', empty_form.fields['orchestra_part'].widget.attrs)
+        self.assertNotIn('disabled', domra_form.fields['orchestra_part'].widget.attrs)
+        self.assertIn('disabled', piano_form.fields['orchestra_part'].widget.attrs)
+        self.assertIn('disabled', custom_form.fields['orchestra_part'].widget.attrs)
+
+    def test_student_add_page_renders_other_instrument_and_dependency_scripts(self):
+        self.create_instrument(name='Баян')
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse('admin:journal_student_add'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Другой инструмент')
+        self.assertContains(response, 'data-instrument-reference="1"')
+        self.assertContains(response, 'data-custom-instrument="1"')
+        self.assertContains(response, 'data-orchestra-part="1"')
+        self.assertContains(response, 'journal/orchestra_part_dependencies.js')
 
     def test_used_subject_delete_page_confirms_and_cascades_related_data(self):
         data = self.create_base_journal()
