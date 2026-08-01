@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import date
 from threading import Barrier, Lock, Thread
 from io import BytesIO, StringIO
@@ -37,6 +38,8 @@ from journal.assignment_availability import (
     available_teachers,
 )
 from journal.assessment_services import (
+    assessment_items_for_teacher,
+    assessment_sections_for_teacher,
     available_assessment_items_for_student,
     set_assessment_result,
 )
@@ -67,6 +70,7 @@ from journal.admin import (
     JournalAdminDescriptionMixin,
     StudentAdmin,
     StudentAdminForm,
+    StudentEnrollmentHistoryInline,
     StudentAssessmentGroupAdminForm,
     StudentAssessmentGroupInline,
     StudentInline,
@@ -75,6 +79,7 @@ from journal.admin import (
     PasswordRecoveryContactAdmin,
     TemporaryCredentialAdmin,
     TeacherAdmin,
+    TeacherEnrollmentHistoryInline,
     SubjectResultAdminForm,
     TeacherAdminForm,
 )
@@ -2977,7 +2982,7 @@ class ViewTests(JournalTestDataMixin, TestCase):
         response = self.client.get(reverse('course_registration'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'journal/orchestra_part_dependencies_v2.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v4.js')
         self.assertContains(response, 'data-orchestra-part="1"')
 
     def test_grade_options_api_keeps_upstream_groups_independent_of_children(self):
@@ -4345,7 +4350,7 @@ class AcademicYearAdminContextTests(JournalTestDataMixin, TestCase):
         responsive_tables = Path(
             'journal/static/journal/responsive_tables.js'
         ).read_text(encoding='utf-8')
-        self.assertIn("querySelectorAll?.('table')", responsive_tables)
+        self.assertIn("querySelectorAll('table')", responsive_tables)
         self.assertIn("overflow-y", overflow_css)
         self.assertIn('MutationObserver', responsive_tables)
         self.assertIn("document.addEventListener('formset:added'", responsive_tables)
@@ -5034,14 +5039,14 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertIn('AssessmentGroupForSubjectInline', assessment_inline_names)
         self.assertIn('FinalGradeRuleForSubjectInline', assessment_inline_names)
 
-    def test_student_admin_form_filters_orchestra_parts_by_instrument(self):
+    def test_student_admin_form_embeds_orchestra_parts_by_instrument(self):
         domra = self.create_instrument(name='Домра')
         bayan = self.create_instrument(name='Баян')
         domra_part = OrchestraPart.objects.create(
             instrument=domra,
             name='Малая первая',
         )
-        OrchestraPart.objects.create(
+        bayan_part = OrchestraPart.objects.create(
             instrument=bayan,
             name='Первый',
         )
@@ -5053,11 +5058,18 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         })
 
         self.assertEqual(
-            list(form.fields['orchestra_part'].queryset),
-            [domra_part],
+            set(form.fields['orchestra_part'].queryset),
+            {domra_part, bayan_part},
+        )
+        parts_map = json.loads(
+            form.fields['orchestra_part'].widget.attrs['data-orchestra-parts-map'],
+        )
+        self.assertEqual(
+            parts_map[str(domra.pk)],
+            [{'id': domra_part.pk, 'name': domra_part.name}],
         )
         self.assertIn(
-            'journal/orchestra_part_dependencies_v2.js',
+            'journal/orchestra_part_dependencies_v4.js',
             StudentAdminForm.Media.js,
         )
 
@@ -5105,17 +5117,22 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'data-instrument-reference="1"')
         self.assertContains(response, 'data-custom-instrument="1"')
         self.assertContains(response, 'data-orchestra-part="1"')
-        self.assertContains(response, 'journal/orchestra_part_dependencies_v2.js')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v4.js')
 
     def test_orchestra_part_script_refreshes_jazzmin_select2_after_api_load(self):
         javascript = Path(
-            'journal/static/journal/orchestra_part_dependencies_v2.js'
+            'journal/static/journal/orchestra_part_dependencies_v4.js'
         ).read_text(encoding='utf-8')
 
-        self.assertIn("trigger('change.select2')", javascript)
-        self.assertIn("select2:select select2:clear", javascript)
+        self.assertIn("wrapped.trigger('change')", javascript)
+        self.assertIn('select2:select.journalOrchestraParts', javascript)
+        self.assertIn('select2:clear.journalOrchestraParts', javascript)
         self.assertIn("new URL(endpoint, window.location.origin)", javascript)
         self.assertIn("parts.forEach(function (part)", javascript)
+        self.assertIn(
+            'data-orchestra-parts-map',
+            Path('journal/forms.py').read_text(encoding='utf-8'),
+        )
         self.assertIn("field.removeAttribute('disabled')", javascript)
 
     def test_used_subject_delete_page_confirms_and_cascades_related_data(self):
@@ -9320,3 +9337,287 @@ class RelatedResultAndErrorHandlingTests(JournalTestDataMixin, TestCase):
         self.assertEqual(saved.status_code, 500)
         self.assertEqual(saved.path, '/journal/test-error/')
         self.assertEqual(saved.user_label, 'error-user')
+
+
+class CabinetAndDependencyRegressionTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.year = self.create_academic_year(name='2026/2027')
+        self.group = self.create_group(name='Основная группа', academic_year=self.year)
+        self.instrument = self.create_instrument(name='Домра')
+
+    def test_student_admin_embeds_parts_for_every_instrument(self):
+        domra_part = OrchestraPart.objects.create(
+            instrument=self.instrument,
+            name='Первая домра',
+        )
+        bayan = self.create_instrument(name='Баян')
+        bayan_part = OrchestraPart.objects.create(
+            instrument=bayan,
+            name='Первый баян',
+        )
+
+        form = StudentAdminForm()
+        field = form.fields['orchestra_part']
+        parts_map = json.loads(field.widget.attrs['data-orchestra-parts-map'])
+
+        self.assertEqual(
+            parts_map[str(self.instrument.pk)],
+            [{'id': domra_part.pk, 'name': domra_part.name}],
+        )
+        self.assertEqual(
+            parts_map[str(bayan.pk)],
+            [{'id': bayan_part.pk, 'name': bayan_part.name}],
+        )
+        self.assertFalse(field.disabled)
+        self.assertIn(domra_part, field.queryset)
+        self.assertIn(bayan_part, field.queryset)
+        self.assertIn(
+            'journal/orchestra_part_dependencies_v4.js',
+            tuple(str(item) for item in form.media._js),
+        )
+
+    def test_student_admin_page_contains_local_part_map_and_v4_script(self):
+        OrchestraPart.objects.create(
+            instrument=self.instrument,
+            name='Вторая домра',
+        )
+        superuser = User.objects.create_superuser(
+            username='instrument_admin',
+            password='AdminPass123!',
+        )
+        self.client.force_login(superuser)
+
+        response = self.client.get(reverse('admin:journal_student_add'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-orchestra-parts-map=')
+        self.assertContains(response, 'Вторая домра')
+        self.assertContains(response, 'journal/orchestra_part_dependencies_v4.js')
+
+    def test_responsive_table_script_ignores_detached_tables(self):
+        source = Path(
+            'journal/static/journal/responsive_tables.js'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('!table.isConnected', source)
+        self.assertIn('const parent = table.parentElement;', source)
+        self.assertIn('if (!parent || !parent.isConnected)', source)
+        self.assertNotIn('table.parentNode.insertBefore', source)
+        self.assertIn('requestAnimationFrame', source)
+
+    def test_admin_and_student_cabinets_keep_stable_workspace_scope(self):
+        subject = Subject.objects.create(
+            name='Оркестровая программа',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        teacher = self.create_teacher(username='workspace_teacher')
+        student = self.create_student(
+            full_name='Стабильный Ученик',
+            group=self.group,
+            instrument=self.instrument,
+            username='workspace_student',
+        )
+        self.create_group_assignment(
+            group=self.group,
+            subject=subject,
+            teacher=teacher,
+        )
+        assessment_group = AssessmentGroup.objects.create(
+            name='Программа ученика',
+            subject=subject,
+            academic_year=self.year,
+        )
+        item = AssessmentItem.objects.create(
+            title='Проверочное произведение',
+            subject=subject,
+            academic_year=self.year,
+            group=assessment_group,
+            responsible_teacher=teacher,
+        )
+        StudentAssessmentGroup.objects.create(
+            student=student,
+            assessment_group=assessment_group,
+            academic_year=self.year,
+        )
+
+        admin_user = User.objects.create_superuser(
+            username='workspace_admin',
+            password='AdminPass123!',
+        )
+        self.client.force_login(admin_user)
+        admin_response = self.client.get(reverse('journal'), {
+            'academic_year': self.year.pk,
+        })
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(
+            admin_response,
+            'class="journal-workspace journal-workspace--superuser"',
+        )
+        self.assertContains(admin_response, 'journal/responsive_overflow.css')
+
+        self.client.force_login(student.user)
+        student_response = self.client.get(reverse('journal'), {
+            'academic_year': self.year.pk,
+        })
+        self.assertEqual(student_response.status_code, 200)
+        self.assertContains(
+            student_response,
+            'class="journal-workspace journal-workspace--student"',
+        )
+        self.assertContains(student_response, item.title)
+        self.assertContains(student_response, 'journal/responsive_overflow.css')
+
+
+class TeacherLinkedDataRegressionTests(JournalTestDataMixin, TestCase):
+    def setUp(self):
+        self.year = self.create_academic_year(name='2026/2027')
+        self.group = self.create_group(name='Оркестровый класс', academic_year=self.year)
+        self.instrument = self.create_instrument(name='Скрипка')
+        self.student = self.create_student(
+            full_name='Ученик Связанный Данными',
+            group=self.group,
+            instrument=self.instrument,
+            username='linked_data_student',
+        )
+        self.linked_teacher = self.create_teacher(
+            full_name='Связанный Преподаватель',
+            username='linked_data_teacher',
+        )
+        self.responsible_teacher = self.create_teacher(
+            full_name='Ответственный Дирижёр',
+            username='responsible_data_teacher',
+        )
+        self.subject = Subject.objects.create(
+            name='Оркестровые произведения',
+            assessment_mode=Subject.ASSESSMENT_MODE_ELEMENTS,
+            final_grade_type=Subject.FINAL_GRADE_TYPE_PASS_FAIL,
+        )
+        GroupSubject.objects.create(
+            group=self.group,
+            subject=self.subject,
+            teacher=self.linked_teacher,
+        )
+        self.assessment_group = AssessmentGroup.objects.create(
+            name='Основная программа',
+            subject=self.subject,
+            academic_year=self.year,
+        )
+        self.item = AssessmentItem.objects.create(
+            title='Связанное произведение',
+            subject=self.subject,
+            academic_year=self.year,
+            group=self.assessment_group,
+            responsible_teacher=self.responsible_teacher,
+        )
+        StudentAssessmentGroup.objects.create(
+            student=self.student,
+            assessment_group=self.assessment_group,
+            academic_year=self.year,
+        )
+
+    def test_teacher_can_view_item_linked_through_group_subject(self):
+        self.assertTrue(
+            assessment_items_for_teacher(
+                self.linked_teacher,
+                self.year,
+            ).filter(pk=self.item.pk).exists()
+        )
+
+        sections = assessment_sections_for_teacher(
+            self.linked_teacher,
+            self.year,
+        )
+        section = next(item for item in sections if item['item'].pk == self.item.pk)
+        self.assertFalse(section['can_edit'])
+        self.assertEqual(
+            [row['student'].pk for row in section['rows']],
+            [self.student.pk],
+        )
+
+    def test_linked_teacher_sees_read_only_data_in_personal_cabinet(self):
+        self.client.force_login(self.linked_teacher.user)
+
+        response = self.client.get(reverse('journal'), {
+            'academic_year': self.year.pk,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.item.title)
+        self.assertContains(response, 'Только просмотр')
+        self.assertNotContains(
+            response,
+            f'data-save-context="assessment-{self.item.pk}-{self.student.pk}"',
+        )
+
+    def test_responsible_teacher_retains_edit_access(self):
+        sections = assessment_sections_for_teacher(
+            self.responsible_teacher,
+            self.year,
+        )
+        section = next(item for item in sections if item['item'].pk == self.item.pk)
+        self.assertTrue(section['can_edit'])
+
+    def test_responsible_teacher_sees_direct_group_assignment_without_subject_link(self):
+        GroupSubject.objects.filter(
+            group=self.group,
+            subject=self.subject,
+        ).delete()
+
+        sections = assessment_sections_for_teacher(
+            self.responsible_teacher,
+            self.year,
+        )
+
+        section = next(item for item in sections if item['item'].pk == self.item.pk)
+        self.assertTrue(section['can_edit'])
+        self.assertEqual(
+            [row['student'].pk for row in section['rows']],
+            [self.student.pk],
+        )
+
+
+class SharedProfilesAcrossYearsRegressionTests(JournalTestDataMixin, TestCase):
+    def test_student_and_teacher_profiles_are_reused_across_years(self):
+        archived_year = self.create_academic_year(name='2025/2026')
+        archived_group = self.create_group(
+            name='Архивная группа',
+            academic_year=archived_year,
+        )
+        instrument = self.create_instrument(name='Флейта')
+        student = self.create_student(
+            full_name='Многолетний Ученик',
+            group=archived_group,
+            instrument=instrument,
+            username='multi_year_student_profile',
+        )
+        teacher = self.create_teacher(
+            full_name='Многолетний Преподаватель',
+            username='multi_year_teacher_profile',
+        )
+
+        active_year = self.create_academic_year(name='2026/2027')
+        active_group = self.create_group(
+            name='Активная группа',
+            academic_year=active_year,
+        )
+        student.group = active_group
+        student.save()
+        TeacherEnrollment.objects.create(
+            teacher=teacher,
+            academic_year=active_year,
+            is_active=True,
+        )
+
+        self.assertEqual(Student.objects.filter(pk=student.pk).count(), 1)
+        self.assertEqual(Teacher.objects.filter(pk=teacher.pk).count(), 1)
+        self.assertEqual(
+            set(student.enrollments.values_list('academic_year_id', flat=True)),
+            {archived_year.pk, active_year.pk},
+        )
+        self.assertEqual(
+            set(teacher.academic_year_memberships.values_list('academic_year_id', flat=True)),
+            {archived_year.pk, active_year.pk},
+        )
+        self.assertIn(StudentEnrollmentHistoryInline, StudentAdmin.inlines)
+        self.assertIn(TeacherEnrollmentHistoryInline, TeacherAdmin.inlines)
