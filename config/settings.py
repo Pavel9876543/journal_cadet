@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from pathlib import Path
 from importlib.util import find_spec
 
@@ -133,7 +134,7 @@ JAZZMIN_SETTINGS = {
     'site_header': 'Электронный журнал',
     'site_brand': 'Журнал',
     'welcome_sign': 'Вход в админ-панель журнала',
-    'copyright': 'Электронный журнал музыкальной школы',
+    'copyright': f'© {date.today().year} Электронный журнал музыкальной школы. Все права защищены.',
     'search_model': ['journal.Student', 'journal.Teacher', 'journal.CourseApplication'],
     'custom_css': 'journal/admin_dashboard.css',
     'custom_js': 'journal/admin_responsive.js',
