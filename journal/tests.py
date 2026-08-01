@@ -4861,6 +4861,33 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertContains(response, 'view-related')
         self.assertContains(response, 'delete-related')
 
+    def test_subject_change_page_lists_all_groups_for_selected_subject(self):
+        year = self.create_academic_year()
+        subject = self.create_subject(name='Предмет для списка групп')
+        teacher = self.create_teacher(username='subject_all_groups_teacher')
+        groups = [
+            self.create_group(name='Альфа-группа', academic_year=year),
+            self.create_group(name='Бета-группа', academic_year=year),
+        ]
+        for group in groups:
+            self.create_group_assignment(
+                group=group,
+                subject=subject,
+                teacher=teacher,
+            )
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(
+            reverse('admin:journal_subject_change', args=[subject.pk]),
+            {'academic_year': year.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        for group in groups:
+            self.assertContains(response, group.name)
+        self.assertContains(response, 'Добавить еще один')
+        self.assertNotContains(response, 'inline-group collapse')
+
     def test_subject_change_page_saves_manually_added_group_relation_once(self):
         year = self.create_academic_year()
         group = self.create_group(name='Группа для ручной связи', academic_year=year)
@@ -4949,6 +4976,8 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertTrue(inline.can_delete)
         self.assertTrue(inline.show_change_link)
         self.assertEqual(inline.form, GroupSubjectForSubjectAdminForm)
+        self.assertNotIn('collapse', inline.classes or ())
+        self.assertEqual(inline.ordering, ('group__name', 'sort_order', 'pk'))
 
     def test_subject_admin_keeps_tabs_with_existing_related_data_visible(self):
         year = self.create_academic_year()

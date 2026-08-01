@@ -2059,7 +2059,12 @@ class GroupSubjectForSubjectInline(SelectedAcademicYearGroupSubjectInlineMixin, 
     extra = 1
     fields = ('group', 'teacher', 'sort_order', 'is_active')
     show_change_link = True
-    classes = ('collapse',)
+    # Jazzmin already renders inlines as tab panels. The Bootstrap ``collapse``
+    # class hides the panel body after switching to this tab, leaving only an
+    # empty area even though the formset and its rows are present in the HTML.
+    # Keep this reverse relation expanded so existing groups and the add-row
+    # control are always visible from the subject card.
+    ordering = ('group__name', 'sort_order', 'pk')
     verbose_name = 'Групповой предмет'
     verbose_name_plural = 'Группы, где есть этот предмет'
     can_delete = True
