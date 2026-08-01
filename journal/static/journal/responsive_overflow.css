@@ -150,3 +150,14 @@ body.journal-workspace .table-responsive > table {
         max-height: 72dvh !important;
     }
 }
+
+/* Shared native dependent select used by registration and Django Admin. */
+select.journal-native-dependent-select,
+.related-widget-wrapper select.journal-native-dependent-select {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    min-height: 38px;
+    box-sizing: border-box;
+}

@@ -133,6 +133,83 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
         field.widget.attrs.pop('disabled', None)
 
 
+
+def configure_instrument_selection_fields(
+    form,
+    instrument_field_name: str,
+    *,
+    instrument_help_text: str | None = None,
+    custom_help_text: str | None = None,
+    custom_placeholder: str = 'Введите название собственного инструмента',
+) -> None:
+    """Apply one shared instrument/part workflow to registration and admin forms.
+
+    Both forms intentionally expose the same three-step interaction:
+    1. choose an instrument from the directory or select ``Другой инструмент``;
+    2. enter a custom instrument only for that fallback choice;
+    3. choose an orchestra part only from active parts of the selected directory
+       instrument.
+
+    Keeping this setup in one helper prevents the admin form and registration
+    form from drifting apart again.
+    """
+    instrument_field = form.fields.get(instrument_field_name)
+    custom_field = form.fields.get('custom_instrument')
+    if instrument_field is None or custom_field is None:
+        return
+
+    selected_instrument_id = None
+    if form.is_bound:
+        selected_instrument_id = (
+            form.data.get(form.add_prefix(instrument_field_name))
+            or form.data.get(instrument_field_name)
+        )
+    elif form.instance:
+        selected_instrument_id = getattr(
+            form.instance,
+            f'{instrument_field_name}_id',
+            None,
+        )
+
+    instrument_field.queryset = Instrument.objects.order_by('name')
+    instrument_field.label = 'Инструмент'
+    instrument_field.empty_label = 'Другой инструмент'
+    instrument_field.help_text = instrument_help_text or (
+        'Выберите инструмент из справочника. Если подходящего значения нет, '
+        'оставьте «Другой инструмент» и заполните поле ниже.'
+    )
+    instrument_field.widget.attrs.update({
+        'data-instrument-reference': '1',
+        'data-instrument-dependency': '1',
+        'data-placeholder': 'Другой инструмент',
+    })
+
+    custom_field.required = False
+    custom_field.label = 'Собственный инструмент'
+    custom_field.help_text = custom_help_text or (
+        'Поле доступно только при выборе варианта «Другой инструмент».'
+    )
+    custom_field.widget.attrs.update({
+        'data-custom-instrument': '1',
+        'data-instrument-dependency': '1',
+        'placeholder': custom_placeholder,
+        'aria-disabled': 'true' if selected_instrument_id else 'false',
+    })
+    if selected_instrument_id:
+        custom_field.widget.attrs['disabled'] = True
+    else:
+        custom_field.widget.attrs.pop('disabled', None)
+
+    configure_orchestra_part_field(form, instrument_field_name)
+    orchestra_part_field = form.fields.get('orchestra_part')
+    if orchestra_part_field is not None:
+        orchestra_part_field.label = 'Партия в оркестре'
+        orchestra_part_field.widget.attrs.update({
+            'data-instrument-dependency': '1',
+            'data-native-dependent-select': '1',
+        })
+
+
 # -----------------------------------------------------------------------------
 # Общие queryset/helper-функции для форм журнала
 # -----------------------------------------------------------------------------
@@ -747,25 +824,11 @@ class BaseCourseApplicationForm(forms.ModelForm):
             self.fields['gender'].widget = forms.RadioSelect(choices=CourseApplication.GENDER_CHOICES)
         if 'birth_date' in self.fields:
             self.fields['birth_date'].widget = html_date_input()
-        if 'instrument_reference' in self.fields:
-            self.fields['instrument_reference'].queryset = Instrument.objects.order_by('name')
-            self.fields['instrument_reference'].empty_label = 'Другой инструмент'
-            self.fields['instrument_reference'].help_text = (
-                'Выберите значение из справочника. Если подходящего нет, оставьте '
-                '«Другой инструмент» и заполните поле ниже.'
-            )
-            self.fields['instrument_reference'].widget.attrs.update({
-                'data-instrument-reference': '1',
-            })
-        if 'custom_instrument' in self.fields:
-            self.fields['custom_instrument'].required = False
-            self.fields['custom_instrument'].help_text = ''
-            self.fields['custom_instrument'].widget.attrs.update({
-                'placeholder': 'Например, домра малая',
-                'data-custom-instrument': '1',
-            })
-        if 'orchestra_part' in self.fields:
-            configure_orchestra_part_field(self, 'instrument_reference')
+        configure_instrument_selection_fields(
+            self,
+            'instrument_reference',
+            custom_placeholder='Например, домра малая',
+        )
         if 'music_education' in self.fields:
             self.fields['music_education'].widget = forms.Select(
                 choices=CourseApplication.MUSIC_EDUCATION_CHOICES,
@@ -909,7 +972,7 @@ class CourseApplicationPublicForm(BaseCourseApplicationForm):
         super().__init__(*args, age_limit=True, include_status=False, **kwargs)
 
     class Media:
-        js = ('journal/orchestra_part_dependencies_v4.js',)
+        js = ('journal/orchestra_part_dependencies_v5.js',)
 
 
 class CourseApplicationAdminForm(BaseCourseApplicationForm):
@@ -922,7 +985,7 @@ class CourseApplicationAdminForm(BaseCourseApplicationForm):
         super().__init__(*args, age_limit=False, include_status=True, **kwargs)
 
     class Media:
-        js = ('journal/orchestra_part_dependencies_v4.js',)
+        js = ('journal/orchestra_part_dependencies_v5.js',)
 
 
 # -----------------------------------------------------------------------------

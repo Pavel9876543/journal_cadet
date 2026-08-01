@@ -39,7 +39,7 @@ from .assessment_services import enrollments_for_assessment_item
 from .forms import (
     CourseApplicationAdminForm,
     CourseRegistrationSettingsForm,
-    configure_orchestra_part_field,
+    configure_instrument_selection_fields,
     html_date_input,
 )
 from .grade_options import (
@@ -1046,51 +1046,20 @@ class StudentAdminForm(forms.ModelForm):
 
         self.fields['group'].queryset = group_queryset
 
-        selected_instrument_id = None
-        if self.is_bound:
-            selected_instrument_id = (
-                self.data.get(self.add_prefix('instrument'))
-                or self.data.get('instrument')
-            )
-        elif self.instance:
-            selected_instrument_id = self.instance.instrument_id
-
-        if 'instrument' in self.fields:
-            self.fields['instrument'].queryset = Instrument.objects.order_by('name')
-            self.fields['instrument'].empty_label = 'Другой инструмент'
-            self.fields['instrument'].help_text = (
-                'Выберите инструмент из справочника. Для собственного инструмента '
-                'выберите вариант «Другой инструмент».'
-            )
-            self.fields['instrument'].widget.attrs.update({
-                'data-instrument-reference': '1',
-                'data-placeholder': 'Другой инструмент',
-            })
-        if 'custom_instrument' in self.fields:
-            self.fields['custom_instrument'].required = False
-            self.fields['custom_instrument'].help_text = (
-                'Поле доступно только при выборе варианта «Другой инструмент».'
-            )
-            self.fields['custom_instrument'].widget.attrs.update({
-                'data-custom-instrument': '1',
-                'placeholder': 'Введите название собственного инструмента',
-                'aria-disabled': 'true' if selected_instrument_id else 'false',
-            })
-            if selected_instrument_id:
-                self.fields['custom_instrument'].widget.attrs['disabled'] = True
-            else:
-                self.fields['custom_instrument'].widget.attrs.pop('disabled', None)
-        configure_orchestra_part_field(self, 'instrument')
+        configure_instrument_selection_fields(
+            self,
+            'instrument',
+            custom_placeholder='Введите название собственного инструмента',
+        )
         if 'orchestra_part' in self.fields:
-            # The browser controls availability dynamically. Keeping the Django
-            # field enabled avoids restoring an old value when the administrator
-            # changes an existing student from one instrument source to another.
+            # JavaScript controls only the HTML availability. The Django field
+            # must remain enabled so a newly selected part is accepted on POST.
             self.fields['orchestra_part'].disabled = False
 
     class Media:
         js = (
             'journal/admin_responsive.js',
-            'journal/orchestra_part_dependencies_v4.js',
+            'journal/orchestra_part_dependencies_v5.js',
         )
 
     def clean(self):
@@ -3315,7 +3284,7 @@ class StudentAdmin(SharedProfileAcademicYearAdminMixin, JournalAdminDescriptionM
     )
 
     class Media:
-        js = ('journal/orchestra_part_dependencies_v4.js',)
+        js = ('journal/orchestra_part_dependencies_v5.js',)
 
     def get_queryset(self, request):
         academic_year = self.selected_academic_year(request)
