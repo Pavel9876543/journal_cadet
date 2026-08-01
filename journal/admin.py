@@ -45,6 +45,8 @@ from .forms import (
     configure_instrument_selection_fields,
     clean_instrument_selection,
     html_date_input,
+    remove_widget_attr,
+    update_widget_attrs,
 )
 from .grade_options import (
     get_grade_form_options,
@@ -189,6 +191,32 @@ class JournalAdminDescriptionMixin(RelatedRecordsAdminMixin):
             request.POST = request.POST.copy()
             request.POST['_continue'] = '1'
         return super().response_change(request, obj)
+
+    def save_formset(self, request, form, formset, change):
+        """Report outcome edits as edits, not as newly added records."""
+        super().save_formset(request, form, formset, change)
+        labels = {
+            Grade: 'оценок',
+            SubjectResult: 'оценок/итогов',
+            AssessmentResult: 'зачётов',
+        }
+        label = labels.get(formset.model)
+        if label is None:
+            return
+        added_count = len(getattr(formset, 'new_objects', ()))
+        changed_count = len(getattr(formset, 'changed_objects', ()))
+        if added_count:
+            self.message_user(
+                request,
+                f'Добавлено {label}: {added_count}.',
+                level=messages.SUCCESS,
+            )
+        if changed_count:
+            self.message_user(
+                request,
+                f'Изменено {label}: {changed_count}.',
+                level=messages.SUCCESS,
+            )
 
     def model_has_active_state(self):
         try:
@@ -826,18 +854,22 @@ class GradeAdminForm(forms.ModelForm):
                 teacher_id,
             )
         if 'academic_year' in self.fields:
+            year_queryset = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
+            if fixed_academic_year is not None:
+                year_queryset = AcademicYear.objects.filter(pk=fixed_academic_year.pk)
             self.fields['academic_year'].queryset = self._include_submitted_choice(
-                AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+                year_queryset,
                 AcademicYear,
                 academic_year_id,
             )
             if fixed_academic_year is not None:
                 self.fields['academic_year'].initial = fixed_academic_year
-                self.fields['academic_year'].disabled = True
+                self.fields['academic_year'].disabled = False
+                remove_widget_attr(self.fields['academic_year'], 'disabled')
         dependency_url = reverse('grade_options_api')
         for field_name in ('group', 'student', 'subject', 'teacher'):
             if field_name in self.fields:
-                self.fields[field_name].widget.attrs.update({
+                update_widget_attrs(self.fields[field_name], {
                     'data-grade-options-url': dependency_url,
                     'data-grade-dependency-mode': 'grade',
                 })
@@ -921,7 +953,14 @@ class GradeAdminForm(forms.ModelForm):
                 subject=subject,
                 academic_year=academic_year,
             ).filter(pk=teacher.pk).exists()
-            if not teacher_is_allowed:
+            keeps_historical_teacher = bool(
+                self.instance.pk
+                and self.instance.student_id == student.pk
+                and self.instance.subject_id == subject.pk
+                and self.instance.teacher_id == teacher.pk
+                and self.instance.academic_year_id == getattr(academic_year, 'pk', None)
+            )
+            if not teacher_is_allowed and not keeps_historical_teacher:
                 self._add_available_error(
                     'teacher',
                     'Преподаватель не ведёт выбранный предмет у этого ученика.',
@@ -973,19 +1012,23 @@ class SubjectResultAdminForm(forms.ModelForm):
             )
 
         if 'academic_year' in self.fields:
+            year_queryset = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
+            if fixed_academic_year is not None:
+                year_queryset = AcademicYear.objects.filter(pk=fixed_academic_year.pk)
             self.fields['academic_year'].queryset = self._include_selected_choice(
-                AcademicYear.objects.filter(is_active=True).order_by('-starts_on'),
+                year_queryset,
                 AcademicYear,
                 academic_year_id,
             )
             if fixed_academic_year is not None:
                 self.fields['academic_year'].initial = fixed_academic_year
-                self.fields['academic_year'].disabled = True
+                self.fields['academic_year'].disabled = False
+                remove_widget_attr(self.fields['academic_year'], 'disabled')
 
         dependency_url = reverse('grade_options_api')
         for field_name in ('student', 'subject', 'academic_year'):
             if field_name in self.fields:
-                self.fields[field_name].widget.attrs.update({
+                update_widget_attrs(self.fields[field_name], {
                     'data-grade-options-url': dependency_url,
                     'data-grade-dependency-mode': 'subject_result',
                 })
@@ -1231,11 +1274,18 @@ class GroupSubjectAdminForm(forms.ModelForm):
                 'subject',
             )
         if 'teacher' in self.fields:
-            self.fields['teacher'].queryset = self._include_selected_choice(
-                assignment_teacher_queryset(subject),
-                Teacher,
-                'teacher',
+            teacher_queryset = (
+                assignment_teacher_queryset(subject)
+                if subject is not None
+                else Teacher.objects.none()
             )
+            if subject is not None:
+                teacher_queryset = self._include_selected_choice(
+                    teacher_queryset,
+                    Teacher,
+                    'teacher',
+                )
+            self.fields['teacher'].queryset = teacher_queryset
         self._attach_dependency_attrs('group_subject')
 
     def _raw_value(self, field_name):
@@ -1264,7 +1314,7 @@ class GroupSubjectAdminForm(forms.ModelForm):
         url = reverse('assignment_options_api')
         for field_name in ('group', 'subject', 'teacher'):
             if field_name in self.fields:
-                self.fields[field_name].widget.attrs.update({
+                update_widget_attrs(self.fields[field_name], {
                     'data-assignment-options-url': url,
                     'data-assignment-type': assignment_type,
                 })
@@ -1356,11 +1406,18 @@ class StudentSubjectAdminForm(forms.ModelForm):
                 'subject',
             )
         if 'teacher' in self.fields:
-            self.fields['teacher'].queryset = self._include_selected_choice(
-                assignment_teacher_queryset(subject, academic_year),
-                Teacher,
-                'teacher',
+            teacher_queryset = (
+                assignment_teacher_queryset(subject, academic_year)
+                if subject is not None
+                else Teacher.objects.none()
             )
+            if subject is not None:
+                teacher_queryset = self._include_selected_choice(
+                    teacher_queryset,
+                    Teacher,
+                    'teacher',
+                )
+            self.fields['teacher'].queryset = teacher_queryset
         self._attach_dependency_attrs('student_subject')
 
     def _raw_value(self, field_name):
@@ -1389,7 +1446,7 @@ class StudentSubjectAdminForm(forms.ModelForm):
         url = reverse('assignment_options_api')
         for field_name in ('student', 'subject', 'teacher'):
             if field_name in self.fields:
-                self.fields[field_name].widget.attrs.update({
+                update_widget_attrs(self.fields[field_name], {
                     'data-assignment-options-url': url,
                     'data-assignment-type': assignment_type,
                 })
@@ -1486,19 +1543,22 @@ class AssessmentDependencyFormMixin:
         }
         for field_name in self.dependency_fields:
             if field_name in self.fields:
-                self.fields[field_name].widget.attrs.update({
+                update_widget_attrs(self.fields[field_name], {
                     'data-assessment-options-url': endpoint,
                     'data-assessment-type': self.assessment_type,
                 })
                 if self.assessment_type == 'item' and getattr(self.instance, 'pk', None):
-                    self.fields[field_name].widget.attrs[
-                        'data-current-assessment-item-id'
-                    ] = str(self.instance.pk)
+                    update_widget_attrs(self.fields[field_name], {
+                        'data-current-assessment-item-id': str(self.instance.pk),
+                    })
                 for attribute_name, data_attribute in parent_attrs.items():
                     parent = getattr(self, attribute_name, None)
                     parent_id = getattr(parent, 'pk', parent)
                     if parent_id:
-                        self.fields[field_name].widget.attrs[data_attribute] = str(parent_id)
+                        update_widget_attrs(
+                            self.fields[field_name],
+                            {data_attribute: str(parent_id)},
+                        )
 
 
 class ExistingValuesTextInput(forms.TextInput):
@@ -1623,10 +1683,22 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             group.academic_year if group is not None
             else getattr(self, 'parent_academic_year', None) or AcademicYear.get_active()
         )
-        elements = AssessmentElement.objects.filter(is_active=True)
-        if subject is not None:
-            elements = elements.filter(subject=subject)
+        selected_element = (
+            self._selected_object(AssessmentElement.objects.all(), 'element')
+            or (
+                self.instance.element
+                if self.instance and self.instance.pk and self.instance.element_id
+                else None
+            )
+        )
+        # Group is the authoritative main field.  Until it is selected, the
+        # dependent dropdown must stay enabled but contain no catalog values.
+        elements = AssessmentElement.objects.none()
         if group is not None:
+            elements = AssessmentElement.objects.filter(
+                is_active=True,
+                subject=group.subject,
+            )
             occupied = AssessmentItem.objects.filter(
                 group=group,
                 element__isnull=False,
@@ -1639,9 +1711,9 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         # Keep only the value owned by the edited row.  A submitted value that
         # is already occupied by another row must not be silently reintroduced
         # into the dropdown, otherwise the database constraint is reached.
-        if self.instance and self.instance.pk and self.instance.element_id:
+        if selected_element is not None and self.instance and self.instance.pk:
             elements = AssessmentElement.objects.filter(
-                Q(pk__in=elements.values('pk')) | Q(pk=self.instance.element_id),
+                Q(pk__in=elements.values('pk')) | Q(pk=selected_element.pk),
             )
         self._set_queryset(
             'element',
@@ -1655,17 +1727,11 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
                 'Выберите произведение только из справочника. Новое значение '
                 'добавляется через кнопку «+» рядом с полем.'
             )
+        # ``group`` is the main selector and therefore must remain populated.
+        # Only its dependent element/teacher fields start empty.
         groups = AssessmentGroup.objects.filter(is_active=True)
         if year is not None:
             groups = groups.filter(academic_year=year)
-        selected_element = (
-            self._selected_object(AssessmentElement.objects.all(), 'element')
-            or (
-                self.instance.element
-                if self.instance and self.instance.pk and self.instance.element_id
-                else None
-            )
-        )
         if selected_element is not None:
             occupied_groups = AssessmentItem.objects.filter(
                 element=selected_element,
@@ -1685,12 +1751,21 @@ class AssessmentItemAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
         )
         # The assignment itself grants access. TeacherEnrollment is only a
         # synchronized navigation/history record and must never empty this list.
-        teachers = assignment_teacher_queryset(subject=subject, academic_year=year)
-        self._set_queryset('responsible_teacher', self._include_selected(
-            teachers.distinct().order_by('full_name'),
-            Teacher,
+        teachers = (
+            assignment_teacher_queryset(subject=subject, academic_year=year)
+            if group is not None
+            else Teacher.objects.none()
+        )
+        if group is not None:
+            teachers = self._include_selected(
+                teachers,
+                Teacher,
+                'responsible_teacher',
+            )
+        self._set_queryset(
             'responsible_teacher',
-        ))
+            teachers.distinct().order_by('full_name'),
+        )
         self._set_help_text('responsible_teacher', (
             'Можно выбрать любого активного преподавателя этого учебного года. '
             'Без ответственного преподавателя произведение недоступно для выставления результатов.'
@@ -1776,10 +1851,12 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
             self._selected_object(AcademicYear.objects.all(), 'academic_year')
             or getattr(self, 'parent_academic_year', None)
         )
-        group = (
-            self._selected_object(AssessmentGroup.objects.all(), 'assessment_group')
-            or getattr(self, 'parent_assessment_group', None)
+        selected_group = self._selected_object(
+            AssessmentGroup.objects.all(),
+            'assessment_group',
         )
+        parent_group = getattr(self, 'parent_assessment_group', None)
+        group = selected_group or parent_group
         if group is not None:
             year = group.academic_year
         student_queryset = active_student_queryset()
@@ -1792,14 +1869,26 @@ class StudentAssessmentGroupAdminForm(AssessmentDependencyFormMixin, forms.Model
         self._set_queryset('student', self._include_selected(
             student_queryset, Student, 'student'
         ))
-        groups = AssessmentGroup.objects.filter(is_active=True)
-        if year is not None:
-            groups = groups.filter(academic_year=year)
-        self._set_queryset('assessment_group', self._include_selected(
-            groups.select_related('subject', 'academic_year').order_by('subject__name', 'sort_order', 'name'),
-            AssessmentGroup,
+        # A student's groups are dependent on the selected student.  Keep the
+        # required select enabled but empty on the initial blank form.
+        groups = AssessmentGroup.objects.none()
+        if parent_group is not None:
+            groups = AssessmentGroup.objects.filter(pk=parent_group.pk)
+        elif student is not None:
+            groups = AssessmentGroup.objects.filter(is_active=True)
+            if year is not None:
+                groups = groups.filter(academic_year=year)
+            groups = self._include_selected(
+                groups,
+                AssessmentGroup,
+                'assessment_group',
+            )
+        self._set_queryset(
             'assessment_group',
-        ))
+            groups.select_related('subject', 'academic_year').order_by(
+                'subject__name', 'sort_order', 'name'
+            ),
+        )
         self.attach_dependencies()
 
 
@@ -1929,11 +2018,26 @@ class AssessmentResultAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
                 'item',
                 'Для произведения не назначен ответственный преподаватель.',
             )
-        elif assessed_by is None or assessed_by.pk != item.responsible_teacher_id:
+        elif assessed_by is None:
             self.add_error(
                 'assessed_by',
                 'Результат может выставить только ответственный преподаватель произведения.',
             )
+        else:
+            keeps_historical_author = bool(
+                self.instance.pk
+                and self.instance.item_id == item.pk
+                and self.instance.assessed_by_id == assessed_by.pk
+            )
+            if (
+                assessed_by.pk != item.responsible_teacher_id
+                and not keeps_historical_author
+            ):
+                self.add_error(
+                    'assessed_by',
+                    'Нового автора результата можно выбрать только из текущих '
+                    'ответственных преподавателей произведения.',
+                )
 
         duplicate_results = AssessmentResult.objects.filter(
             enrollment=enrollment,
@@ -1982,16 +2086,23 @@ class FinalGradeRuleAdminForm(AssessmentDependencyFormMixin, forms.ModelForm):
             AcademicYear,
             'academic_year',
         ))
-        groups = AssessmentGroup.objects.all()
-        if subject is not None:
-            groups = groups.filter(subject=subject)
-        if year is not None:
-            groups = groups.filter(academic_year=year)
-        self._set_queryset('assessment_group', self._include_selected(
-            groups.select_related('subject', 'academic_year').order_by('sort_order', 'name'),
-            AssessmentGroup,
+        groups = AssessmentGroup.objects.none()
+        if subject is not None and year is not None:
+            groups = AssessmentGroup.objects.filter(
+                subject=subject,
+                academic_year=year,
+            )
+            groups = self._include_selected(
+                groups,
+                AssessmentGroup,
+                'assessment_group',
+            )
+        self._set_queryset(
             'assessment_group',
-        ))
+            groups.select_related('subject', 'academic_year').order_by(
+                'sort_order', 'name'
+            ),
+        )
         self.attach_dependencies()
 
 
@@ -2510,7 +2621,7 @@ class SubjectResultInline(
                     Subject,
                     subject_id,
                 )
-                self.fields['subject'].widget.attrs.update({
+                update_widget_attrs(self.fields['subject'], {
                     'data-fixed-student': str(parent_student.pk),
                     'data-grade-options-url': reverse('grade_options_api'),
                 })
@@ -2709,7 +2820,10 @@ class AssessmentItemForTeacherInline(
     fk_name = 'responsible_teacher'
     academic_year_lookup = 'academic_year'
     extra = 0
-    fields = ('element', 'group', 'subject', 'academic_year', 'sort_order', 'is_required', 'is_active')
+    # ``subject`` and ``academic_year`` are non-editable snapshots derived
+    # from ``group``. Including them in ModelForm fields raises FieldError
+    # before the teacher change page can render.
+    fields = ('group', 'element', 'sort_order', 'is_required', 'is_active')
     show_change_link = True
     verbose_name = 'Произведение под руководством преподавателя'
     verbose_name_plural = 'Произведения, где преподаватель назначен дирижёром'

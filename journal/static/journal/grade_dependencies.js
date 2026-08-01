@@ -170,7 +170,11 @@
             if (!select.value && items.length === 1 && name === 'teacher') {
                 select.value = String(items[0].id);
             }
-            select.disabled = items.length === 0 && !select.value;
+            // Empty dependent selects remain focusable and submittable. Their
+            // only option explains that the main field must be selected.
+            select.disabled = false;
+            select.removeAttribute('disabled');
+            select.setAttribute('aria-disabled', 'false');
             syncSelectWidget(select);
             select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
             return Boolean(oldValue && !retained);

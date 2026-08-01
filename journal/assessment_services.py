@@ -398,7 +398,8 @@ def set_assessment_result(
     acting_teacher: Teacher,
     status: str,
     comment: str = '',
-) -> AssessmentResult:
+    return_created: bool = False,
+) -> AssessmentResult | tuple[AssessmentResult, bool]:
     if not teacher_can_edit_item(acting_teacher, item):
         raise PermissionDenied('У преподавателя нет права изменять результаты этого произведения.')
     if status not in {AssessmentResult.STATUS_PASSED, AssessmentResult.STATUS_FAILED}:
@@ -423,6 +424,8 @@ def set_assessment_result(
     result.assessed_at = timezone.now()
     result.save(recalculate=False)
     recalculate_student_subject_final(student, item.group.subject, item.group.academic_year)
+    if return_created:
+        return result, _created
     return result
 
 

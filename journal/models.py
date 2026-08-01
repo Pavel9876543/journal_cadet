@@ -1756,7 +1756,24 @@ class Grade(models.Model):
                 is_active=True,
             ).exists()
 
-            if not group_assignment_exists and not individual_assignment_exists:
+            previous_assignment = None
+            if self.pk:
+                previous_assignment = type(self).objects.filter(pk=self.pk).values(
+                    'student_id', 'subject_id', 'teacher_id', 'academic_year_id'
+                ).first()
+            keeps_historical_teacher = bool(
+                previous_assignment
+                and previous_assignment['student_id'] == self.student_id
+                and previous_assignment['subject_id'] == self.subject_id
+                and previous_assignment['teacher_id'] == self.teacher_id
+                and previous_assignment['academic_year_id'] == self.academic_year_id
+            )
+
+            if (
+                not group_assignment_exists
+                and not individual_assignment_exists
+                and not keeps_historical_teacher
+            ):
                 raise ValidationError(
                     'Этот преподаватель не назначен этому ученику по выбранному предмету. '
                     'Проверьте предметы группы или индивидуальные предметы ученика.'

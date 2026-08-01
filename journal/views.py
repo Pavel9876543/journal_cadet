@@ -511,10 +511,18 @@ def _assessment_filter_options_api_sync(request):
         allowed_academic_years=academic_years,
         fixed_teacher=fixed_teacher,
     )
-    return JsonResponse(serialize_assessment_filter_options(
+    editable_only = request.GET.get('editable') == '1'
+    payload = serialize_assessment_filter_options(
         options,
-        editable_only=request.GET.get('editable') == '1',
-    ))
+        editable_only=editable_only,
+    )
+    if editable_only and selection.assessment_group is None:
+        # The quick result form uses the group as its main selector. Required
+        # dependent selects stay enabled, but contain no values until a group
+        # is chosen.
+        payload['items'] = []
+        payload['students'] = []
+    return JsonResponse(payload)
 
 
 def _assessment_options_api_sync(request):
@@ -556,6 +564,24 @@ def _assessment_options_api_sync(request):
         Teacher.objects.all(),
         request.GET.get('responsible_teacher') or request.GET.get('assessed_by'),
     )
+
+    # A strict request comes from a real change event. Ignore stale values in
+    # downstream fields so clearing or replacing a main selector immediately
+    # clears its dependants instead of letting them constrain the response.
+    if strict_options:
+        if assessment_type == 'item' and changed_field == 'group':
+            element = None
+            selected_teacher = None
+        elif assessment_type == 'student_group' and changed_field == 'student':
+            group = None
+        elif assessment_type == 'rule' and changed_field in {'subject', 'academic_year'}:
+            group = None
+        elif assessment_type == 'result':
+            if changed_field == 'student':
+                item = None
+                selected_teacher = None
+            elif changed_field == 'item':
+                selected_teacher = None
 
     academic_year = _get_selected_object(
         AcademicYear.objects.all(), request.GET.get('academic_year')
@@ -603,6 +629,9 @@ def _assessment_options_api_sync(request):
     if assessment_type == 'item':
         # Group is the first and authoritative selector. Subject/year are
         # derived, while any active teacher can become the responsible one.
+        if group is None:
+            elements = AssessmentElement.objects.none()
+            teachers = Teacher.objects.none()
         items = AssessmentItem.objects.filter(
             group__in=groups,
             is_active=True,
@@ -627,10 +656,14 @@ def _assessment_options_api_sync(request):
             students = Student.objects.filter(
                 pk__in=enrollment_qs.values_list('student_id', flat=True)
             )
+        if group is None and student is None:
+            groups = AssessmentGroup.objects.none()
 
     elif assessment_type == 'rule':
-        # Rule fields are constrained by the selected subject/year only.
-        pass
+        # A group is meaningful only after both authoritative fields are
+        # known. Keep the select interactive and empty before that point.
+        if subject is None or academic_year is None:
+            groups = AssessmentGroup.objects.none()
 
     elif assessment_type == 'result':
         if academic_year is not None:
@@ -793,6 +826,12 @@ def _assignment_options_api_sync(request):
         Teacher.objects.filter(is_active=True),
         request.GET.get('teacher'),
     )
+    changed_field = request.GET.get('changed') or ''
+    strict_options = request.GET.get('strict') == '1'
+    if strict_options and changed_field == 'subject':
+        # ``teacher`` is downstream from ``subject``. Do not reintroduce a
+        # stale teacher submitted by the browser after the subject changed.
+        teacher = None
 
     if assignment_type == 'group_subject':
         subjects = group_subject_queryset()
@@ -803,12 +842,17 @@ def _assignment_options_api_sync(request):
 
     groups = active_group_queryset()
     students = active_student_queryset()
-    teachers = assignment_teacher_queryset(subject)
+    teachers = (
+        assignment_teacher_queryset(subject)
+        if subject is not None
+        else Teacher.objects.none()
+    )
 
     groups = _include_selected_option(groups, StudyGroup, group)
     students = _include_selected_option(students, Student, student)
     subjects = _include_selected_option(subjects, Subject, subject)
-    teachers = _include_selected_option(teachers, Teacher, teacher)
+    if subject is not None:
+        teachers = _include_selected_option(teachers, Teacher, teacher)
 
     groups = groups.select_related('academic_year')
     students = students.select_related('group', 'group__academic_year')
@@ -1092,14 +1136,18 @@ def _handle_assessment_result_post(
             )
             messages.success(request, 'Результат очищен. Итоговая оценка пересчитана.')
         else:
-            set_assessment_result(
+            _result, created = set_assessment_result(
                 item=item,
                 student=student,
                 acting_teacher=acting_teacher,
                 status=status,
                 comment=comment,
+                return_created=True,
             )
-            messages.success(request, 'Результат сохранён. Итоговая оценка пересчитана.')
+            if created:
+                messages.success(request, 'Зачёт добавлен. Итоговая оценка пересчитана.')
+            else:
+                messages.success(request, 'Зачёт изменён. Итоговая оценка пересчитана.')
     except (PermissionDenied, ValidationError) as exc:
         log_handled_error(
             request,
@@ -1380,7 +1428,11 @@ def _save_inline_grades(
         )
         return False
 
-    changed = 0
+    added_result_ids: set[int] = set()
+    added_result_keys: set[tuple[int, int, int]] = set()
+    changed_result_ids: set[int] = set()
+    changed_grade_ids: set[int] = set()
+    deleted_grade_ids: set[int] = set()
     student_map = {
         student.pk: student
         for student in students
@@ -1490,11 +1542,23 @@ def _save_inline_grades(
                     transaction.set_rollback(True)
                     return False
 
-                result, _ = SubjectResult.objects.get_or_create(
+                result_key = (student.pk, subject.pk, academic_year.pk)
+                result = SubjectResult.objects.filter(
                     student=student,
                     subject=subject,
                     academic_year=academic_year,
-                )
+                ).first()
+                if result is None and normalized_value in {None, ''}:
+                    # Do not manufacture empty result rows just because every
+                    # select in the table is submitted with the form.
+                    continue
+                created_result = result is None
+                if result is None:
+                    result = SubjectResult(
+                        student=student,
+                        subject=subject,
+                        academic_year=academic_year,
+                    )
 
                 if field_mode == 'exam':
                     if result.exam_grade == normalized_value:
@@ -1516,7 +1580,11 @@ def _save_inline_grades(
                     messages.error(request, '; '.join(exc.messages))
                     transaction.set_rollback(True)
                     return False
-                changed += 1
+                if created_result:
+                    added_result_ids.add(result.pk)
+                    added_result_keys.add(result_key)
+                elif result_key not in added_result_keys:
+                    changed_result_ids.add(result.pk)
                 continue
 
             normalized_grade_value = _normalize_grade_value(value)
@@ -1565,8 +1633,9 @@ def _save_inline_grades(
                     continue
 
             if normalized_grade_value == '':
+                grade_pk = grade.pk
                 grade.delete()
-                changed += 1
+                deleted_grade_ids.add(grade_pk)
                 continue
 
             if grade.value == normalized_grade_value:
@@ -1589,10 +1658,18 @@ def _save_inline_grades(
                 messages.error(request, '; '.join(exc.messages))
                 transaction.set_rollback(True)
                 return False
-            changed += 1
+            changed_grade_ids.add(grade.pk)
 
-    if changed:
-        messages.success(request, f'Изменения сохранены: {changed}.')
+    changed_count = len(changed_result_ids) + len(changed_grade_ids)
+    if added_result_ids or changed_count or deleted_grade_ids:
+        summaries = []
+        if added_result_ids:
+            summaries.append(f'Добавлено итогов: {len(added_result_ids)}.')
+        if changed_count:
+            summaries.append(f'Изменено оценок/итогов: {changed_count}.')
+        if deleted_grade_ids:
+            summaries.append(f'Удалено оценок: {len(deleted_grade_ids)}.')
+        messages.success(request, ' '.join(summaries))
     else:
         messages.info(request, 'Изменений для сохранения нет.')
     return True
@@ -2045,6 +2122,26 @@ def _handle_grade_form(
         else:
             posted_group = selected_group
         posted_subject = _get_selected_object(subjects, request.POST.get('subject'))
+        posted_student = _get_selected_object(
+            get_grade_students(
+                group=posted_group,
+                teacher=teacher,
+                academic_year=selected_academic_year,
+            ),
+            request.POST.get('student'),
+        )
+        try:
+            posted_date = date.fromisoformat(request.POST.get('date', ''))
+        except (TypeError, ValueError):
+            posted_date = None
+
+        existing_grade = None
+        if posted_student is not None and posted_subject is not None and posted_date is not None:
+            existing_grade = Grade.objects.filter(
+                student=posted_student,
+                subject=posted_subject,
+                date=posted_date,
+            ).first()
 
         form_data = request.POST.copy()
         if posted_group is not None and 'group' not in form_data:
@@ -2052,13 +2149,17 @@ def _handle_grade_form(
 
         grade_form = GradeCreateForm(
             form_data,
+            instance=existing_grade,
             teacher=teacher,
             initial_group=posted_group,
             academic_year=selected_academic_year,
         )
         if grade_form.is_valid():
             grade_form.save()
-            messages.success(request, 'Оценка успешно добавлена.')
+            if existing_grade is None:
+                messages.success(request, 'Оценка успешно добавлена.')
+            else:
+                messages.success(request, 'Оценка успешно изменена.')
             return _redirect_current_journal(request)
 
         log_handled_error(

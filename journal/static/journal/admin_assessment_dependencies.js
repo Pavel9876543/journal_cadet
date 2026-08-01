@@ -169,7 +169,9 @@
                 select.value = String(items[0].id);
                 changed = true;
             }
-            select.disabled = items.length === 0 && !select.value;
+            select.disabled = false;
+            select.removeAttribute('disabled');
+            select.setAttribute('aria-disabled', 'false');
             sync(select);
             select.dispatchEvent(new CustomEvent('journal:options-updated', {bubbles: true}));
             return changed;

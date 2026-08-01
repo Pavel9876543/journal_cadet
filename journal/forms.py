@@ -49,6 +49,26 @@ def html_date_input(attrs=None):
     return forms.DateInput(format=HTML_DATE_INPUT_FORMAT, attrs=widget_attrs)
 
 
+def update_widget_attrs(field: forms.Field, attrs: dict) -> None:
+    """Apply attributes to a widget and Django Admin's wrapped inner widget."""
+    widget = field.widget
+    visited = set()
+    while widget is not None and id(widget) not in visited:
+        visited.add(id(widget))
+        widget.attrs.update(attrs)
+        widget = getattr(widget, 'widget', None)
+
+
+def remove_widget_attr(field: forms.Field, name: str) -> None:
+    """Remove an HTML attribute from every layer of a wrapped widget."""
+    widget = field.widget
+    visited = set()
+    while widget is not None and id(widget) not in visited:
+        visited.add(id(widget))
+        widget.attrs.pop(name, None)
+        widget = getattr(widget, 'widget', None)
+
+
 def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
     """Configure a dynamically filtered orchestra-part field.
 
@@ -100,22 +120,33 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
 
     field = form.fields['orchestra_part']
     field.required = False
-    # Keep all active choices available to ModelChoiceField. The visible list
-    # is narrowed by JavaScript and clean() rejects a mismatched instrument.
-    field.queryset = available_parts
+    # Render only choices belonging to the selected main field.  The complete
+    # map is still embedded below so JavaScript can refresh the dropdown
+    # immediately without disabling it.  A submitted value is retained for
+    # server-side validation (including a forged mismatched selection).
+    visible_parts = available_parts.none()
+    if instrument_id and not custom_instrument:
+        try:
+            visible_parts = available_parts.filter(instrument_id=instrument_id)
+        except (TypeError, ValueError):
+            visible_parts = available_parts.none()
+    if selected_part_id:
+        try:
+            visible_parts = OrchestraPart.objects.filter(
+                Q(pk__in=visible_parts.values('pk')) | Q(pk=selected_part_id),
+            ).select_related('instrument').order_by('instrument__name', 'name', 'pk')
+        except (TypeError, ValueError):
+            pass
+    field.queryset = visible_parts
     field.empty_label = 'Не выбрана'
-    has_available_parts = bool(
-        instrument_id
-        and parts_by_instrument.get(str(instrument_id))
-    )
-    # Do not set forms.Field.disabled: Django would then ignore the submitted
-    # value even after JavaScript unlocks the HTML select.
+    # A dependent select stays interactive even when it has no choices. Django
+    # must also accept the value selected after JavaScript repopulates it.
     field.disabled = False
     field.help_text = (
-        'Поле становится доступным только для инструмента, у которого в справочнике '
-        'созданы активные партии оркестра.'
+        'Список заполнится после выбора инструмента. Если ученик едет на курсы '
+        'впервые или партия ещё не определена, оставьте поле пустым.'
     )
-    field.widget.attrs.update({
+    update_widget_attrs(field, {
         'data-orchestra-part': '1',
         'data-orchestra-parts-url': reverse('orchestra_part_options_api'),
         'data-orchestra-parts-map': json.dumps(
@@ -125,12 +156,9 @@ def configure_orchestra_part_field(form, instrument_field_name: str) -> None:
         ),
         'data-instrument-field': instrument_field_name,
         'data-selected-orchestra-part': str(selected_part_id or ''),
-        'aria-disabled': 'false' if has_available_parts and not custom_instrument else 'true',
+        'aria-disabled': 'false',
     })
-    if custom_instrument or not has_available_parts:
-        field.widget.attrs['disabled'] = True
-    else:
-        field.widget.attrs.pop('disabled', None)
+    remove_widget_attr(field, 'disabled')
 
 
 
@@ -178,7 +206,7 @@ def configure_instrument_selection_fields(
         'Выберите инструмент из справочника. Если подходящего значения нет, '
         'оставьте «Другой инструмент» и заполните поле ниже.'
     )
-    instrument_field.widget.attrs.update({
+    update_widget_attrs(instrument_field, {
         'data-instrument-reference': '1',
         'data-instrument-dependency': '1',
         'data-placeholder': 'Другой инструмент',
@@ -189,22 +217,22 @@ def configure_instrument_selection_fields(
     custom_field.help_text = custom_help_text or (
         'Поле доступно только при выборе варианта «Другой инструмент».'
     )
-    custom_field.widget.attrs.update({
+    update_widget_attrs(custom_field, {
         'data-custom-instrument': '1',
         'data-instrument-dependency': '1',
         'placeholder': custom_placeholder,
         'aria-disabled': 'true' if selected_instrument_id else 'false',
     })
     if selected_instrument_id:
-        custom_field.widget.attrs['disabled'] = True
+        update_widget_attrs(custom_field, {'disabled': True})
     else:
-        custom_field.widget.attrs.pop('disabled', None)
+        remove_widget_attr(custom_field, 'disabled')
 
     configure_orchestra_part_field(form, instrument_field_name)
     orchestra_part_field = form.fields.get('orchestra_part')
     if orchestra_part_field is not None:
         orchestra_part_field.label = 'Партия в оркестре'
-        orchestra_part_field.widget.attrs.update({
+        update_widget_attrs(orchestra_part_field, {
             'data-instrument-dependency': '1',
             'data-native-dependent-select': '1',
         })
@@ -492,8 +520,10 @@ class GradeCreateForm(forms.ModelForm):
         self.fields['academic_year'].queryset = AcademicYear.objects.filter(is_active=True).order_by('-starts_on')
 
         if academic_year is not None:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(pk=academic_year.pk)
             self.fields['academic_year'].initial = academic_year
-            self.fields['academic_year'].disabled = True
+            self.fields['academic_year'].disabled = False
+            remove_widget_attr(self.fields['academic_year'], 'disabled')
 
         selected_student = self._selected_student()
         selected_academic_year = academic_year or self._selected_academic_year()
@@ -710,7 +740,15 @@ class GradeCreateForm(forms.ModelForm):
                 subject=subject,
                 academic_year=academic_year,
             ).filter(pk=teacher.pk).exists()
-            if not teacher_is_allowed:
+            keeps_historical_teacher = bool(
+                self.instance
+                and self.instance.pk
+                and self.instance.student_id == student.pk
+                and self.instance.subject_id == subject.pk
+                and self.instance.teacher_id == teacher.pk
+                and self.instance.academic_year_id == getattr(academic_year, 'pk', None)
+            )
+            if not teacher_is_allowed and not keeps_historical_teacher:
                 message = 'Этот преподаватель не назначен выбранному ученику по выбранному предмету.'
                 if 'teacher' in self.fields:
                     self.add_error('teacher', message)

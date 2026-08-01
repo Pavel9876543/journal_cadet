@@ -1588,8 +1588,8 @@
                                 <svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg>
                             </span>
                             <div>
-                                <h3 id="quick-grade-title">Новая оценка</h3>
-                                <p>Новая запись в журнале</p>
+                                <h3 id="quick-grade-title">Добавить или изменить оценку</h3>
+                                <p>Если оценка за эту дату уже есть, она будет изменена.</p>
                             </div>
                         </div>
                     </div>
@@ -1804,8 +1804,8 @@
                                         <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
                                     </span>
                                     <div>
-                                        <h3 id="quick-assessment-title">Выставить зачёт по произведению</h3>
-                                        <p>Отдельная форма быстрого сохранения результата</p>
+                                        <h3 id="quick-assessment-title">Добавить или изменить зачёт</h3>
+                                        <p>Повторное сохранение изменит существующий результат.</p>
                                     </div>
                                 </div>
                             </div>
@@ -1834,18 +1834,22 @@
                                         <label for="quick_assessment_item">Произведение</label>
                                         <select id="quick_assessment_item" name="assessment_item" required data-searchable-select data-search-placeholder="Найти произведение">
                                             <option value="">Выберите произведение</option>
-                                            {% for item in assessment_filter_options.editable_items %}
-                                                <option value="{{ item.id }}" {% if assessment_selection.item_id == item.id %}selected{% endif %}>{{ item.title }}</option>
-                                            {% endfor %}
+                                                {% if assessment_selection.assessment_group_id %}
+                                                    {% for item in assessment_filter_options.editable_items %}
+                                                        <option value="{{ item.id }}" {% if assessment_selection.item_id == item.id %}selected{% endif %}>{{ item.title }}</option>
+                                                    {% endfor %}
+                                                {% endif %}
                                         </select>
                                     </div>
                                     <div class="field">
                                         <label for="quick_assessment_student">Ученик</label>
                                         <select id="quick_assessment_student" name="assessment_student" required data-searchable-select data-search-placeholder="Найти ученика">
                                             <option value="">Выберите ученика</option>
-                                            {% for student in assessment_filter_options.editable_students %}
-                                                <option value="{{ student.id }}" {% if assessment_selection.student_id == student.id %}selected{% endif %}>{{ student.full_name }}</option>
-                                            {% endfor %}
+                                                {% if assessment_selection.assessment_group_id %}
+                                                    {% for student in assessment_filter_options.editable_students %}
+                                                        <option value="{{ student.id }}" {% if assessment_selection.student_id == student.id %}selected{% endif %}>{{ student.full_name }}</option>
+                                                    {% endfor %}
+                                                {% endif %}
                                         </select>
                                     </div>
                                     <div class="field">

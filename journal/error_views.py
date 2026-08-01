@@ -109,7 +109,7 @@ ERROR_PRESENTATIONS = {
     ),
     500: ErrorPresentation(
         'Не удалось выполнить операцию',
-        'Произошла внутренняя ошибка. Данные об ошибке сохранены для администратора.',
+        'Произошла внутренняя ошибка. Сообщите администратору код ошибки.',
         (
             'Повторите действие после обновления страницы.',
             'Если ошибка повторяется, сообщите администратору код ошибки с этой страницы.',
@@ -226,4 +226,9 @@ def page_not_found(request, exception=None):
 
 
 def server_error(request):
-    return render_error_response(request, 500, retry_url=request.get_full_path())
+    return render_error_response(
+        request,
+        500,
+        code='internal_error',
+        retry_url=request.get_full_path(),
+    )

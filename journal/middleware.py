@@ -95,11 +95,12 @@ class ErrorLoggingMiddleware(MiddlewareMixin):
         return 500
 
     def process_exception(self, request, exception):
+        status_code = self._status_for_exception(exception)
         persist_error(
             request=request,
             message=str(exception) or exception.__class__.__name__,
             exception=exception,
-            status_code=self._status_for_exception(exception),
+            status_code=status_code,
             logger_name='journal.request.exception',
             metadata={
                 'handled': False,
@@ -107,7 +108,23 @@ class ErrorLoggingMiddleware(MiddlewareMixin):
             },
             max_records=getattr(settings, 'ERROR_LOG_MAX_RECORDS', 1000),
         )
-        return None
+        if status_code < 500:
+            # Let Django's specialized 400/403/404 handlers keep their more
+            # precise explanations.
+            return None
+
+        from .error_views import render_error_response
+
+        return render_error_response(
+            request,
+            500,
+            code='internal_error',
+            message=(
+                'Произошла внутренняя ошибка. '
+                'Сообщите администратору код ошибки.'
+            ),
+            retry_url=request.get_full_path(),
+        )
 
     def process_response(self, request, response):
         if (

@@ -1681,7 +1681,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn('orchestra_part', form.errors)
 
-    def test_custom_instrument_disables_and_clears_orchestra_part(self):
+    def test_custom_instrument_keeps_part_select_enabled_and_clears_value(self):
         instrument = self.create_instrument(name='Домра')
         part = OrchestraPart.objects.create(
             instrument=instrument,
@@ -1697,7 +1697,8 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
 
         self.assertTrue(form.is_valid(), form.errors)
-        self.assertTrue(form.fields['orchestra_part'].disabled)
+        self.assertFalse(form.fields['orchestra_part'].disabled)
+        self.assertNotIn('disabled', form.fields['orchestra_part'].widget.attrs)
         self.assertIsNone(form.cleaned_data['orchestra_part'])
 
     def test_parent_contacts_accepts_dash_from_form_placeholder(self):
@@ -2154,7 +2155,7 @@ class FormTests(JournalTestDataMixin, TestCase):
         )
         self.assertIn(data['specialty'], subject_options['subjects'])
 
-    def test_grade_admin_uses_and_locks_year_selected_in_page_filter(self):
+    def test_grade_admin_uses_selected_year_without_disabling_required_field(self):
         data = self.create_base_journal()
         request = RequestFactory().get('/admin/journal/grade/add/', {'academic_year': data['year'].pk})
         request.user = User.objects.create_superuser(
@@ -2167,10 +2168,46 @@ class FormTests(JournalTestDataMixin, TestCase):
 
         form = model_admin.get_form(request)()
 
-        self.assertTrue(form.fields['academic_year'].disabled)
+        self.assertFalse(form.fields['academic_year'].disabled)
         self.assertEqual(form.fields['academic_year'].initial, data['year'])
+        self.assertEqual(list(form.fields['academic_year'].queryset), [data['year']])
         for field_name in ('group', 'student', 'subject', 'teacher'):
             self.assertNotIn('data-searchable-select', form.fields[field_name].widget.attrs)
+
+    def test_grade_admin_can_change_value_with_historical_teacher(self):
+        data = self.create_base_journal()
+        grade = Grade.objects.create(
+            student=data['student'],
+            subject=data['solfeggio'],
+            teacher=data['teacher'],
+            academic_year=data['year'],
+            date=date(2025, 10, 10),
+            value='4',
+        )
+        # Simulate a legacy/imported author who is no longer the current
+        # teacher for this student/subject pair.
+        Grade.objects.filter(pk=grade.pk).update(teacher=data['other_teacher'])
+        grade.refresh_from_db()
+
+        form = GradeAdminForm(
+            data={
+                'group': data['group'].pk,
+                'student': data['student'].pk,
+                'subject': data['solfeggio'].pk,
+                'teacher': data['other_teacher'].pk,
+                'academic_year': data['year'].pk,
+                'date': grade.date.isoformat(),
+                'value': '5',
+                'comment': 'Исправление старой записи',
+            },
+            instance=grade,
+            fixed_academic_year=data['year'],
+        )
+
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+        updated = form.save()
+        self.assertEqual(updated.value, '5')
+        self.assertEqual(updated.teacher, data['other_teacher'])
 
     def test_grade_edit_form_keeps_existing_date_value(self):
         form = GradeAdminForm(instance=Grade(date=date(2025, 10, 10), value='5'))
@@ -3476,6 +3513,54 @@ class ViewTests(JournalTestDataMixin, TestCase):
                 value='5',
             ).exists(),
         )
+
+    def test_quick_grade_form_changes_existing_grade_and_reports_change(self):
+        lesson_date = date(2025, 10, 16)
+        grade = Grade.objects.create(
+            student=self.data['student'],
+            subject=self.data['solfeggio'],
+            teacher=self.data['teacher'],
+            academic_year=self.data['year'],
+            date=lesson_date,
+            value='4',
+        )
+        self.client.force_login(self.admin_user)
+        current_url = (
+            f'{reverse("journal")}?group={self.data["group"].pk}'
+            f'&subject={self.data["solfeggio"].pk}'
+            f'&academic_year={self.data["year"].pk}'
+        )
+
+        response = self.client.post(
+            current_url,
+            data={
+                'action': 'add_grade',
+                'group': self.data['group'].pk,
+                'student': self.data['student'].pk,
+                'subject': self.data['solfeggio'].pk,
+                'teacher': self.data['teacher'].pk,
+                'academic_year': self.data['year'].pk,
+                'date': lesson_date.isoformat(),
+                'value': '5',
+                'comment': 'Исправлено',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        grade.refresh_from_db()
+        self.assertEqual(grade.value, '5')
+        self.assertEqual(grade.comment, 'Исправлено')
+        self.assertEqual(
+            Grade.objects.filter(
+                student=self.data['student'],
+                subject=self.data['solfeggio'],
+                date=lesson_date,
+            ).count(),
+            1,
+        )
+        self.assertContains(response, 'Оценка успешно изменена.')
+        self.assertNotContains(response, 'Оценка успешно добавлена.')
 
     def test_blank_group_keeps_individual_grade_outside_filtered_group(self):
         other_group = self.create_group(
@@ -5090,7 +5175,7 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(
             set(form.fields['orchestra_part'].queryset),
-            {domra_part, bayan_part},
+            {domra_part},
         )
         parts_map = json.loads(
             form.fields['orchestra_part'].widget.attrs['data-orchestra-parts-map'],
@@ -5098,6 +5183,10 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertEqual(
             parts_map[str(domra.pk)],
             [{'id': domra_part.pk, 'name': domra_part.name}],
+        )
+        self.assertEqual(
+            parts_map[str(bayan.pk)],
+            [{'id': bayan_part.pk, 'name': bayan_part.name}],
         )
         self.assertIn(
             'journal/orchestra_part_dependencies_v5.js',
@@ -5132,10 +5221,12 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
         self.assertIn('disabled', domra_form.fields['custom_instrument'].widget.attrs)
         self.assertIn('disabled', piano_form.fields['custom_instrument'].widget.attrs)
         self.assertNotIn('disabled', custom_form.fields['custom_instrument'].widget.attrs)
-        self.assertIn('disabled', empty_form.fields['orchestra_part'].widget.attrs)
-        self.assertNotIn('disabled', domra_form.fields['orchestra_part'].widget.attrs)
-        self.assertIn('disabled', piano_form.fields['orchestra_part'].widget.attrs)
-        self.assertIn('disabled', custom_form.fields['orchestra_part'].widget.attrs)
+        for form in (empty_form, domra_form, piano_form, custom_form):
+            self.assertFalse(form.fields['orchestra_part'].disabled)
+            self.assertNotIn('disabled', form.fields['orchestra_part'].widget.attrs)
+        self.assertFalse(empty_form.fields['orchestra_part'].queryset.exists())
+        self.assertFalse(piano_form.fields['orchestra_part'].queryset.exists())
+        self.assertFalse(custom_form.fields['orchestra_part'].queryset.exists())
 
     def test_student_add_page_renders_other_instrument_and_dependency_scripts(self):
         self.create_instrument(name='Баян')
@@ -8839,6 +8930,47 @@ class ElementAssessmentWorkflowTests(JournalTestDataMixin, TestCase):
         self.assertContains(refreshed_response, 'data-flash-message')
         self.assertContains(refreshed_response, 'data-message-level="success"')
 
+    def test_quick_assessment_form_changes_existing_result_and_reports_change(self):
+        result = set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_FAILED,
+            comment='Первая попытка',
+        )
+        self.client.force_login(self.teacher.user)
+        query = (
+            f'?academic_year={self.year.pk}'
+            f'&assessment_group={self.assessment_group.pk}'
+        )
+
+        response = self.client.post(
+            f'{reverse("journal")}{query}',
+            {
+                'action': 'assessment_result',
+                'assessment_group': self.assessment_group.pk,
+                'assessment_item': self.item.pk,
+                'assessment_student': self.student.pk,
+                'status': AssessmentResult.STATUS_PASSED,
+                'comment': 'Повторная сдача',
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result.refresh_from_db()
+        self.assertEqual(result.status, AssessmentResult.STATUS_PASSED)
+        self.assertEqual(result.comment, 'Повторная сдача')
+        self.assertEqual(
+            AssessmentResult.objects.filter(
+                item=self.item,
+                enrollment=self.assignment.enrollment,
+            ).count(),
+            1,
+        )
+        self.assertContains(response, 'Зачёт изменён. Итоговая оценка пересчитана.')
+        self.assertNotContains(response, 'Зачёт добавлен.')
+
     def test_quick_assessment_error_is_rendered_for_local_red_toast(self):
         self.client.force_login(self.teacher.user)
         response = self.client.post(
@@ -9400,8 +9532,7 @@ class CabinetAndDependencyRegressionTests(JournalTestDataMixin, TestCase):
             [{'id': bayan_part.pk, 'name': bayan_part.name}],
         )
         self.assertFalse(field.disabled)
-        self.assertIn(domra_part, field.queryset)
-        self.assertIn(bayan_part, field.queryset)
+        self.assertFalse(field.queryset.exists())
         self.assertIn(
             'journal/orchestra_part_dependencies_v5.js',
             tuple(str(item) for item in form.media._js),
@@ -9850,11 +9981,19 @@ class TeacherAccessAndErrorLoggingRegressionTests(JournalTestDataMixin, TestCase
         request.request_id = 'student-change-error'
         middleware = ErrorLoggingMiddleware(lambda current_request: HttpResponse())
 
-        middleware.process_exception(
+        response = middleware.process_exception(
             request,
             ValueError("'StudentEnrollmentForm' has no field named 'academic_year'."),
         )
 
+        self.assertEqual(response.status_code, 500)
+        self.assertContains(
+            response,
+            'Произошла внутренняя ошибка. Сообщите администратору код ошибки.',
+            status_code=500,
+        )
+        self.assertContains(response, 'student-change-error', status_code=500)
+        self.assertNotContains(response, 'StudentEnrollmentForm', status_code=500)
         entry = ErrorLog.objects.get(request_id='student-change-error')
         self.assertEqual(entry.status_code, 500)
         self.assertEqual(entry.path, '/admin/journal/student/419/change/')
@@ -9877,6 +10016,28 @@ class TeacherAccessAndErrorLoggingRegressionTests(JournalTestDataMixin, TestCase
         entry = ErrorLog.objects.get(request_id='handled-response-error')
         self.assertEqual(entry.status_code, 409)
         self.assertTrue(entry.metadata['handled'])
+
+    def test_unhandled_ajax_exception_returns_generic_json_with_error_code(self):
+        request = RequestFactory().get(
+            '/api/test-error/',
+            HTTP_ACCEPT='application/json',
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+        request.user = self.data['teacher'].user
+        request.request_id = 'ajax-error-code-1234'
+        middleware = ErrorLoggingMiddleware(lambda current_request: HttpResponse())
+
+        response = middleware.process_exception(request, RuntimeError('Секретная причина'))
+
+        self.assertEqual(response.status_code, 500)
+        payload = json.loads(response.content)
+        self.assertEqual(payload['error']['code'], 'internal_error')
+        self.assertEqual(payload['error']['request_id'], 'ajax-error-code-1234')
+        self.assertEqual(
+            payload['error']['message'],
+            'Произошла внутренняя ошибка. Сообщите администратору код ошибки.',
+        )
+        self.assertNotIn('Секретная причина', response.content.decode())
 
     def test_admin_and_registration_reject_same_mismatched_orchestra_part(self):
         selected_instrument = self.data['instrument']
@@ -9996,6 +10157,193 @@ class TeacherAssignmentVisibilityAndAssessmentChoiceTests(JournalTestDataMixin, 
             responsible_teacher=self.data['teacher'],
         )
         return subject, group, first, second, item
+
+    def test_teacher_change_page_renders_assessment_item_inline(self):
+        _subject, _group, _first, _second, item = self._assessment_catalog()
+        admin_user = User.objects.create_superuser(
+            username='teacher_inline_admin',
+            password='Pass12345!',
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(
+            reverse(
+                'admin:journal_teacher_change',
+                args=[self.data['teacher'].pk],
+            ),
+            {'academic_year': self.data['year'].pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, item.title)
+
+    def test_dependent_admin_selects_are_empty_enabled_and_refreshable(self):
+        subject, group, _first, second, _item = self._assessment_catalog()
+
+        blank_item_form = AssessmentItemAdminForm()
+        selected_item_form = AssessmentItemAdminForm(data={'group': group.pk})
+        self.assertIn(group, blank_item_form.fields['group'].queryset)
+        self.assertFalse(blank_item_form.fields['element'].queryset.exists())
+        self.assertFalse(
+            blank_item_form.fields['responsible_teacher'].queryset.exists()
+        )
+        self.assertIn(second, selected_item_form.fields['element'].queryset)
+        self.assertIn(
+            self.data['teacher'],
+            selected_item_form.fields['responsible_teacher'].queryset,
+        )
+
+        blank_assignment_form = GroupSubjectAdminForm()
+        selected_assignment_form = GroupSubjectAdminForm(
+            data={'subject': self.data['solfeggio'].pk},
+        )
+        stale_assignment_form = GroupSubjectAdminForm(
+            data={'teacher': self.data['teacher'].pk},
+        )
+        self.assertFalse(blank_assignment_form.fields['teacher'].queryset.exists())
+        self.assertFalse(stale_assignment_form.fields['teacher'].queryset.exists())
+        self.assertIn(
+            self.data['teacher'],
+            selected_assignment_form.fields['teacher'].queryset,
+        )
+
+        student_group_form_class = type(
+            'YearScopedStudentAssessmentGroupFormForDependencies',
+            (StudentAssessmentGroupAdminForm,),
+            {'parent_academic_year': self.data['year']},
+        )
+        blank_student_group_form = student_group_form_class()
+        selected_student_group_form = student_group_form_class(
+            data={'student': self.data['student'].pk},
+        )
+        stale_student_group_form = student_group_form_class(
+            data={'assessment_group': group.pk},
+        )
+        self.assertFalse(
+            blank_student_group_form.fields['assessment_group'].queryset.exists()
+        )
+        self.assertFalse(
+            stale_student_group_form.fields['assessment_group'].queryset.exists()
+        )
+        self.assertIn(
+            group,
+            selected_student_group_form.fields['assessment_group'].queryset,
+        )
+
+        rule_form_class = type(
+            'YearScopedFinalGradeRuleFormForDependencies',
+            (FinalGradeRuleAdminForm,),
+            {'parent_academic_year': self.data['year']},
+        )
+        blank_rule_form = rule_form_class()
+        selected_rule_form = rule_form_class(data={
+            'subject': subject.pk,
+            'academic_year': self.data['year'].pk,
+        })
+        stale_rule_form = FinalGradeRuleAdminForm(
+            data={'assessment_group': group.pk},
+        )
+        self.assertFalse(blank_rule_form.fields['assessment_group'].queryset.exists())
+        self.assertFalse(stale_rule_form.fields['assessment_group'].queryset.exists())
+        self.assertIn(
+            group,
+            selected_rule_form.fields['assessment_group'].queryset,
+        )
+
+        for current_form in (
+            blank_item_form,
+            selected_item_form,
+            blank_assignment_form,
+            selected_assignment_form,
+            stale_assignment_form,
+            blank_student_group_form,
+            selected_student_group_form,
+            stale_student_group_form,
+            blank_rule_form,
+            selected_rule_form,
+            stale_rule_form,
+        ):
+            for field_name, field in current_form.fields.items():
+                if not field.required:
+                    continue
+                with self.subTest(
+                    form=current_form.__class__.__name__,
+                    field=field_name,
+                ):
+                    self.assertFalse(field.disabled)
+                    self.assertNotIn('disabled', field.widget.attrs)
+
+        admin_user = User.objects.create_superuser(
+            username='wrapped_dependency_admin',
+            password='Pass12345!',
+        )
+        request = RequestFactory().get(
+            '/admin/',
+            {'academic_year': self.data['year'].pk},
+        )
+        request.user = admin_user
+        request.session = {}
+        wrapped_assignment_form = django_admin.site._registry[
+            GroupSubject
+        ].get_form(request)()
+        wrapped_item_form = django_admin.site._registry[
+            AssessmentItem
+        ].get_form(request)()
+        wrapped_grade_form = django_admin.site._registry[
+            Grade
+        ].get_form(request)()
+        self.assertIn(
+            'data-assignment-options-url=',
+            str(wrapped_assignment_form['teacher']),
+        )
+        self.assertIn(
+            'data-assessment-options-url=',
+            str(wrapped_item_form['element']),
+        )
+        self.assertIn(
+            'data-grade-options-url=',
+            str(wrapped_grade_form['teacher']),
+        )
+
+        self.client.force_login(admin_user)
+        cleared_assignment = self.client.get(
+            reverse('assignment_options_api'),
+            {
+                'type': 'group_subject',
+                'teacher': self.data['teacher'].pk,
+                'changed': 'subject',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(cleared_assignment.status_code, 200)
+        self.assertEqual(cleared_assignment.json()['teachers'], [])
+
+        cleared_item = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'item',
+                'element': second.pk,
+                'responsible_teacher': self.data['teacher'].pk,
+                'changed': 'group',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(cleared_item.status_code, 200)
+        self.assertEqual(cleared_item.json()['elements'], [])
+        self.assertEqual(cleared_item.json()['teachers'], [])
+
+        project_root = Path(__file__).resolve().parent.parent
+        for relative_path in (
+            'journal/static/journal/admin_assessment_dependencies.js',
+            'journal/static/journal/admin_assignment_dependencies.js',
+            'journal/static/journal/grade_dependencies.js',
+            'journal/static/journal/assessment_filters.js',
+        ):
+            source = (project_root / relative_path).read_text(encoding='utf-8')
+            with self.subTest(script=relative_path):
+                self.assertIn("addEventListener('change'", source)
+                self.assertIn('fetch(', source)
+                self.assertNotIn('select.disabled = items.length === 0', source)
 
     def test_assessment_item_field_excludes_element_already_used_in_selected_group(self):
         subject, group, first, second, _item = self._assessment_catalog()
@@ -10181,6 +10529,41 @@ class AssessmentResultAdminOptionsAndFriendlyErrorsTests(JournalTestDataMixin, T
         )
         self.assertEqual(item_form.fields['assessed_by'].initial, self.teacher.pk)
 
+    def test_result_admin_can_change_historical_result_author_is_preserved(self):
+        result = set_assessment_result(
+            item=self.item,
+            student=self.student,
+            acting_teacher=self.teacher,
+            status=AssessmentResult.STATUS_FAILED,
+            comment='Исходный результат',
+        )
+        new_teacher = self.create_teacher(
+            full_name='Новый Ответственный',
+            username='new_assessment_responsible',
+        )
+        self.item.responsible_teacher = new_teacher
+        self.item.save()
+
+        form = self.form_class()(
+            data={
+                'student': self.student.pk,
+                'item': self.item.pk,
+                'status': AssessmentResult.STATUS_PASSED,
+                'assessed_by': self.teacher.pk,
+                'assessed_at': timezone.localtime(result.assessed_at).strftime(
+                    '%Y-%m-%d %H:%M:%S'
+                ),
+                'comment': 'Исправленный результат',
+            },
+            instance=result,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+        updated = form.save()
+        self.assertEqual(updated.status, AssessmentResult.STATUS_PASSED)
+        self.assertEqual(updated.assessed_by, self.teacher)
+        self.assertEqual(updated.comment, 'Исправленный результат')
+
     def test_result_options_api_follows_student_item_teacher_order(self):
         admin_user = User.objects.create_superuser(
             username='assessment_result_admin',
@@ -10231,6 +10614,21 @@ class AssessmentResultAdminOptionsAndFriendlyErrorsTests(JournalTestDataMixin, T
             {row['id'] for row in teacher_response.json()['teachers']},
             {self.teacher.pk},
         )
+
+        cleared_student_response = self.client.get(
+            reverse('assessment_options_api'),
+            {
+                'type': 'result',
+                'academic_year': self.year.pk,
+                'item': self.item.pk,
+                'assessed_by': self.teacher.pk,
+                'changed': 'student',
+                'strict': '1',
+            },
+        )
+        self.assertEqual(cleared_student_response.status_code, 200)
+        self.assertEqual(cleared_student_response.json()['items'], [])
+        self.assertEqual(cleared_student_response.json()['teachers'], [])
 
     def test_admin_required_errors_have_plain_user_message_and_are_logged(self):
         class RequiredFieldsForm(forms.Form):

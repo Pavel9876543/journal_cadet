@@ -72,14 +72,10 @@
         }));
     }
 
-    function setDisabled(field, disabled) {
-        field.disabled = Boolean(disabled);
-        field.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-        if (disabled) {
-            field.setAttribute('disabled', 'disabled');
-        } else {
-            field.removeAttribute('disabled');
-        }
+    function keepEnabled(field) {
+        field.disabled = false;
+        field.setAttribute('aria-disabled', 'false');
+        field.removeAttribute('disabled');
     }
 
     function replaceOptions(field, parts, selectedValue, instrumentId, emptyLabel) {
@@ -96,7 +92,7 @@
 
         field.replaceChildren(fragment);
         field.dataset.loadedInstrument = String(instrumentId || '');
-        setDisabled(field, parts.length === 0);
+        keepEnabled(field);
         if (selectedValue && parts.some(function (part) {
             return String(part.id) === String(selectedValue);
         })) {
@@ -166,7 +162,7 @@
             }
         }
 
-        function disableWith(label) {
+        function clearWith(label) {
             abortPending();
             replaceOptions(partField, [], '', '', label);
             delete partField.dataset.loadedInstrument;
@@ -224,7 +220,7 @@
                     // Embedded options are already usable. Only replace the
                     // label when there were no local choices at all.
                     if (!normaliseParts(partsMap[String(instrumentId)]).length) {
-                        disableWith('Не удалось загрузить партии');
+                        clearWith('Не удалось загрузить партии');
                     }
                 });
         }
@@ -234,8 +230,8 @@
             var instrumentId = String(instrumentField.value || '').trim();
             var customValue = String(customField ? customField.value || '' : '').trim();
             if (!instrumentId) {
-                disableWith(customValue
-                    ? 'Недоступно для собственного инструмента'
+                clearWith(customValue
+                    ? 'Нет партий для собственного инструмента'
                     : 'Сначала выберите инструмент');
                 return;
             }
