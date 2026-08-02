@@ -1,6 +1,16 @@
 (function () {
     'use strict';
 
+    function availableJQueries() {
+        var instances = [];
+        [window.jQuery, window.django && window.django.jQuery].forEach(function (jq) {
+            if (jq && instances.indexOf(jq) === -1) {
+                instances.push(jq);
+            }
+        });
+        return instances;
+    }
+
     function closestRow(element) {
         return element.closest('tr') || element.closest('.dynamic-students');
     }
@@ -33,10 +43,7 @@
             select.addEventListener('change', function () {
                 updateCityChurch(select);
             });
-            var jq = window.django && window.django.jQuery
-                ? window.django.jQuery
-                : window.jQuery;
-            if (jq) {
+            availableJQueries().forEach(function (jq) {
                 jq(select)
                     .off('.journalStudentCity')
                     .on(
@@ -45,7 +52,7 @@
                         + 'select2:clear.journalStudentCity',
                         function () { updateCityChurch(select); }
                     );
-            }
+            });
         });
     }
 
@@ -59,5 +66,12 @@
 
     document.addEventListener('formset:added', function (event) {
         initialize(event.target);
+    });
+    availableJQueries().forEach(function (jq) {
+        jq(document)
+            .off('formset:added.journalStudentCity')
+            .on('formset:added.journalStudentCity', function (_event, row) {
+                initialize(row && row[0] ? row[0] : document);
+            });
     });
 })();

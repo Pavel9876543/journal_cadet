@@ -5,11 +5,14 @@
     var ALL_FIELDS = ['academic_year'].concat(OPTION_FIELDS);
     var REQUEST_FIELDS = ALL_FIELDS.concat(['date']);
 
-    function adminJQuery() {
-        if (window.django && window.django.jQuery) {
-            return window.django.jQuery;
-        }
-        return window.jQuery || null;
+    function availableJQueries() {
+        var instances = [];
+        [window.jQuery, window.django && window.django.jQuery].forEach(function (jq) {
+            if (jq && instances.indexOf(jq) === -1) {
+                instances.push(jq);
+            }
+        });
+        return instances;
     }
 
     function inlinePrefix(name) {
@@ -18,14 +21,15 @@
     }
 
     function syncSelectWidget(select) {
-        if (
-            window.django
-            && window.django.jQuery
-            && select
-            && select.classList.contains('admin-autocomplete')
-        ) {
-            window.django.jQuery(select).trigger('change.select2');
+        if (!select || !select.classList.contains('admin-autocomplete')) {
+            return;
         }
+        availableJQueries().forEach(function (jq) {
+            var wrapped = jq(select);
+            if (wrapped.data('select2')) {
+                wrapped.trigger('change.select2');
+            }
+        });
     }
 
     function start(root) {
@@ -271,8 +275,7 @@
             fields[name].addEventListener('change', function () {
                 changed(name);
             });
-            var jq = adminJQuery();
-            if (jq) {
+            availableJQueries().forEach(function (jq) {
                 jq(fields[name])
                     .off('.journalGradeDependencies')
                     .on(
@@ -281,7 +284,7 @@
                         + 'select2:clear.journalGradeDependencies',
                         function () { changed(name); }
                     );
-            }
+            });
         });
 
         if (yearFilter && fields.academic_year) {
@@ -310,9 +313,11 @@
         start(document);
     }
     document.addEventListener('formset:added', function (event) { start(event.target || document); });
-    if (window.django && window.django.jQuery) {
-        window.django.jQuery(document).on('formset:added', function (_event, row) {
-            start(row && row[0] ? row[0] : document);
-        });
-    }
+    availableJQueries().forEach(function (jq) {
+        jq(document)
+            .off('formset:added.journalGradeDependencies')
+            .on('formset:added.journalGradeDependencies', function (_event, row) {
+                start(row && row[0] ? row[0] : document);
+            });
+    });
 }());

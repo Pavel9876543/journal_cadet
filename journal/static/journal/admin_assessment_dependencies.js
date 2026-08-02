@@ -20,11 +20,14 @@
         }
     };
 
-    function adminJQuery() {
-        if (window.django && window.django.jQuery) {
-            return window.django.jQuery;
-        }
-        return window.jQuery || null;
+    function availableJQueries() {
+        var instances = [];
+        [window.jQuery, window.django && window.django.jQuery].forEach(function (jq) {
+            if (jq && instances.indexOf(jq) === -1) {
+                instances.push(jq);
+            }
+        });
+        return instances;
     }
 
     function inlinePrefix(name) {
@@ -100,8 +103,7 @@
             fields[name].addEventListener('change', function () {
                 handleChange(name);
             });
-            var jq = adminJQuery();
-            if (jq) {
+            availableJQueries().forEach(function (jq) {
                 jq(fields[name])
                     .off('.journalAssessmentDependencies')
                     .on(
@@ -110,7 +112,7 @@
                         + 'select2:clear.journalAssessmentDependencies',
                         function () { handleChange(name); }
                     );
-            }
+            });
         });
 
         function selectedOption(select) {
@@ -118,9 +120,15 @@
         }
 
         function sync(select) {
-            if (window.django && window.django.jQuery && select && select.classList.contains('admin-autocomplete')) {
-                window.django.jQuery(select).trigger('change.select2');
+            if (!select || !select.classList.contains('admin-autocomplete')) {
+                return;
             }
+            availableJQueries().forEach(function (jq) {
+                var wrapped = jq(select);
+                if (wrapped.data('select2')) {
+                    wrapped.trigger('change.select2');
+                }
+            });
         }
 
         function status(message, isError) {
@@ -509,9 +517,15 @@
     }
 
     function syncSelect2(select) {
-        if (window.django && window.django.jQuery && select) {
-            window.django.jQuery(select).trigger('change.select2');
+        if (!select) {
+            return;
         }
+        availableJQueries().forEach(function (jq) {
+            var wrapped = jq(select);
+            if (wrapped.data('select2')) {
+                wrapped.trigger('change.select2');
+            }
+        });
     }
 
     document.addEventListener('change', function (event) {
@@ -534,11 +548,13 @@
         start(event.target || document);
         refreshItemInlineUniqueness((event.target && event.target.closest('form')) || document.querySelector('form'));
     });
-    if (window.django && window.django.jQuery) {
-        window.django.jQuery(document).on('formset:added', function (_event, row) {
-            var root = row && row[0] ? row[0] : document;
-            start(root);
-            refreshItemInlineUniqueness((root.closest && root.closest('form')) || document.querySelector('form'));
-        });
-    }
+    availableJQueries().forEach(function (jq) {
+        jq(document)
+            .off('formset:added.journalAssessmentDependencies')
+            .on('formset:added.journalAssessmentDependencies', function (_event, row) {
+                var root = row && row[0] ? row[0] : document;
+                start(root);
+                refreshItemInlineUniqueness((root.closest && root.closest('form')) || document.querySelector('form'));
+            });
+    });
 }());

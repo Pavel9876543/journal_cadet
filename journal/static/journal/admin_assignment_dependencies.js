@@ -3,11 +3,14 @@
 
     var SELECT_FIELDS = ['group', 'student', 'subject', 'teacher'];
 
-    function adminJQuery() {
-        if (window.django && window.django.jQuery) {
-            return window.django.jQuery;
-        }
-        return window.jQuery || null;
+    function availableJQueries() {
+        var instances = [];
+        [window.jQuery, window.django && window.django.jQuery].forEach(function (jq) {
+            if (jq && instances.indexOf(jq) === -1) {
+                instances.push(jq);
+            }
+        });
+        return instances;
     }
 
     function inlinePrefix(name) {
@@ -96,8 +99,7 @@
             field.addEventListener('change', function () {
                 queueLoad(name);
             });
-            var jq = adminJQuery();
-            if (jq) {
+            availableJQueries().forEach(function (jq) {
                 jq(field)
                     .off('.journalAssignmentDependencies')
                     .on(
@@ -106,7 +108,7 @@
                         + 'select2:clear.journalAssignmentDependencies',
                         function () { queueLoad(name); }
                     );
-            }
+            });
         });
 
         function buildUrl(changedField) {
@@ -125,14 +127,15 @@
         }
 
         function syncSelectWidget(select) {
-            if (
-                window.django
-                && window.django.jQuery
-                && select
-                && select.classList.contains('admin-autocomplete')
-            ) {
-                window.django.jQuery(select).trigger('change.select2');
+            if (!select || !select.classList.contains('admin-autocomplete')) {
+                return;
             }
+            availableJQueries().forEach(function (jq) {
+                var wrapped = jq(select);
+                if (wrapped.data('select2')) {
+                    wrapped.trigger('change.select2');
+                }
+            });
         }
 
         function selectedOption(select) {
@@ -357,5 +360,12 @@
 
     document.addEventListener('formset:added', function (event) {
         start(event.target);
+    });
+    availableJQueries().forEach(function (jq) {
+        jq(document)
+            .off('formset:added.journalAssignmentDependencies')
+            .on('formset:added.journalAssignmentDependencies', function (_event, row) {
+                start(row && row[0] ? row[0] : document);
+            });
     });
 })();

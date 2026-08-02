@@ -4,11 +4,17 @@
     var PART_SELECTOR = '[data-orchestra-part="1"]';
     var INSTRUMENT_SELECTOR = '[data-instrument-reference="1"]';
 
-    function adminJQuery() {
-        if (window.django && window.django.jQuery) {
-            return window.django.jQuery;
-        }
-        return window.jQuery || null;
+    function availableJQueries() {
+        var instances = [];
+        [
+            window.jQuery,
+            window.django && window.django.jQuery
+        ].forEach(function (jq) {
+            if (jq && instances.indexOf(jq) === -1) {
+                instances.push(jq);
+            }
+        });
+        return instances;
     }
 
 
@@ -23,18 +29,21 @@
         if (!(field instanceof HTMLSelectElement)) {
             return;
         }
-        var jq = adminJQuery();
-        if (jq && jq.fn && typeof jq.fn.select2 === 'function') {
-            var wrapped = jq(field);
-            if (wrapped.hasClass('select2-hidden-accessible')) {
-                try {
-                    wrapped.select2('destroy');
-                } catch (_error) {
-                    // The native select below remains the source of truth even
-                    // when a third-party Select2 instance was already removed.
-                }
+        // Django Admin and Jazzmin may load separate jQuery instances.  Find
+        // the one that actually owns Select2 instead of trusting the CSS class:
+        // a stale ``select2-hidden-accessible`` class alone makes Select2 log
+        // "destroy was called on an element that is not using Select2".
+        availableJQueries().some(function (jq) {
+            if (!jq.fn || typeof jq.fn.select2 !== 'function') {
+                return false;
             }
-        }
+            var wrapped = jq(field);
+            if (!wrapped.data('select2')) {
+                return false;
+            }
+            wrapped.select2('destroy');
+            return true;
+        });
         var parent = field.parentElement;
         if (parent) {
             parent.querySelectorAll('.select2-container').forEach(function (container) {
@@ -96,16 +105,7 @@
 
     function emitOptionsChanged(field) {
         ensureNativeDependentSelect(field);
-        var jq = adminJQuery();
-        if (jq) {
-            var wrapped = jq(field);
-            wrapped.prop('disabled', field.disabled);
-            // A plain change event is intentional: Jazzmin/Select2 listens to
-            // it and rebuilds the visible selection from the native options.
-            wrapped.trigger('change');
-        } else {
-            field.dispatchEvent(new Event('change', {bubbles: true}));
-        }
+        field.dispatchEvent(new Event('change', {bubbles: true}));
         field.dispatchEvent(new CustomEvent('journal:options-updated', {
             bubbles: true,
             detail: {disabled: field.disabled}
@@ -171,6 +171,17 @@
         if (!(instrumentField instanceof HTMLSelectElement)) {
             return;
         }
+
+        var otherInstrumentOption = Array.prototype.find.call(
+            instrumentField.options,
+            function (option) { return option.value === ''; }
+        );
+        if (otherInstrumentOption) {
+            otherInstrumentOption.textContent = (
+                instrumentField.dataset.otherInstrumentLabel || 'Другой инструмент'
+            );
+        }
+        instrumentField.removeAttribute('data-placeholder');
 
         partField.dataset.orchestraPartReady = '1';
         var partsMap = parsePartsMap(partField);
@@ -313,8 +324,7 @@
             queueLoad(false);
         });
 
-        var jq = adminJQuery();
-        if (jq) {
+        availableJQueries().forEach(function (jq) {
             jq(instrumentField)
                 .off('.journalOrchestraParts')
                 .on(
@@ -323,7 +333,7 @@
                     + 'select2:clear.journalOrchestraParts',
                     function () { queueLoad(false); }
                 );
-        }
+        });
 
         if (customField) {
             customField.addEventListener('input', function () { queueLoad(false); });
@@ -388,12 +398,26 @@
     document.addEventListener('formset:added', function (event) {
         initialise(event.target || document);
     });
+    availableJQueries().forEach(function (jq) {
+        jq(document)
+            .off('formset:added.journalOrchestraParts')
+            .on('formset:added.journalOrchestraParts', function (_event, row) {
+                var root = row && row[0] ? row[0] : document;
+                window.setTimeout(function () { initialise(root); }, 0);
+            });
+    });
 
     var observer = new MutationObserver(function (records) {
         records.forEach(function (record) {
             record.addedNodes.forEach(function (node) {
                 if (node instanceof Element) {
                     initialise(node);
+                    var parent = node.parentElement;
+                    if (parent) {
+                        parent.querySelectorAll(
+                            PART_SELECTOR + '.select2-hidden-accessible'
+                        ).forEach(ensureNativeDependentSelect);
+                    }
                 }
             });
         });

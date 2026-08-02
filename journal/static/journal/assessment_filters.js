@@ -10,11 +10,14 @@
         assessment_student: 'students'
     };
 
-    function availableJQuery() {
-        if (window.django && window.django.jQuery) {
-            return window.django.jQuery;
-        }
-        return window.jQuery || null;
+    function availableJQueries() {
+        var instances = [];
+        [window.jQuery, window.django && window.django.jQuery].forEach(function (jq) {
+            if (jq && instances.indexOf(jq) === -1) {
+                instances.push(jq);
+            }
+        });
+        return instances;
     }
 
     function start() {
@@ -62,8 +65,7 @@
             fields[name].addEventListener('change', function () {
                 queueLoad(name);
             });
-            var jq = availableJQuery();
-            if (jq) {
+            availableJQueries().forEach(function (jq) {
                 jq(fields[name])
                     .off('.journalAssessmentFilters')
                     .on(
@@ -72,7 +74,7 @@
                         + 'select2:clear.journalAssessmentFilters',
                         function () { queueLoad(name); }
                     );
-            }
+            });
         });
 
         function buildUrl(changedField) {

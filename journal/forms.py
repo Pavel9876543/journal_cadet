@@ -209,8 +209,13 @@ def configure_instrument_selection_fields(
     update_widget_attrs(instrument_field, {
         'data-instrument-reference': '1',
         'data-instrument-dependency': '1',
-        'data-placeholder': 'Другой инструмент',
+        'data-other-instrument-label': 'Другой инструмент',
     })
+    # Jazzmin initializes Select2 for every select.  Select2 treats an empty
+    # option as a non-selectable placeholder when ``data-placeholder`` is
+    # present, so «Другой инструмент» disappears from the opened list.  Keep
+    # the option's real empty value, but do not configure it as a placeholder.
+    remove_widget_attr(instrument_field, 'data-placeholder')
 
     custom_field.required = False
     custom_field.label = 'Собственный инструмент'
