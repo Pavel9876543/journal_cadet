@@ -5217,8 +5217,16 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(empty_form.fields['instrument'].empty_label, 'Другой инструмент')
         self.assertEqual(
-            empty_form.fields['instrument'].widget.attrs['data-placeholder'],
+            empty_form.fields['instrument'].widget.attrs['data-other-instrument-label'],
             'Другой инструмент',
+        )
+        self.assertNotIn(
+            'data-placeholder',
+            empty_form.fields['instrument'].widget.attrs,
+        )
+        self.assertEqual(
+            list(empty_form.fields['instrument'].choices)[0],
+            ('', 'Другой инструмент'),
         )
         self.assertNotIn('disabled', empty_form.fields['custom_instrument'].widget.attrs)
         self.assertIn('disabled', domra_form.fields['custom_instrument'].widget.attrs)
@@ -5239,6 +5247,11 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Другой инструмент')
+        self.assertContains(
+            response,
+            '<option value="" selected>Другой инструмент</option>',
+            html=True,
+        )
         self.assertContains(response, 'data-instrument-reference="1"')
         self.assertContains(response, 'data-custom-instrument="1"')
         self.assertContains(response, 'data-orchestra-part="1"')
@@ -5249,7 +5262,9 @@ class AdminDashboardTests(JournalTestDataMixin, TestCase):
             'journal/static/journal/orchestra_part_dependencies_v5.js'
         ).read_text(encoding='utf-8')
 
-        self.assertIn("wrapped.trigger('change')", javascript)
+        self.assertIn("if (!wrapped.data('select2'))", javascript)
+        self.assertIn("field.dispatchEvent(new Event('change'", javascript)
+        self.assertIn('availableJQueries()', javascript)
         self.assertIn('select2:select.journalOrchestraParts', javascript)
         self.assertIn('select2:clear.journalOrchestraParts', javascript)
         self.assertIn("new URL(endpoint, window.location.origin)", javascript)
@@ -11491,6 +11506,9 @@ class ImmediateDependenciesAndChangeConfirmationTests(JournalTestDataMixin, Test
             with self.subTest(script=relative_path):
                 self.assertIn("addEventListener('change'", source)
                 self.assertIn(namespace, source)
+                self.assertIn('availableJQueries()', source)
+                self.assertIn('window.jQuery', source)
+                self.assertIn('window.django && window.django.jQuery', source)
 
         storage_source = (project_root / 'journal/static_storage.py').read_text(encoding='utf-8')
         self.assertIn("endswith(('.css', '.js'))", storage_source)
